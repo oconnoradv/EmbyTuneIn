@@ -7,6 +7,11 @@ features explicitly removed below are not promises of current functionality.
 Superseded prereleases are marked deprecated after the replacement is verified.
 Published assets and original source tags remain unchanged for provenance.
 
+## 1.3.0-fork.17 - staged refresh root fix
+
+- Allow Emby's channel-root query during staged refresh and report swallowed
+  import errors before attempting artwork updates.
+
 ## 1.3.0-fork.16 - refresh performance and status
 
 - Discover and stage bounded selected-category results before starting Emby's

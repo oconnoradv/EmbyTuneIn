@@ -56,7 +56,7 @@ namespace MediaBrowser.Plugins.TuneIn
             try
             {
                 var staged = stagedRefresh.Value;
-                if (staged != null)
+                if (staged != null && !string.IsNullOrEmpty(query.FolderId))
                 {
                     token.ThrowIfCancellationRequested();
                     var snapshot = directory.Snapshot();

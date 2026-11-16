@@ -576,6 +576,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var proxy = (TaskManagerProxy)(object)manager;
             proxy.Channel = channel;
             proxy.TraverseFolders = true;
+            proxy.RequestRoot = true;
             proxy.OnRefresh = () => Assert.Equal(2, calls);
             var refresh = new TuneInRefresh(directory);
 
@@ -583,6 +584,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 
             Assert.Equal(2, calls);
             Assert.Single(proxy.RefreshedFolders);
+            Assert.Equal(2, proxy.RootFolders.Count);
+            Assert.All(proxy.RootFolders, root => Assert.Equal(proxy.RefreshedFolders[0], Assert.Single(root)));
             var status = refresh.Status().Single(item => item.Category == "talk");
             Assert.Equal("Completed", status.State);
             Assert.NotNull(status.DiscoveryMilliseconds);
@@ -732,9 +735,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             { Category = "talk", Request = request, Name = "Unstaged" });
             var refresh = new TuneInRefresh(directory);
 
-            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 refresh.ExecuteConfiguredAsync(manager, null, CancellationToken.None, new InlineProgress()));
             Assert.Equal(1, calls);
+            Assert.Contains("Phase: Importing staged section into Emby", failure.Message);
+            Assert.Contains("outside the staged refresh", failure.ToString());
         }
 
         [Fact]
@@ -1177,11 +1182,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             public bool SwallowCancellation { get; set; }
             public bool SwallowFailure { get; set; }
             public bool TraverseFolders { get; set; }
+            public bool RequestRoot { get; set; }
             public Action OnRefresh { get; set; }
             public Func<Task> BeforeImport { get; set; }
             public string AdditionalFolder { get; set; }
             public List<string> RefreshedFolders { get; } = new List<string>();
             public List<string> ImportedStationIds { get; } = new List<string>();
+            public List<string[]> RootFolders { get; } = new List<string[]>();
             protected override object Invoke(MethodInfo method, object[] args)
             {
                 if (method.Name == "GetLogger") return null;
@@ -1199,6 +1206,14 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 try
                 {
                     if (BeforeImport != null) await BeforeImport();
+                    if (RequestRoot)
+                    {
+                        foreach (var rootId in new[] { null, string.Empty })
+                        {
+                            var root = await Channel.GetChannelItems(new InternalChannelItemQuery { FolderId = rootId }, token);
+                            RootFolders.Add(root.Items.Select(item => item.Id).ToArray());
+                        }
+                    }
                     var pending = new Queue<(string Folder, int Depth)>();
                     pending.Enqueue((folder, 0));
                     while (pending.Count != 0)

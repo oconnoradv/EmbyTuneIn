@@ -186,6 +186,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 await channel.SynchronizeStagedAsync(folder, depth,
                     () => manager.RefreshChannelContent(channel, depth, folder, token), token).ConfigureAwait(false);
                 token.ThrowIfCancellationRequested();
+                directory.VerifyRefreshDiscovery();
                 directory.ReportRefreshPhase("Updating category artwork");
                 channel.ReplaceFolderArtwork(folder, token);
             };
