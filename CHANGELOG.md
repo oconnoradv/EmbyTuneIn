@@ -7,6 +7,18 @@ features explicitly removed below are not promises of current functionality.
 Superseded prerelease download records/assets are retired after the replacement
 release is verified; original source tags remain unchanged for provenance.
 
+## Unreleased - native refresh task integration
+
+- Remove all eight Refresh TuneIn - ... scheduled tasks and their legacy
+  start/cancel/status/schedule APIs. Use Emby's built-in Refresh Internet Channels.
+- Remove plugin schedule suppression. On upgrade, restore a recorded disabled
+  global schedule from its backup or host defaults, preserving later administrator
+  edits and leaving never-managed schedules unchanged.
+- Show native task state/progress/last result in Settings, with manual status
+  update and explicit retrieval of the latest failed task's stored error report.
+  Keep diagnostics administrator-only, bounded and plain-text; no full server-log
+  access, background polling, provider queries or fabricated task results.
+
 ## 1.3.0-fork.11 - live-provider compatibility
 
 - Fix live-opening failures after a successful pre-roll when radio providers repeat

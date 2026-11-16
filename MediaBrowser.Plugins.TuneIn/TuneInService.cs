@@ -40,37 +40,20 @@ namespace MediaBrowser.Plugins.TuneIn
     [Authenticated(AllowLocalOnly = true)]
     public class GetTuneInBranding { }
 
-    [Route("/TuneInFork/Refresh", "GET")]
+    [Route("/TuneInFork/ChannelRefresh", "GET")]
     [Authenticated(Roles = "Admin")]
-    public class GetTuneInRefresh : IReturn<RadioGroupRefreshStatus[]> { }
+    public class GetTuneInChannelRefresh : IReturn<ChannelRefreshStatus> { }
 
-    [Route("/TuneInFork/Schedule", "GET")]
+    [Route("/TuneInFork/ChannelRefresh/Failure", "GET")]
     [Authenticated(Roles = "Admin")]
-    public class GetTuneInSchedule : IReturn<TuneInScheduleSettings> { }
-
-    [Route("/TuneInFork/Schedule", "POST")]
-    [Authenticated(Roles = "Admin")]
-    public class SetTuneInSchedule : TuneInScheduleSettings, IReturn<TuneInScheduleSettings> { }
-
-    [Route("/TuneInFork/Refresh/{Category}", "POST")]
-    [Authenticated(Roles = "Admin")]
-    public class StartTuneInRefresh : IReturn<RadioGroupRefreshStatus>
+    public class GetTuneInChannelRefreshFailure : IReturn<ChannelRefreshFailure>
     {
-        public string Category { get; set; }
-    }
-
-    [Route("/TuneInFork/Refresh/{Category}/Cancel", "POST")]
-    [Authenticated(Roles = "Admin")]
-    public class CancelTuneInRefresh : IReturn<RadioGroupRefreshStatus>
-    {
-        public string Category { get; set; }
-        public string Id { get; set; }
+        public string Attempt { get; set; }
     }
 
     public class TuneInService : IService, IRequiresRequest
     {
         private readonly ILogger logger;
-        private readonly IChannelManager channelManager;
         private readonly IHttpResultFactory resultFactory;
         private readonly TuneInDirectory directory;
         private readonly ITaskManager taskManager;
@@ -86,7 +69,6 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInDirectory directory, IFfmpegManager ffmpegManager = null)
         {
             logger = logManager.GetLogger(GetType().Name);
-            this.channelManager = channelManager;
             this.resultFactory = resultFactory ?? throw new ArgumentNullException(nameof(resultFactory));
             this.directory = directory;
             this.ffmpegManager = ffmpegManager;
@@ -98,15 +80,10 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInDirectory.Instance.SelectAsync(request.Category, request.Parent, request.Path,
                 request.Refresh, Request.CancellationToken);
 
-        public RadioGroupRefreshStatus[] Get(GetTuneInRefresh request) => TuneInRefresh.Instance.Status();
-        public TuneInScheduleSettings Get(GetTuneInSchedule request) =>
-            new TuneInSchedules(taskManager, Plugin.Instance.RefreshState).Read();
-        public TuneInScheduleSettings Post(SetTuneInSchedule request) =>
-            new TuneInSchedules(taskManager, Plugin.Instance.RefreshState).Apply(request);
-        public RadioGroupRefreshStatus Post(StartTuneInRefresh request) =>
-            TuneInRefresh.Instance.StartNative(request.Category, taskManager, channelManager, logger);
-        public RadioGroupRefreshStatus Post(CancelTuneInRefresh request) =>
-            TuneInRefresh.Instance.Cancel(request.Category, request.Id);
+        public ChannelRefreshStatus Get(GetTuneInChannelRefresh request) =>
+            new TuneInChannelRefresh(taskManager).Status();
+        public ChannelRefreshFailure Get(GetTuneInChannelRefreshFailure request) =>
+            new TuneInChannelRefresh(taskManager).Failure(request.Attempt);
 
         public async Task<object> Get(GetTuneInRelay request)
         {

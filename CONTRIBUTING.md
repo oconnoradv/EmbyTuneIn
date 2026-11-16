@@ -88,19 +88,21 @@ results before committing. The root library assets are an original futuristic
 544x306 landscape design without a FORK subtitle; preserve that exact size.
 Do not alter station logos when migrating bundled root/group artwork.
 
-Keep refresh history and schedule/trigger backups in the independent state file,
-not the signed station configuration. Schedule changes must be administrator-only,
-explicitly applied and reversible; never change the built-in all-provider task's
-triggers on startup or ordinary configuration Save. Its read-only description and
-native execution result must not be modified through reflection or fabricated.
-The settings page has no refresh/interval sections or polling. Native group tasks
-remain the primary interface; compatibility refresh APIs must execute the real
-native task via `ITaskManager`, so native Last ran remains genuine.
+Keep legacy refresh history and schedule/trigger backups in the independent state
+file, not the signed station configuration. Do not reintroduce per-group task
+registrations, schedule-suppression settings or mutation APIs. The one-time startup
+migration may undo recorded plugin suppression of the exact built-in task, restoring
+saved/native triggers only while its schedule is empty and preserving administrator
+edits. Failed migration must retain state, attempt rollback and log errors.
+Ordinary configuration Save must never change schedules. The built-in task's
+read-only description and native result must not be modified or fabricated.
+Settings reads native status only on open/manual update, without polling. Retrieving
+the native failed-task report requires an explicit click and administrator access;
+bound it, reject stale attempts and render private error details as plain text.
 Do not implement `IHasChangeEvent` or queue the global task on install/update/Save:
 configuration invalidation must stay local. Existing host triggers are independent.
-Native channel import preserves existing primary images. Folder artwork upgrades
-must update/persist the scoped library items' primary image references, retain
-stable playback IDs, and use an artwork revision marker to avoid repeated resets.
+Native channel import preserves existing primary images. Preserve already-migrated
+folder artwork, custom images and stable playback IDs when removing group workers.
 
 ## Upstream review checklist
 
@@ -127,10 +129,10 @@ as an official upstream replacement:
   during discovery; no automatic catalogue crawl or setup playback.
 - Protected local relay and transcoding instead of handing untrusted stream URLs
   directly to Emby; supported/unsupported formats and network policies are documented.
-- Eight Internet Channels tasks and compatible administrator APIs populate configured sections
-  via the host's eight-level traversal, with on-demand scoped requests and explicit
-  request/time limits. Native registration, cancellation and actual station import
-  must be exercised on the real server before acceptance.
+- Built-in Refresh Internet Channels scheduling, removal of plugin-specific workers,
+  one-time undo of legacy schedule suppression, and administrator-only native task
+  diagnostics. Task-list removal, restoration, authorization and actual station
+  import must be exercised on the real server before acceptance.
 
 Do not submit or advertise the PR as runtime-verified until the administrator has
 completed the relevant Emby manual tests. See README.md and SECURITY.md.
