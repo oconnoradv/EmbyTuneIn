@@ -7,8 +7,11 @@ features explicitly removed below are not promises of current functionality.
 Superseded prerelease download records/assets are retired after the replacement
 release is verified; original source tags remain unchanged for provenance.
 
-## Unreleased
+## 1.3.0-fork.10 - playback handoff
 
+- Deprecate all earlier fork versions for the pre-roll-to-live playback defect.
+  Some stations without pre-roll can still work; historical source/assets remain
+  for provenance, not as recommended playback builds.
 - Preserve TuneIn's recognized required pre-roll, then hand off to one working
   live-stream alternative instead of ending at the ad's EOF. Keep stations without
   pre-roll on their existing compressed passthrough path.
