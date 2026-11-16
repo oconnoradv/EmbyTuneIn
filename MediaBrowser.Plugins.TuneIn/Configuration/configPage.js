@@ -41,14 +41,14 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         view.querySelector('.channelRefreshMessage').textContent = '';
         view.querySelector('.channelRefreshStatus').textContent = 'Loading refresh status...';
         refreshControls(instance, true);
-        return ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('TuneInFork/ChannelRefresh'), dataType: 'json' }).then(function (status) {
+        return ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('TuneInFork/RefreshTuneIn'), dataType: 'json' }).then(function (status) {
             if (!instance.viewActive || epoch !== instance.viewEpoch) return;
             if (!status || ['Idle', 'Running', 'Cancelling'].indexOf(status.State) === -1
                 || ['NeverRun', 'Completed', 'Failed', 'Cancelled', 'Aborted'].indexOf(status.LastResult) === -1
                 || status.LastResult === 'Failed' && (typeof status.FailedAttempt !== 'string' || !status.FailedAttempt))
                 throw new Error('Invalid task status.');
             instance.failedAttempt = status.FailedAttempt || null;
-            var text = 'Task: ' + status.State + '. Last result: '
+            var text = 'Refresh TuneIn task: ' + status.State + '. Last result: '
                 + (status.LastResult === 'NeverRun' ? 'Never run' : status.LastResult) + '.';
             if (status.State === 'Running' && typeof status.Progress === 'number' && isFinite(status.Progress))
                 text += ' Progress: ' + Math.round(Math.max(0, Math.min(100, status.Progress))) + '%.';
@@ -70,7 +70,7 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         view.querySelector('.channelRefreshMessage').textContent = 'Retrieving failed task report...';
         refreshControls(instance, true);
         return ApiClient.ajax({ type: 'GET', dataType: 'json',
-            url: ApiClient.getUrl('TuneInFork/ChannelRefresh/Failure', { Attempt: attempt }) }).then(function (report) {
+            url: ApiClient.getUrl('TuneInFork/RefreshTuneIn/Failure', { Attempt: attempt }) }).then(function (report) {
             if (!instance.viewActive || epoch !== instance.viewEpoch) return;
             if (!report || report.Attempt !== attempt || typeof report.Text !== 'string' || !report.Text)
                 throw new Error('Invalid task report.');
@@ -225,7 +225,7 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         loading.show();
         ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
             Dashboard.processPluginConfigurationUpdateResult(result);
-            message(instance, 'Configuration saved. ' + browsingStatus(config) + ' No catalogue crawl was started. Use the built-in Refresh Internet Channels task under Scheduled Tasks.');
+            message(instance, 'Configuration saved. ' + browsingStatus(config) + ' No catalogue crawl was started. Use Refresh TuneIn under Scheduled Tasks to refresh enabled TuneIn categories.');
         }).catch(function () {
             message(instance, 'Configuration was not saved. Check validation and administrator access.');
         }).then(function () { loading.hide(); });

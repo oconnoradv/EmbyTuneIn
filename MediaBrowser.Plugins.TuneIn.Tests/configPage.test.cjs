@@ -48,7 +48,7 @@ function harness(config) {
         getPluginConfiguration: async id => { calls.configReads.push(id); return JSON.parse(JSON.stringify(config)); },
         getUrl: (route, query) => ({ route, query }),
         ajax: async request => {
-            if (request.url.route === 'TuneInFork/ChannelRefresh') {
+            if (request.url.route === 'TuneInFork/RefreshTuneIn') {
                 calls.diagnostics.push(request);
                 return { State: 'Idle', LastResult: 'NeverRun' };
             }
@@ -93,13 +93,13 @@ const html = () => fs.readFileSync(path.join(__dirname, '..', 'MediaBrowser.Plug
 
 test('settings expose native read-only status without scheduling controls or automatic log retrieval', async () => {
     assert.doesNotMatch(html(), /data-section="(?:schedules|refresh)"|scheduleControls|refreshGroups/);
-    assert.match(html(), /built-in Refresh Internet Channels task under Scheduled Tasks/);
+    assert.match(html(), /Refresh TuneIn.*enabled TuneIn categories.*other channel providers are not refreshed/);
     const app = harness({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true });
     const requests = [];
     app.ApiClient.ajax = async request => {
         requests.push(request);
         assert.equal(request.type, 'GET');
-        assert.equal(request.url.route, 'TuneInFork/ChannelRefresh');
+        assert.equal(request.url.route, 'TuneInFork/RefreshTuneIn');
         return { State: 'Idle', LastResult: 'NeverRun' };
     };
     await app.instance.onResume();
@@ -117,9 +117,9 @@ test('failed native task status enables explicit report retrieval and renders er
     const requests = [];
     app.ApiClient.ajax = async request => {
         requests.push(request);
-        if (request.url.route === 'TuneInFork/ChannelRefresh')
+        if (request.url.route === 'TuneInFork/RefreshTuneIn')
             return { State: 'Running', Progress: 35, LastResult: 'Failed', FailedAttempt: 'attempt1', FinishedUtc: '2026-11-16T17:00:00Z' };
-        assert.equal(request.url.route, 'TuneInFork/ChannelRefresh/Failure');
+        assert.equal(request.url.route, 'TuneInFork/RefreshTuneIn/Failure');
         assert.equal(request.url.query.Attempt, 'attempt1');
         return { Attempt: 'attempt1', Text: '<script>private error</script>', Truncated: true };
     };
@@ -142,7 +142,7 @@ test('never-run and successful task statuses disable failed-log retrieval', asyn
         app.ApiClient.ajax = async () => ({ State: 'Idle', LastResult: result });
         await app.instance.onResume();
         assert.equal(app.view.querySelector('.channelRefreshFailure').disabled, true);
-        assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Task: Idle/);
+        assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Refresh TuneIn task: Idle/);
     }
 });
 

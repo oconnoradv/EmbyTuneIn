@@ -40,11 +40,11 @@ namespace MediaBrowser.Plugins.TuneIn
     [Authenticated(AllowLocalOnly = true)]
     public class GetTuneInBranding { }
 
-    [Route("/TuneInFork/ChannelRefresh", "GET")]
+    [Route("/TuneInFork/RefreshTuneIn", "GET")]
     [Authenticated(Roles = "Admin")]
     public class GetTuneInChannelRefresh : IReturn<ChannelRefreshStatus> { }
 
-    [Route("/TuneInFork/ChannelRefresh/Failure", "GET")]
+    [Route("/TuneInFork/RefreshTuneIn/Failure", "GET")]
     [Authenticated(Roles = "Admin")]
     public class GetTuneInChannelRefreshFailure : IReturn<ChannelRefreshFailure>
     {

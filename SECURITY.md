@@ -8,15 +8,20 @@ use Emby's `Authenticated(Roles = "Admin")`; configuration writes use Emby's bui
 administrator configuration API, not a new unauthenticated/CSRF-exempt write route.
 Actual host authorization and browser integration require manual Emby testing.
 
-The plugin no longer registers per-group scheduled tasks or exposes their legacy
-refresh/start/cancel/schedule APIs. Administrators run, stop and schedule Emby's
-built-in Refresh Internet Channels task through the native host UI. All TuneIn
-catalogue operations still enforce enabled saved scopes, signed navigation,
-cross-group/selection-hub restrictions and configuration cancellation. The response
-cache remains bounded to 128 pages/8 MiB serialized XML.
+The plugin registers one visible **Refresh TuneIn** task with no default triggers.
+It walks only enabled categories and their saved starting selections; disabled
+groups, unselected categories and other providers are not crawled by this task.
+The separate Emby **Refresh Internet Channels** task still traverses all channel
+providers and honors TuneIn's category/selection validation. Administrators manage
+either task through the native host UI. Former per-group task registrations and
+their refresh/start/cancel/schedule APIs remain removed. All TuneIn catalogue
+operations enforce enabled saved scopes, signed navigation, cross-group/
+selection-hub restrictions and configuration cancellation. The response cache
+remains bounded to 128 pages/8 MiB serialized XML.
 
-Read-only `/TuneInFork/ChannelRefresh` and `/TuneInFork/ChannelRefresh/Failure` GET
-routes require `Authenticated(Roles = "Admin")`, without a local bypass. They use
+Read-only `/TuneInFork/RefreshTuneIn` and `/TuneInFork/RefreshTuneIn/Failure` GET
+routes report the dedicated task, not Emby's all-provider refresh. They require
+`Authenticated(Roles = "Admin")`, without a local bypass. They use
 the host ApiClient authentication and never start/cancel tasks or query providers.
 The failure route accepts only an attempt identity, not a path or URL. It returns
 the latest native failed task's stored error details, capped at 65,536 characters,

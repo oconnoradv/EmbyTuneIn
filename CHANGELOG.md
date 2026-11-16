@@ -4,10 +4,18 @@ This history covers the enhancements added in oconnoradv/EmbyTuneIn beyond the
 upstream MediaBrowser/TuneIn 1.2.8.0 baseline. README.md (distributed as INSTALL.md),
 SECURITY.md and CONTRIBUTING.md describe the current behavior in full. Historical
 features explicitly removed below are not promises of current functionality.
-Superseded prerelease download records/assets are retired after the replacement
-release is verified; original source tags remain unchanged for provenance.
+Superseded prereleases are marked deprecated after the replacement is verified.
+Published assets and original source tags remain unchanged for provenance.
 
-## 1.3.0-fork.12 - native refresh task integration
+## 1.3.0-fork.13 - category-scoped refresh task
+
+- Add one visible, manually schedulable **Refresh TuneIn** task. It runs only
+  enabled TuneIn categories and their saved sub-category selections; the separate
+  built-in Refresh Internet Channels task remains all-provider.
+- Point Settings status and failed-report retrieval at the dedicated Refresh TuneIn
+  task, rather than the host's global refresh result.
+
+## 1.3.0-fork.12 - native refresh task integration (deprecated)
 
 - Remove all eight Refresh TuneIn - ... scheduled tasks and their legacy
   start/cancel/status/schedule APIs. Use Emby's built-in Refresh Internet Channels.
