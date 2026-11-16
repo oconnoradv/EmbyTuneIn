@@ -7,7 +7,7 @@ features explicitly removed below are not promises of current functionality.
 Superseded prerelease download records/assets are retired after the replacement
 release is verified; original source tags remain unchanged for provenance.
 
-## Unreleased
+## 1.3.0-fork.11 - live-provider compatibility
 
 - Fix live-opening failures after a successful pre-roll when radio providers repeat
   advisory ICY headers, use LF-only HTTP response lines, or send legacy
