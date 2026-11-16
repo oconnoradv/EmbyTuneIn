@@ -142,7 +142,17 @@ namespace MediaBrowser.Plugins.TuneIn
                 var item = query[key];
                 if (item == null) continue;
                 if (!Regex.IsMatch(item, @"^[A-Za-z0-9:,*-]{1,80}$"))
-                    throw new InvalidDataException("Invalid catalogue link parameter.");
+                {
+                    var reason = item.Length == 0 ? "empty"
+                        : item.Length > 80 ? "longer than 80 characters"
+                        : item.Any(char.IsControl) ? "contains a control character"
+                        : item.Any(char.IsWhiteSpace) ? "contains whitespace"
+                        : item.Any(character => character > 127) ? "contains non-ASCII characters"
+                        : "contains unsupported punctuation";
+                    throw new InvalidDataException("Invalid catalogue link parameter '" + key + "' (" + reason
+                        + "; length " + item.Length.ToString(CultureInfo.InvariantCulture)
+                        + "; occurrences " + (query.GetValues(key)?.Length ?? 0).ToString(CultureInfo.InvariantCulture) + ").");
+                }
                 request.Parameters[key] = item;
             }
             if (request.Parameters.Count == 0) throw new InvalidDataException("Empty catalogue link rejected.");

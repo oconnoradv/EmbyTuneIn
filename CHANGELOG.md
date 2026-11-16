@@ -7,7 +7,17 @@ features explicitly removed below are not promises of current functionality.
 Superseded prereleases are marked deprecated after the replacement is verified.
 Published assets and original source tags remain unchanged for provenance.
 
-## 1.3.0-fork.13 - category-scoped refresh task
+## 1.3.0-fork.14 - refresh diagnostics
+
+- Preserve the original refresh exception chain in the native failed-task report,
+  including failures swallowed by host traversal. Identify the category, phase,
+  completed/started catalogue requests and last HTTP status instead of reporting
+  only a generic section failure. Existing administrator-only report limits apply.
+  Rejected catalogue parameter errors identify the parameter and rejection class,
+  length and occurrence count without including its value or URL.
+  This release does not claim to fix the observed refresh failure.
+
+## 1.3.0-fork.13 - category-scoped refresh task (deprecated)
 
 - Add one visible, manually schedulable **Refresh TuneIn** task. It runs only
   enabled TuneIn categories and their saved sub-category selections; the separate

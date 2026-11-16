@@ -171,9 +171,18 @@ namespace MediaBrowser.Plugins.TuneIn
                 progress.Report(0);
                 await job.Completion.ConfigureAwait(false);
                 RadioGroupRefreshStatus status;
-                lock (gate) status = job.Status.Copy();
+                Exception failure;
+                lock (gate)
+                {
+                    status = job.Status.Copy();
+                    failure = job.Failure;
+                }
                 if (status.State == "Cancelled") throw new OperationCanceledException(status.Error, token);
-                if (status.State != "Completed") throw new InvalidOperationException(status.Error);
+                if (status.State != "Completed")
+                    throw new InvalidOperationException("TuneIn category '" + status.Category + "' failed. Phase: "
+                        + status.Phase + ". Catalogue requests completed/started: " + status.CompletedRequests + "/"
+                        + status.TotalRequests + ". Last HTTP status: " + (status.LastHttpStatus?.ToString() ?? "not recorded")
+                        + ". " + status.Error, failure);
                 progress.Report(100);
             }
         }
@@ -321,6 +330,7 @@ namespace MediaBrowser.Plugins.TuneIn
             catch (Exception error)
             {
                 terminalState = "Failed";
+                lock (gate) job.Failure = error;
                 Update(job, status =>
                 {
                     status.Error = error is InvalidDataException || error is System.Xml.XmlException
@@ -366,6 +376,7 @@ namespace MediaBrowser.Plugins.TuneIn
             public CancellationTokenSource Cancellation { get; } = new CancellationTokenSource();
             public bool CancelledByAdmin { get; set; }
             public Task Completion { get; set; }
+            public Exception Failure { get; set; }
         }
 
         private sealed class CategoryProgress : IProgress<double>

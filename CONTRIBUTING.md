@@ -7,7 +7,7 @@ No upstream pull request or merge is created by building or publishing this fork
 ## Versioning and independent identity
 
 Upstream currently declares assembly/file version `1.2.8.0`. The fork's new
-configuration/refresh functionality uses SemVer `1.3.0-fork.13`: the prerelease
+configuration/refresh functionality uses SemVer `1.3.0-fork.14`: the prerelease
 suffix identifies a fork test candidate, not an official upstream release.
 The `.csproj` `<Version>` is the source of truth. The SDK derives assembly/file
 version `1.3.0.0`; informational version includes the exact source commit.

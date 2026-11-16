@@ -513,6 +513,35 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public void CatalogueLinksCannotIntroduceArbitraryTargetsOrParameters(string value) =>
             Assert.Throws<System.IO.InvalidDataException>(() => DirectoryRequest.ParseLink(value));
 
+        [Theory]
+        [InlineData("filter=private%20value", "filter", "contains whitespace", 13, 1)]
+        [InlineData("id=private%26value", "id", "contains unsupported punctuation", 13, 1)]
+        [InlineData("sid=", "sid", "empty", 0, 1)]
+        [InlineData("offset=1&offset=2%2F", "offset", "contains unsupported punctuation", 4, 2)]
+        [InlineData("pivot=%C3%A9", "pivot", "contains non-ASCII characters", 1, 1)]
+        [InlineData("c=%01", "c", "contains a control character", 1, 1)]
+        public void RejectedCatalogueParameterDiagnosticsDoNotExposeValues(string query, string key, string reason, int length, int occurrences)
+        {
+            var error = Assert.Throws<System.IO.InvalidDataException>(() =>
+                DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?" + query));
+            Assert.Contains("'" + key + "'", error.Message);
+            Assert.Contains(reason, error.Message);
+            Assert.Contains("length " + length, error.Message);
+            Assert.Contains("occurrences " + occurrences, error.Message);
+            Assert.DoesNotContain("private", error.Message);
+            Assert.DoesNotContain("radiotime.com", error.Message);
+        }
+
+        [Fact]
+        public void RejectedOverlongCatalogueParameterReportsOnlyLength()
+        {
+            var value = new string('x', 81);
+            var error = Assert.Throws<System.IO.InvalidDataException>(() =>
+                DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?filter=" + value));
+            Assert.Contains("'filter' (longer than 80 characters; length 81; occurrences 1)", error.Message);
+            Assert.DoesNotContain(value, error.Message);
+        }
+
         [Fact]
         public void MetadataEndpointsRequireAdministratorAndRelayRequiresLocalServer()
         {

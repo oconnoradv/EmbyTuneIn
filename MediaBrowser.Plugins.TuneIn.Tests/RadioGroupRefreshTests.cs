@@ -616,10 +616,47 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 refresh.ExecuteScheduledAsync("talk", manager, null, CancellationToken.None, new InlineProgress()));
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task ScheduledFailureRetainsCategoryContextAndOriginalCauseEvenWhenHostSwallowsIt(bool swallowFailure)
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var cause = new IOException("Synthetic catalogue connection failure");
+            var directory = new TuneInDirectory(() => config, (_, __) => throw cause);
+            var library = DispatchProxy.Create<MediaBrowser.Controller.Library.ILibraryManager, RefreshTaskLibraryProxy>();
+            var libraryProxy = (RefreshTaskLibraryProxy)(object)library;
+            libraryProxy.Parent = new MediaBrowser.Controller.Channels.Channel { InternalId = 100 };
+            libraryProxy.Roots.Add(new MediaBrowser.Controller.Entities.Folder
+            {
+                InternalId = 1,
+                ParentId = 100,
+                ExternalId = directory.Register(directory.Snapshot(), TuneInChannel.CategoryEntry("talk"))
+            });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory, library);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var proxy = (TaskManagerProxy)(object)manager;
+            proxy.Channel = channel;
+            proxy.SwallowFailure = swallowFailure;
+            var refresh = new TuneInRefresh(directory);
+
+            var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                refresh.ExecuteConfiguredAsync(manager, null, CancellationToken.None, new InlineProgress()));
+
+            Assert.Contains("category 'talk'", failure.Message);
+            Assert.Contains("Catalogue requests completed/started: 0/1", failure.Message);
+            Assert.Contains("Last HTTP status: not recorded", failure.Message);
+            Assert.Same(cause, failure.GetBaseException());
+            Assert.Contains(nameof(IOException), failure.ToString());
+            Assert.DoesNotContain(cause.Message, refresh.Status().Single(item => item.Category == "talk").Error);
+        }
+
         public class TaskManagerProxy : DispatchProxy
         {
             public TuneInChannel Channel { get; set; }
             public bool SwallowCancellation { get; set; }
+            public bool SwallowFailure { get; set; }
             public bool TraverseFolders { get; set; }
             public List<string> RefreshedFolders { get; } = new List<string>();
             protected override object Invoke(MethodInfo method, object[] args)
@@ -650,6 +687,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     }
                 }
                 catch (OperationCanceledException) when (SwallowCancellation) { }
+                catch (IOException) when (SwallowFailure) { }
             }
         }
 

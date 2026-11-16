@@ -1,8 +1,8 @@
-# TuneIn for Emby - fork v1.3.0-fork.13
+# TuneIn for Emby - fork v1.3.0-fork.14
 
 Configuration-first radio browsing with category switches, language/genre selection,
 geographic pickers, multiple toggleable local cities/regions and optional coordinates.
-Version **1.3.0-fork.13** retains the independent plugin ID, DLL name, configuration file and
+Version **1.3.0-fork.14** retains the independent plugin ID, DLL name, configuration file and
 dashboard/API namespace. This prevents an upstream TuneIn update from replacing
 the fork as happened with v0.0.1. It is intended for manual Emby testing, not a
 claim of production runtime certification.
@@ -10,7 +10,7 @@ claim of production runtime certification.
 This is a feature prerelease based on upstream's **1.2.8.0** assembly line, not
 an official upstream 1.3.0 release. The project declares one SemVer version;
 the SDK derives assembly/file version **1.3.0.0**, and informational version
-includes `1.3.0-fork.13+<tested-commit>`. Future fork candidates increment
+includes `1.3.0-fork.14+<tested-commit>`. Future fork candidates increment
 the suffix; fixes/features increment the appropriate base version.
 This document consolidates the currently supported enhancements from every fork
 release, rather than requiring earlier downloads. [CHANGELOG.md](CHANGELOG.md)
@@ -20,7 +20,9 @@ unchanged for provenance. Fork.9 and earlier
 can stop after the advertisement while the client still appears to be playing;
 fork.10 additionally lacks the live-provider HTTP compatibility fixes in fork.11.
 Fork.12 lacks the TuneIn-only refresh task and task-specific diagnostics in this
-release. Version 1.3.0-fork.13 includes the handoff and live-provider
+release. Fork.13 does not preserve the underlying refresh exception in task
+reports. Version 1.3.0-fork.14 improves diagnostics but does not claim to fix
+the reported refresh failure. It includes the handoff and live-provider
 HTTP compatibility fixes, verified against four actual provider streams;
 real Emby runtime verification remains pending.
 The reported channel disappearance/recreation after replacing the DLL remains
@@ -63,7 +65,7 @@ install host SDK DLLs from the build directory. See [SECURITY.md](SECURITY.md)
 for the underlying server CVE and the withdrawn NuGet attribution.
 
 1. Download `MediaBrowser.Plugins.TuneIn.Fork.dll`, `SHA256SUMS.txt` and `INSTALL.md`
-   from this fork's **v1.3.0-fork.13** release package. Keep the accompanying license.
+   from this fork's **v1.3.0-fork.14** release package. Keep the accompanying license.
 2. Compare the DLL's SHA-256 against its entry in `SHA256SUMS.txt`. On Windows:
    `Get-FileHash .\MediaBrowser.Plugins.TuneIn.Fork.dll -Algorithm SHA256`.
    On Linux/macOS: `shasum -a 256 MediaBrowser.Plugins.TuneIn.Fork.dll`.
@@ -76,7 +78,7 @@ for the underlying server CVE and the withdrawn NuGet attribution.
    Emby's dashboard before restarting. Restart Emby.
 4. As an administrator, open **Dashboard > Advanced > TuneIn**, or
    **Dashboard > Plugins > TuneIn (oconnoradv fork) > Settings**. Both open the
-   same configuration page; confirm **TuneIn Fork 1.3.0-fork.13** is displayed. Reopen
+   same configuration page; confirm **TuneIn Fork 1.3.0-fork.14** is displayed. Reopen
    Settings from the plugin or Advanced menu rather than an old bookmarked page.
    Both HTML and controller URLs are now versioned to avoid stale fork.1/fork.7
    markup. Hard-refresh the dashboard after updating. The controller uses Emby's
@@ -175,6 +177,12 @@ server log's matching time range. A later result replaces the available report;
 update status if it changes before retrieval. Both diagnostic endpoints are
 administrator-only. Reports can include private paths/URLs/account details:
 redact them before sharing.
+
+New refresh failures retain the original exception chain along with the failed
+category, phase, completed/started request counts and last observed HTTP status.
+Rejected catalogue parameters report their name, rejection class, length and
+occurrence count, without the value or URL. Previously stored generic reports
+cannot recover exception details that were discarded.
 
 Real host task registration/removal, trigger restoration, authorization and
 diagnostics still need manual Emby verification; SDK/unit-test coverage is not
@@ -299,10 +307,10 @@ regression, dependency/advisory, SBOM and checksum evidence instead. Please veri
 | Test | Expected outcome |
 |---|---|
 | Fresh/legacy install, startup and unconfigured root | No automatic TuneIn traffic; empty channel until explicitly configured. |
-| Advanced menu and plugin Settings | Both open TuneIn Fork 1.3.0-fork.13 through versioned page/controller URLs and save the same independent configuration. The previous dashboard does not remain underneath the form. No individual-refresh/interval controls or background polling; native status reads once on open. |
+| Advanced menu and plugin Settings | Both open TuneIn Fork 1.3.0-fork.14 through versioned page/controller URLs and save the same independent configuration. The previous dashboard does not remain underneath the form. No individual-refresh/interval controls or background polling; native status reads once on open. |
 | Collapsible settings sections | Four sections: setup/account starts expanded; radio groups, coordinates and selections expand/collapse independently. Save stays visible; collapsing does not discard edits or request provider data. |
 | Checkbox controls and empty library diagnostic | Visible checkboxes; disabled/no-category status is explicit. Enabling browsing and Talk produces a local Talk root folder. |
-| Save, restart and plugin update check | Installed fork remains 1.3.0-fork.13 (assembly 1.3.0.0); settings/selection state persists and upstream does not replace the DLL. No plugin-requested global refresh is queued; distinguish existing/restored host triggers. Channel/station retention across DLL replacement is a reported issue still requiring an upgrade retest/startup log. |
+| Save, restart and plugin update check | Installed fork remains 1.3.0-fork.14 (assembly 1.3.0.0); settings/selection state persists and upstream does not replace the DLL. No plugin-requested global refresh is queued; distinguish existing/restored host triggers. Channel/station retention across DLL replacement is a reported issue still requiring an upgrade retest/startup log. |
 | Administrator versus ordinary/anonymous user | Only the administrator can load selectors/save configuration/read native refresh status or failure reports; remote relay calls are rejected. |
 | Refresh Music/Language/Location and Local Radio | Saved selections and descendants remain scoped; Language includes its counted validation request; local coordinates/account do not leak to unrelated groups. Repeated pages reuse the bounded cache. |
 | Scheduled tasks | One **Refresh TuneIn** task appears without default triggers; its description says it refreshes enabled TuneIn categories/selections only. The built-in Refresh Internet Channels task remains separate and server-wide. Former per-group tasks and mutation routes remain absent. |
