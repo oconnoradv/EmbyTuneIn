@@ -191,6 +191,7 @@ async function main() {
     fs.copyFileSync('README.md', path.join(out, 'INSTALL.md'));
     fs.copyFileSync('SECURITY.md', path.join(out, 'SECURITY.md'));
     fs.copyFileSync('CONTRIBUTING.md', path.join(out, 'CONTRIBUTING.md'));
+    fs.copyFileSync('CHANGELOG.md', path.join(out, 'CHANGELOG.md'));
     const evidence = {
         version, source_revision: revision, clean_source: !dirty,
         release_gates_passed: release, dotnet_sdk: run(dotnet, ['--version'], true), node: process.version,

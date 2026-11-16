@@ -20,6 +20,7 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static string ReleaseVersion =>
             typeof(Plugin).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>().InformationalVersion.Split('+')[0];
         internal static string ConfigurationControllerName => "tuneinforkjs" + ReleaseVersion.Replace(".", "").Replace("-", "");
+        internal static string ConfigurationPageName => "tuneinfork" + ReleaseVersion.Replace(".", "").Replace("-", "");
 
         public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer, IServerApplicationHost applicationHost)
             : base(applicationPaths, xmlSerializer)
@@ -27,7 +28,11 @@ namespace MediaBrowser.Plugins.TuneIn
             if (!SupportsServerVersion(applicationHost.ApplicationVersion))
                 throw new NotSupportedException("TuneIn requires Emby Server 4.9.1.90+ or patched beta 4.9.2.7+.");
             Instance = this;
+            RefreshState = new TuneInRefreshStateStore(Path.Combine(applicationPaths.DataPath, "tunein-fork-refresh.xml"));
+            TuneInRefresh.Instance.UseHistoryStore(RefreshState);
         }
+
+        internal TuneInRefreshStateStore RefreshState { get; }
 
         internal static bool SupportsServerVersion(Version version) =>
             version != null && version >= new Version(4, 9, 1, 90)
@@ -46,7 +51,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 new PluginPageInfo
                 {
-                    Name = "tuneinfork",
+                    Name = ConfigurationPageName,
                     DisplayName = "TuneIn",
                     EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html",
                     IsMainConfigPage = true,

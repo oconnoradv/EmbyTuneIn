@@ -12,6 +12,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using Xunit;
+using System.Reflection;
+using System.Collections.Generic;
+using MediaBrowser.Model.Logging;
+using MediaBrowser.Model.Tasks;
 
 namespace MediaBrowser.Plugins.TuneIn.Tests
 {
@@ -25,9 +29,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         {
             var root = await channel.GetChannelItems(new InternalChannelItemQuery(), token);
             Assert.Contains(root.Items, item => item.Id == folder);
-            Assert.Equal(category == "music" || category == "location" || category == "language" ? 3 : 2, depth);
+            Assert.Equal(8, depth);
             var children = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = folder }, token);
-            if (depth == 3)
+            if (category == "music" || category == "location" || category == "language")
                 foreach (var child in children.Items)
                     await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = child.Id }, token);
             Assert.Equal(category, directory.Resolve(directory.Snapshot(), folder).Category);
@@ -36,14 +40,42 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [Fact]
         public void RefreshRoutesAreAdminOnlyAndMutationIsPostOnly()
         {
-            foreach (var type in new[] { typeof(GetTuneInRefresh), typeof(StartTuneInRefresh), typeof(CancelTuneInRefresh) })
+            foreach (var type in new[] { typeof(GetTuneInRefresh), typeof(StartTuneInRefresh), typeof(CancelTuneInRefresh),
+                typeof(GetTuneInSchedule), typeof(SetTuneInSchedule) })
             {
                 var auth = (AuthenticatedAttribute)Attribute.GetCustomAttribute(type, typeof(AuthenticatedAttribute));
                 Assert.Equal("Admin", auth.Roles);
                 Assert.False(auth.AllowLocal);
                 var route = (MediaBrowser.Model.Services.RouteAttribute)Attribute.GetCustomAttribute(type, typeof(MediaBrowser.Model.Services.RouteAttribute));
-                Assert.Equal(type == typeof(GetTuneInRefresh) ? "GET" : "POST", route.Verbs);
+                Assert.Equal(type == typeof(GetTuneInRefresh) || type == typeof(GetTuneInSchedule) ? "GET" : "POST", route.Verbs);
             }
+        }
+
+        [Fact]
+        public async Task HistoryTracksLastSuccessSeparatelyFromLaterFailedAttemptsWithoutInvalidatingNavigation()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var directory = new TuneInDirectory(() => config, (_, __) => Task.FromResult(Opml()));
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
+            var history = new TuneInRefreshStateStore();
+            var refresh = new TuneInRefresh(directory, history);
+            var originalKey = directory.Snapshot().Key;
+            Assert.Null(refresh.Status().Single(item => item.Category == "talk").LastSuccessfulUtc);
+            refresh.Start("talk", (folder, depth, token) => Synchronize(channel, directory, "talk", folder, depth, token));
+            await refresh.Completion("talk");
+            var success = refresh.Status().Single(item => item.Category == "talk");
+            Assert.Equal(success.FinishedUtc, success.LastSuccessfulUtc);
+            refresh.Start("talk", (_, __, ___) => throw new IOException("Native refresh failed"));
+            await refresh.Completion("talk");
+            var failed = refresh.Status().Single(item => item.Category == "talk");
+            Assert.Equal("Failed", failed.LastAttemptState);
+            Assert.Equal(success.LastSuccessfulUtc, failed.LastSuccessfulUtc);
+            Assert.Equal(failed.FinishedUtc, failed.LastAttemptUtc);
+            var restarted = new TuneInRefresh(directory, history);
+            Assert.Equal(failed.LastAttemptUtc, restarted.Status().Single(item => item.Category == "talk").LastAttemptUtc);
+            Assert.Contains("Failed", restarted.HistorySummary("talk"));
+            Assert.Equal(originalKey, directory.Snapshot().Key);
         }
 
         [Fact]
@@ -79,7 +111,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 calls.Enqueue(request);
                 return Task.FromResult(Opml("<outline type='audio' guide_id='s1' text='Radio'/>"));
             });
-            var channel = new TuneInChannel(null, null, directory);
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
             var refresh = new TuneInRefresh(directory);
             var music = TuneInChannel.StartingEntries(directory.Snapshot(), "music").Single();
             await directory.FetchCategoryAsync(directory.Snapshot(), "music", TuneInChannel.CatalogueRequest(directory.Snapshot(), music), CancellationToken.None);
@@ -113,7 +145,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     "<outline type='link' text='One' URL='https://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=l1'/>"
                     + "<outline type='link' text='Two' URL='https://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=l2'/>"));
             });
-            var channel = new TuneInChannel(null, null, directory);
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
             var refresh = new TuneInRefresh(directory);
             refresh.Start("language", (folder, depth, token) => Synchronize(channel, directory, "language", folder, depth, token));
             await refresh.Completion("language");
@@ -139,7 +171,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 return Opml();
             });
             var refresh = new TuneInRefresh(directory);
-            var first = refresh.Start("talk", (_, __, ___) => Task.CompletedTask);
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
+            var first = refresh.Start("talk", (folder, depth, token) => Synchronize(channel, directory, "talk", folder, depth, token));
             await started.Task;
             var running = refresh.Status().Single(item => item.Category == "talk");
             Assert.Equal("Running", running.State);
@@ -150,7 +183,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             refresh.Cancel("talk", first.Id);
             await refresh.Completion("talk");
             Assert.Equal("Cancelled by administrator.", refresh.Status().Single(item => item.Category == "talk").Error);
-            var second = refresh.Start("talk", (_, __, ___) => Task.CompletedTask);
+            var second = refresh.Start("talk", (folder, depth, token) => Synchronize(channel, directory, "talk", folder, depth, token));
             Assert.NotEqual(first.Id, second.Id);
             directory.Reset();
             await refresh.Completion("talk");
@@ -170,7 +203,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var transport = new SafeHttpTransport(_ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
                 (_, __, ___) => Task.FromResult<Stream>(new DuplexStream(response)));
             var directory = new TuneInDirectory(() => config, transport: transport);
-            var channel = new TuneInChannel(null, null, directory);
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
             var refresh = new TuneInRefresh(directory);
             refresh.Start("talk", (folder, depth, token) => Synchronize(channel, directory, "talk", folder, depth, token));
             await refresh.Completion("talk");
@@ -182,7 +215,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task SynchronizationCannotEscapeCategoryOrCrawlBeyondCachedStartingPages()
+        public async Task SynchronizationCannotEscapeCategoryEvenIfHostSwallowsFailure()
         {
             var config = Ready();
             config.EnableTalk = true;
@@ -193,7 +226,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 calls++;
                 return Task.FromResult(Opml("<outline type='link' text='Next' URL='https://opml.radiotime.com/Browse.ashx?c=talk&amp;offset=25'/>"));
             });
-            var channel = new TuneInChannel(null, null, directory);
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
             var refresh = new TuneInRefresh(directory);
             refresh.Start("talk", async (folder, depth, token) =>
             {
@@ -205,8 +238,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             });
             await refresh.Completion("talk");
             Assert.Equal("Failed", refresh.Status().Single(item => item.Category == "talk").State);
-            Assert.Equal(1, calls);
-            Assert.Contains("Emby did not complete", refresh.Status().Single(item => item.Category == "talk").Error);
+            Assert.Equal(2, calls);
+            Assert.Contains("did not complete", refresh.Status().Single(item => item.Category == "talk").Error);
         }
 
         [Fact]
@@ -219,9 +252,332 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             refresh.Start("talk", (_, __, ___) => Task.CompletedTask);
             await refresh.Completion("talk");
             var status = refresh.Status().Single(item => item.Category == "talk");
-            Assert.Equal(100, status.ApiPercent);
+            Assert.Equal(0, status.ApiPercent);
             Assert.Equal("Failed", status.State);
             Assert.NotNull(status.Error);
+        }
+
+        [Fact]
+        public async Task NestedStationsPaginationAndRepeatedPagesArePopulatedWithinOneGroup()
+        {
+            var config = Ready();
+            config.EnableMusic = true;
+            config.EnableSports = true;
+            config.Music.Add(new CatalogSelection { Id = "g1" });
+            var calls = new List<DirectoryRequest>();
+            var directory = new TuneInDirectory(() => config, (request, token) =>
+            {
+                calls.Add(request);
+                if (request.Parameters["id"] == "g1")
+                    return Task.FromResult(Opml("<outline type='link' text='Stations' URL='https://opml.radiotime.com/Browse.ashx?id=g2'/>"
+                        + "<outline type='link' text='All music' URL='https://opml.radiotime.com/Browse.ashx?c=music'/>"));
+                if (!request.Parameters.ContainsKey("offset"))
+                    return Task.FromResult(Opml("<outline type='audio' guide_id='s1' text='One'/>"
+                        + "<outline key='next' type='link' text='Next' URL='https://opml.radiotime.com/Browse.ashx?id=g2&amp;offset=25'/>"));
+                return Task.FromResult(Opml("<outline type='audio' guide_id='s2' text='Two'/>"));
+            });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
+            var refresh = new TuneInRefresh(directory);
+            var stations = new List<string>();
+            refresh.Start("music", async (folder, depth, token) =>
+            {
+                Assert.Equal(8, depth);
+                var queue = new Queue<(string Id, int Level)>();
+                queue.Enqueue((folder, 2));
+                while (queue.Count > 0)
+                {
+                    var current = queue.Dequeue();
+                    var result = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = current.Id }, token);
+                    foreach (var item in result.Items)
+                    {
+                        if (item.Type == ChannelItemType.Media) stations.Add(item.Name);
+                        else if (current.Level < depth) queue.Enqueue((item.Id, current.Level + 1));
+                    }
+                }
+                var starting = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = folder }, token);
+                await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = starting.Items[0].Id }, token);
+            });
+            await refresh.Completion("music");
+            Assert.Equal(new[] { "One", "Two" }, stations);
+            Assert.Equal(3, calls.Count);
+            Assert.All(calls, request => Assert.False(request.Parameters.ContainsKey("c")));
+            var status = refresh.Status().Single(item => item.Category == "music");
+            Assert.Equal("Completed", status.State);
+            Assert.True(status.DiscoveryComplete);
+            Assert.Equal(3, status.TotalRequests);
+            Assert.Equal(2, status.StationRows);
+        }
+
+        [Fact]
+        public async Task RequestLimitIsAnIncompleteFailureEvenIfNativeHostSwallowsIt()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var calls = 0;
+            var directory = new TuneInDirectory(() => config, (_, __) => { calls++; return Task.FromResult(Opml()); });
+            var snapshot = directory.Snapshot();
+            var first = TuneInChannel.CatalogueRequest(snapshot, TuneInChannel.StartingEntries(snapshot, "talk").Single());
+            await Assert.ThrowsAsync<InvalidOperationException>(() => directory.SynchronizeCategoryAsync("talk", 1, async () =>
+            {
+                for (var i = 0; i < 1001; i++)
+                {
+                    var request = first.Copy();
+                    request.Parameters["offset"] = i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    try { await directory.FetchCategoryAsync(snapshot, "talk", request, CancellationToken.None); }
+                    catch (InvalidOperationException) { }
+                }
+            }, _ => { }));
+            Assert.Equal(1000, calls);
+        }
+
+        [Fact]
+        public async Task VisitingDescendantsCannotHideAnUnvisitedSavedSelection()
+        {
+            var config = Ready();
+            config.EnableMusic = true;
+            config.Music.AddRange(new[] { new CatalogSelection { Id = "g1" }, new CatalogSelection { Id = "g2" } });
+            var calls = 0;
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                calls++;
+                return Task.FromResult(request.Parameters["id"] == "g1"
+                    ? Opml("<outline type='link' text='Nested' URL='https://opml.radiotime.com/Browse.ashx?id=g3'/>")
+                    : Opml("<outline type='audio' guide_id='s1' text='One'/>"));
+            });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
+            var refresh = new TuneInRefresh(directory);
+            refresh.Start("music", async (folder, _, token) =>
+            {
+                var selections = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = folder }, token);
+                var children = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = selections.Items[0].Id }, token);
+                await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = children.Items[0].Id }, token);
+            });
+            await refresh.Completion("music");
+            Assert.Equal(2, calls);
+            var status = refresh.Status().Single(item => item.Category == "music");
+            Assert.Equal("Failed", status.State);
+            Assert.False(status.DiscoveryComplete);
+        }
+
+        [Fact]
+        public async Task ScheduledStartSharesActiveButtonJobAndReportsCompletionOnlyAfterPopulation()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var finish = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var calls = 0;
+            var directory = new TuneInDirectory(() => config, async (_, token) =>
+            {
+                calls++;
+                started.TrySetResult(true);
+                await finish.Task.WaitAsync(token);
+                return Opml("<outline type='audio' guide_id='s1' text='One'/>");
+            });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
+            var refresh = new TuneInRefresh(directory);
+            var job = refresh.Start("talk", (folder, depth, token) => Synchronize(channel, directory, "talk", folder, depth, token));
+            await started.Task;
+            var progress = new InlineProgress();
+            var execution = refresh.ExecuteScheduledAsync("talk", null, null, CancellationToken.None, progress);
+            Assert.Equal(job.Id, refresh.Status().Single(item => item.Category == "talk").Id);
+            Assert.Equal(new[] { 0d }, progress.Values);
+            finish.SetResult(true);
+            await execution;
+            Assert.Equal(new[] { 0d, 100d }, progress.Values);
+            Assert.Equal(1, calls);
+            Assert.True(refresh.Status().Single(item => item.Category == "talk").DiscoveryComplete);
+        }
+
+        [Fact]
+        public void EightIndependentNativeTasksAreVisibleWithoutAutomaticTriggers()
+        {
+            var logs = DispatchProxy.Create<ILogManager, TaskManagerProxy>();
+            var tasks = typeof(Plugin).Assembly.GetTypes().Where(type =>
+                !type.IsAbstract && typeof(TuneInRadioGroupRefreshTask).IsAssignableFrom(type))
+                .Select(type => (TuneInRadioGroupRefreshTask)Activator.CreateInstance(type, null, logs)).ToList();
+            Assert.Equal(8, tasks.Count);
+            Assert.Equal(8, tasks.Select(task => task.Key).Distinct().Count());
+            Assert.All(tasks, task =>
+            {
+                Assert.Equal("Internet Channels", task.Category);
+                Assert.False(task.IsHidden);
+                Assert.True(task.IsEnabled);
+                Assert.StartsWith("Refresh TuneIn - ", task.Name);
+                Assert.Empty(task.GetDefaultTriggers());
+                Assert.DoesNotContain("Refresh Internet Channels refreshes all channel providers", task.Description);
+                Assert.DoesNotContain("Use Advanced / TuneIn", task.Description);
+            });
+        }
+
+        [Fact]
+        public async Task SettingsStartUsesNativeExecutionAndBothEntryPointsUpdateSharedHistory()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var directory = new TuneInDirectory(() => config, (_, __) => Task.FromResult(Opml()));
+            var snapshot = directory.Snapshot();
+            var folderId = directory.Register(snapshot, TuneInChannel.CategoryEntry("talk"));
+            var library = DispatchProxy.Create<MediaBrowser.Controller.Library.ILibraryManager, LibraryArtworkTests.LibraryProxy>();
+            ((LibraryArtworkTests.LibraryProxy)library).Root = new MediaBrowser.Controller.Entities.Folder { InternalId = 1, ExternalId = folderId };
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory, library);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            ((TaskManagerProxy)(object)manager).Channel = channel;
+            var refresh = new TuneInRefresh(directory);
+            var worker = DispatchProxy.Create<IScheduledTaskWorker, ScheduleTests.WorkerProxy>();
+            var workerProxy = (ScheduleTests.WorkerProxy)worker;
+            workerProxy.Task = new RefreshTuneInTalk(null, DispatchProxy.Create<ILogManager, TaskManagerProxy>());
+            var tasks = DispatchProxy.Create<ITaskManager, NativeManagerProxy>();
+            var native = (NativeManagerProxy)tasks;
+            native.Workers = new[] { worker };
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            native.ExecuteTask = async () =>
+            {
+                await release.Task;
+                await refresh.ExecuteScheduledAsync("talk", manager, null, CancellationToken.None, new InlineProgress());
+                workerProxy.LastResult = new TaskResult { Status = TaskCompletionStatus.Completed, EndTimeUtc = DateTimeOffset.UtcNow };
+            };
+            var first = refresh.StartNative("talk", tasks, manager, null);
+            Assert.Equal("Queued", first.State);
+            Assert.Null(worker.LastExecutionResult);
+            Assert.Equal(0, first.TotalRequests);
+            Assert.Equal(first.Id, refresh.StartNative("talk", tasks, manager, null).Id);
+            Assert.Equal(1, native.Executions);
+            release.SetResult(true);
+            await native.Execution;
+            var completed = refresh.Status().Single(item => item.Category == "talk");
+            Assert.Equal("Completed", completed.State);
+            Assert.NotNull(completed.LastSuccessfulUtc);
+            Assert.Equal(TaskCompletionStatus.Completed, worker.LastExecutionResult.Status);
+            await tasks.Execute(worker, new TaskOptions());
+            var scheduled = refresh.Status().Single(item => item.Category == "talk");
+            Assert.NotEqual(first.Id, scheduled.Id);
+            Assert.True(scheduled.LastSuccessfulUtc >= completed.LastSuccessfulUtc);
+            Assert.Contains("Last successful group refresh", refresh.HistorySummary("talk"));
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task NativeLaunchFailureOrNoOpCannotStartProviderRequestsOrReportSuccess(bool fail)
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("No catalogue request allowed."));
+            var refresh = new TuneInRefresh(directory);
+            var worker = DispatchProxy.Create<IScheduledTaskWorker, ScheduleTests.WorkerProxy>();
+            ((ScheduleTests.WorkerProxy)worker).Task = new RefreshTuneInTalk(null, DispatchProxy.Create<ILogManager, TaskManagerProxy>());
+            var tasks = DispatchProxy.Create<ITaskManager, NativeManagerProxy>();
+            var native = (NativeManagerProxy)tasks;
+            native.Workers = new[] { worker };
+            native.ExecuteTask = () => fail ? Task.FromException(new IOException("Native execution unavailable")) : Task.CompletedTask;
+            refresh.StartNative("talk", tasks, null, null);
+            await refresh.Completion("talk");
+            var status = refresh.Status().Single(item => item.Category == "talk");
+            Assert.Equal("Failed", status.State);
+            Assert.Equal(0, status.TotalRequests);
+            Assert.Null(status.LastSuccessfulUtc);
+        }
+
+        [Fact]
+        public async Task CancellingBeforeNativeStartCannotRelaunchTheCancelledJob()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("Cancelled job must not query TuneIn."));
+            var refresh = new TuneInRefresh(directory);
+            var worker = DispatchProxy.Create<IScheduledTaskWorker, ScheduleTests.WorkerProxy>();
+            ((ScheduleTests.WorkerProxy)worker).Task = new RefreshTuneInTalk(null, DispatchProxy.Create<ILogManager, TaskManagerProxy>());
+            var tasks = DispatchProxy.Create<ITaskManager, NativeManagerProxy>();
+            var native = (NativeManagerProxy)tasks;
+            native.Workers = new[] { worker };
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            native.ExecuteTask = async () =>
+            {
+                await release.Task;
+                await refresh.ExecuteScheduledAsync("talk", null, null, CancellationToken.None, new InlineProgress());
+            };
+            var job = refresh.StartNative("talk", tasks, null, null);
+            refresh.Cancel("talk", job.Id);
+            await refresh.Completion("talk");
+            release.SetResult(true);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => native.Execution);
+            var status = refresh.Status().Single(item => item.Category == "talk");
+            Assert.Equal(job.Id, status.Id);
+            Assert.Equal("Cancelled", status.State);
+            Assert.Equal(0, status.TotalRequests);
+        }
+
+        public class NativeManagerProxy : DispatchProxy
+        {
+            public IScheduledTaskWorker[] Workers { get; set; }
+            public Func<Task> ExecuteTask { get; set; }
+            public int Executions { get; set; }
+            public Task Execution { get; private set; }
+            protected override object Invoke(MethodInfo method, object[] args)
+            {
+                if (method.Name == "get_ScheduledTasks") return Workers;
+                if (method.Name == "Execute")
+                {
+                    Assert.Same(Workers.Single(), args[0]);
+                    Executions++;
+                    return Execution = ExecuteTask();
+                }
+                throw new InvalidOperationException(method.Name);
+            }
+        }
+
+        [Fact]
+        public async Task ScheduledExecutionPropagatesNativeFailureAndCancellationToHost()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var directory = new TuneInDirectory(() => config, async (_, token) =>
+            {
+                started.TrySetResult(true);
+                await Task.Delay(Timeout.Infinite, token);
+                return Opml();
+            });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            ((TaskManagerProxy)(object)manager).Channel = channel;
+            ((TaskManagerProxy)(object)manager).SwallowCancellation = true;
+            var refresh = new TuneInRefresh(directory);
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var execution = refresh.ExecuteScheduledAsync("talk", manager, null, cancellation.Token, new InlineProgress());
+                await started.Task;
+                cancellation.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+            }
+            ((TaskManagerProxy)(object)manager).Channel = null;
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                refresh.ExecuteScheduledAsync("talk", manager, null, CancellationToken.None, new InlineProgress()));
+        }
+
+        public class TaskManagerProxy : DispatchProxy
+        {
+            public TuneInChannel Channel { get; set; }
+            public bool SwallowCancellation { get; set; }
+            protected override object Invoke(MethodInfo method, object[] args)
+            {
+                if (method.Name == "GetLogger") return null;
+                if (method.Name == "GetChannel") return Channel;
+                if (method.Name == "RefreshChannelContent")
+                    return Refresh((string)args[2], (CancellationToken)args[3]);
+                throw new InvalidOperationException("Unexpected native task call.");
+            }
+            private async Task Refresh(string folder, CancellationToken token)
+            {
+                try { await Channel.GetChannelItems(new InternalChannelItemQuery { FolderId = folder }, token); }
+                catch (OperationCanceledException) when (SwallowCancellation) { }
+            }
+        }
+        private sealed class InlineProgress : IProgress<double>
+        {
+            public List<double> Values { get; } = new List<double>();
+            public void Report(double value) => Values.Add(value);
         }
 
         private sealed class DuplexStream : Stream

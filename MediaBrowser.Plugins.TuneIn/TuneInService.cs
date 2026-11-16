@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Controller.Channels;
+using MediaBrowser.Model.Tasks;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -26,9 +27,28 @@ namespace MediaBrowser.Plugins.TuneIn
         public string Id { get; set; }
     }
 
+    [Route("/TuneInFork/Artwork/{Id}", "GET")]
+    [Authenticated(AllowLocalOnly = true)]
+    public class GetTuneInArtwork
+    {
+        public string Id { get; set; }
+    }
+
+    [Route("/TuneInFork/Branding", "GET")]
+    [Authenticated(AllowLocalOnly = true)]
+    public class GetTuneInBranding { }
+
     [Route("/TuneInFork/Refresh", "GET")]
     [Authenticated(Roles = "Admin")]
     public class GetTuneInRefresh : IReturn<RadioGroupRefreshStatus[]> { }
+
+    [Route("/TuneInFork/Schedule", "GET")]
+    [Authenticated(Roles = "Admin")]
+    public class GetTuneInSchedule : IReturn<TuneInScheduleSettings> { }
+
+    [Route("/TuneInFork/Schedule", "POST")]
+    [Authenticated(Roles = "Admin")]
+    public class SetTuneInSchedule : TuneInScheduleSettings, IReturn<TuneInScheduleSettings> { }
 
     [Route("/TuneInFork/Refresh/{Category}", "POST")]
     [Authenticated(Roles = "Admin")]
@@ -45,53 +65,90 @@ namespace MediaBrowser.Plugins.TuneIn
         public string Id { get; set; }
     }
 
-    public class TuneInService : IService, IRequiresRequest, IHasResultFactory
+    public class TuneInService : IService, IRequiresRequest
     {
         private readonly ILogger logger;
         private readonly IChannelManager channelManager;
-        public TuneInService(ILogManager logManager, IChannelManager channelManager)
-        { logger = logManager.GetLogger(GetType().Name); this.channelManager = channelManager; }
-        internal TuneInService() { }
+        private readonly IHttpResultFactory resultFactory;
+        private readonly TuneInDirectory directory;
+        private readonly ITaskManager taskManager;
+        public TuneInService(ILogManager logManager, IChannelManager channelManager, IHttpResultFactory resultFactory, ITaskManager taskManager)
+            : this(logManager, channelManager, resultFactory, TuneInDirectory.Instance)
+        { this.taskManager = taskManager ?? throw new ArgumentNullException(nameof(taskManager)); }
+        internal TuneInService(ILogManager logManager, IChannelManager channelManager, IHttpResultFactory resultFactory, TuneInDirectory directory)
+        {
+            logger = logManager.GetLogger(GetType().Name);
+            this.channelManager = channelManager;
+            this.resultFactory = resultFactory ?? throw new ArgumentNullException(nameof(resultFactory));
+            this.directory = directory;
+        }
+        internal TuneInService() { directory = TuneInDirectory.Instance; }
         public IRequest Request { get; set; }
-        public IHttpResultFactory ResultFactory { get; set; }
 
         public Task<SelectorResult> Get(GetTuneInSelectors request) =>
             TuneInDirectory.Instance.SelectAsync(request.Category, request.Parent, request.Path,
                 request.Refresh, Request.CancellationToken);
 
         public RadioGroupRefreshStatus[] Get(GetTuneInRefresh request) => TuneInRefresh.Instance.Status();
+        public TuneInScheduleSettings Get(GetTuneInSchedule request) =>
+            new TuneInSchedules(taskManager, Plugin.Instance.RefreshState).Read();
+        public TuneInScheduleSettings Post(SetTuneInSchedule request) =>
+            new TuneInSchedules(taskManager, Plugin.Instance.RefreshState).Apply(request);
         public RadioGroupRefreshStatus Post(StartTuneInRefresh request) =>
-            TuneInRefresh.Instance.Start(request.Category, (folder, depth, token) =>
-            {
-                var channel = channelManager.GetChannel<TuneInChannel>();
-                if (channel == null) throw new InvalidOperationException("TuneIn channel is not registered.");
-                return channelManager.RefreshChannelContent(channel, depth, folder, token);
-            }, logger);
+            TuneInRefresh.Instance.StartNative(request.Category, taskManager, channelManager, logger);
         public RadioGroupRefreshStatus Post(CancelTuneInRefresh request) =>
             TuneInRefresh.Instance.Cancel(request.Category, request.Id);
 
         public async Task<object> Get(GetTuneInRelay request)
         {
-            var remote = Request.RemoteIp;
-            if (remote?.IsIPv4MappedToIPv6 == true) remote = remote.MapToIPv4();
-            if (!Request.IsSocketConnectionLocal || remote == null || !System.Net.IPAddress.IsLoopback(remote))
-                throw new UnauthorizedAccessException("TuneIn relay is available only to this Emby server.");
-            var directory = TuneInDirectory.Instance;
+            RequireLoopback();
             var snapshot = directory.Snapshot();
             var entry = directory.Resolve(snapshot, request.Id);
             if (entry.StationId == null) throw new ArgumentException("Invalid radio relay item.");
             var operation = directory.Operation(snapshot, Request.CancellationToken);
+            RelayStream relay = null;
             try
             {
                 var response = await directory.OpenStreamAsync(snapshot, entry, operation.Token,
                     message => logger.Warn(message)).ConfigureAwait(false);
-                return ResultFactory.GetResult(Request, new RelayStream(response, operation), response.ContentType, null);
+                relay = new RelayStream(response, operation);
+                return resultFactory.GetResult(Request, relay, response.ContentType, null);
             }
             catch
             {
-                operation.Dispose();
+                if (relay != null) relay.Dispose();
+                else operation.Dispose();
                 throw;
             }
+        }
+
+        public async Task<object> Get(GetTuneInArtwork request)
+        {
+            RequireLoopback();
+            var snapshot = directory.Snapshot();
+            var entry = directory.Resolve(snapshot, request.Id);
+            using (var operation = directory.Operation(snapshot, Request.CancellationToken))
+            {
+                var artwork = await directory.OpenArtworkAsync(entry, operation.Token).ConfigureAwait(false);
+                operation.Token.ThrowIfCancellationRequested();
+                return resultFactory.GetResult(Request, new ReadOnlyMemory<byte>(artwork.Bytes), artwork.ContentType, null);
+            }
+        }
+
+        public async Task<object> Get(GetTuneInBranding request)
+        {
+            RequireLoopback();
+            var artwork = await TuneInArtwork.BrandingAsync(Request.CancellationToken).ConfigureAwait(false);
+            Request.CancellationToken.ThrowIfCancellationRequested();
+            return resultFactory.GetResult(Request, new ReadOnlyMemory<byte>(artwork.Bytes), artwork.ContentType, null);
+        }
+
+        private void RequireLoopback()
+        {
+            var remote = Request.RemoteIp;
+            if (remote?.IsIPv4MappedToIPv6 == true) remote = remote.MapToIPv4();
+            if (!Request.IsSocketConnectionLocal || remote == null || !System.Net.IPAddress.IsLoopback(remote))
+                throw new UnauthorizedAccessException("TuneIn media endpoints are available only to this Emby server.");
         }
 
         private sealed class RelayStream : System.IO.Stream

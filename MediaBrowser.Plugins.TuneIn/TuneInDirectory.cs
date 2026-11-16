@@ -157,6 +157,9 @@ namespace MediaBrowser.Plugins.TuneIn
         public DirectoryRequest Request { get; set; }
         public string Name { get; set; }
         public string StationId { get; set; }
+        public string ArtworkReference { get; set; }
+        public string ContentCategory { get; set; }
+        public string MusicSelectionId { get; set; }
     }
 
     public sealed class SelectorItem
@@ -182,7 +185,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Dictionary<string, SelectorResult> selectors = new Dictionary<string, SelectorResult>();
         private readonly Dictionary<string, CachedPage> pages = new Dictionary<string, CachedPage>();
         private readonly Dictionary<string, CancellationTokenSource> categoryChanges = new Dictionary<string, CancellationTokenSource>();
-        private readonly AsyncLocal<RefreshContext> cacheOnlyCategory = new AsyncLocal<RefreshContext>();
+        private readonly AsyncLocal<RefreshContext> refreshContext = new AsyncLocal<RefreshContext>();
         private int cachedBytes;
         private readonly SemaphoreSlim throttle = new SemaphoreSlim(1, 1);
         private readonly SafeHttpTransport transport;
@@ -191,7 +194,6 @@ namespace MediaBrowser.Plugins.TuneIn
         private CancellationTokenSource changed = new CancellationTokenSource();
         private string key;
         private DateTime lastRequest;
-        public event EventHandler Changed;
 
         internal TuneInDirectory(Func<PluginConfiguration> configuration = null,
             Func<DirectoryRequest, CancellationToken, Task<XDocument>> fetch = null, SafeHttpTransport transport = null)
@@ -212,7 +214,6 @@ namespace MediaBrowser.Plugins.TuneIn
                 ClearPages();
                 key = null;
             }
-            Changed?.Invoke(this, EventArgs.Empty);
         }
 
         public ConfigurationSnapshot Snapshot()
@@ -250,6 +251,15 @@ namespace MediaBrowser.Plugins.TuneIn
                 var document = new XElement("entry", new XAttribute("key", snapshot.Key),
                     new XElement("category", entry.Category), new XElement("selection", entry.SelectionId ?? ""),
                     new XElement("station", entry.StationId ?? ""), new XElement("name", entry.Name ?? ""));
+                if (entry.ContentCategory != null)
+                    document.Add(new XElement("contentCategory", entry.ContentCategory));
+                if (entry.MusicSelectionId != null)
+                    document.Add(new XElement("musicSelection", entry.MusicSelectionId));
+                if (entry.ArtworkReference != null)
+                {
+                    TuneInArtwork.ValidateReference(entry.ArtworkReference);
+                    document.Add(new XElement("artwork", entry.ArtworkReference));
+                }
                 if (entry.Request != null)
                 {
                     var request = new XElement("request", new XAttribute("method", entry.Request.Method));
@@ -294,7 +304,10 @@ namespace MediaBrowser.Plugins.TuneIn
                         Category = document.Element("category")?.Value,
                         SelectionId = EmptyToNull(document.Element("selection")?.Value),
                         StationId = EmptyToNull(document.Element("station")?.Value),
-                        Name = document.Element("name")?.Value
+                        Name = document.Element("name")?.Value,
+                        ContentCategory = EmptyToNull(document.Element("contentCategory")?.Value),
+                        MusicSelectionId = EmptyToNull(document.Element("musicSelection")?.Value),
+                        ArtworkReference = EmptyToNull(document.Element("artwork")?.Value)
                     };
                     var request = document.Element("request");
                     if (request != null)
@@ -304,6 +317,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
                     if (!Allowed(snapshot, entry))
                         throw new InvalidOperationException("TuneIn item is disabled. Return to the channel root.");
+                    if (entry.ArtworkReference != null) TuneInArtwork.ValidateReference(entry.ArtworkReference);
                     return entry;
                 }
             }
@@ -311,10 +325,31 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private static string EmptyToNull(string value) => string.IsNullOrEmpty(value) ? null : value;
         private static bool Allowed(ConfigurationSnapshot snapshot, NavigationEntry entry) =>
-            snapshot.Enabled(entry.Category) && (entry.SelectionId == null
+            snapshot.Enabled(entry.Category)
+            && (entry.Category != "language" || LanguageContentAllowed(snapshot, entry))
+            && (entry.SelectionId == null
                 || (entry.SelectionId == "coordinates" ? entry.Category == "local" && snapshot.Value.UseCoordinates
                     && ConfigurationSnapshot.TryCoordinates(snapshot.Value.LatLon, out _)
                     : snapshot.Selections(entry.Category).Any(s => s.Id == entry.SelectionId)));
+
+        internal static bool LanguageContentAllowed(ConfigurationSnapshot snapshot, NavigationEntry entry)
+        {
+            if (entry.ContentCategory != null && !new[] { "language", "music", "talk", "sports" }.Contains(entry.ContentCategory))
+                return false;
+            if (entry.ContentCategory != null && entry.ContentCategory != "language" && !snapshot.Enabled(entry.ContentCategory))
+                return false;
+            if (entry.StationId != null && entry.ContentCategory == null) return false;
+            var group = TuneInChannel.LanguageGroup(entry, entry.Request);
+            if (group != "language" && !snapshot.Enabled(group)) return false;
+            if (group != "music") return entry.MusicSelectionId == null;
+            if (entry.MusicSelectionId == null) return TuneInChannel.IsLanguageMusicHub(entry);
+            if (!snapshot.Selections("music").Any(selection => selection.Id == entry.MusicSelectionId)) return false;
+            if (entry.StationId != null) return entry.Request == null;
+            var id = entry.Request?.Parameters.GetValueOrDefault("id");
+            return ConfigurationSnapshot.ValidId(id, "music")
+                && id != "c424724" && id != "c424725" && id != "c424726"
+                && !entry.Request.Parameters.ContainsKey("c");
+        }
         private static string Encode(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         private static byte[] Decode(string value)
         {
@@ -345,12 +380,25 @@ namespace MediaBrowser.Plugins.TuneIn
         public async Task<XDocument> FetchCategoryAsync(ConfigurationSnapshot snapshot, string category,
             DirectoryRequest request, CancellationToken token, bool refresh = false, Action<int> statusReceived = null)
         {
+            var context = refreshContext.Value;
+            try
+            {
+                return await FetchCategoryCoreAsync(snapshot, category, request, token, refresh, statusReceived).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                if (context != null) context.Error = error;
+                throw;
+            }
+        }
+
+        private async Task<XDocument> FetchCategoryCoreAsync(ConfigurationSnapshot snapshot, string category,
+            DirectoryRequest request, CancellationToken token, bool refresh, Action<int> statusReceived)
+        {
             if (!snapshot.Enabled(category)) throw new InvalidOperationException("Radio group is not configured or enabled.");
-            if (cacheOnlyCategory.Value != null && cacheOnlyCategory.Value.Category != category)
+            if (refreshContext.Value != null && refreshContext.Value.Category != category)
                 throw new InvalidOperationException("Emby attempted to refresh a different radio group.");
-            string id;
-            using (var hash = SHA256.Create())
-                id = category + ":" + Convert.ToBase64String(hash.ComputeHash(Encoding.UTF8.GetBytes(snapshot.Key + request.Url)));
+            var id = RequestKey(snapshot, category, request);
             CancellationToken categoryToken;
             lock (gate)
             {
@@ -358,18 +406,25 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (snapshot.Key != key) throw new OperationCanceledException("Configuration changed.");
                 if (!refresh && pages.TryGetValue(id, out var cached) && cached.Expires > DateTime.UtcNow)
                 {
-                    cacheOnlyCategory.Value?.Pages.Add(id);
+                    refreshContext.Value?.Pages.Add(id);
                     return ParseCatalogue(cached.Bytes);
                 }
-                if (cacheOnlyCategory.Value != null)
+                if (refreshContext.Value != null && refreshContext.Value.RequestStarted == null)
                     throw new InvalidOperationException("Emby requested a page outside the bounded group refresh.");
+                if (refreshContext.Value != null)
+                {
+                    if (++refreshContext.Value.RequestCount > 1000)
+                        throw new InvalidOperationException("Group refresh exceeded 1000 catalogue requests.");
+                    refreshContext.Value.RequestStarted(request);
+                    statusReceived = refreshContext.Value.StatusReceived;
+                }
                 if (!categoryChanges.TryGetValue(category, out var cancellation))
                     categoryChanges[category] = cancellation = new CancellationTokenSource();
                 categoryToken = cancellation.Token;
             }
             using (var operation = CancellationTokenSource.CreateLinkedTokenSource(token, categoryToken))
             {
-                var document = await FetchAsync(request, operation.Token, statusReceived).ConfigureAwait(false);
+                var document = await FetchCoreAsync(request, operation.Token, statusReceived, true).ConfigureAwait(false);
                 var bytes = Encoding.UTF8.GetBytes(document.ToString(SaveOptions.DisableFormatting));
                 lock (gate)
                 {
@@ -377,6 +432,12 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (snapshot.Key != key) throw new OperationCanceledException("Configuration changed.");
                     if (pages.TryGetValue(id, out var previous)) cachedBytes -= previous.Bytes.Length;
                     pages.Remove(id);
+                    while (pages.Count > 0 && (cachedBytes + bytes.Length > 8 * 1024 * 1024 || pages.Count >= 128))
+                    {
+                        var oldest = pages.OrderBy(pair => pair.Value.Expires).First();
+                        cachedBytes -= oldest.Value.Bytes.Length;
+                        pages.Remove(oldest.Key);
+                    }
                     // Retain only bounded validated catalogue data, never streams or request URLs.
                     if (bytes.Length <= 2 * 1024 * 1024 && cachedBytes + bytes.Length <= 8 * 1024 * 1024 && pages.Count < 128)
                     {
@@ -386,28 +447,58 @@ namespace MediaBrowser.Plugins.TuneIn
                     else if (refresh)
                         throw new InvalidOperationException("Catalogue cache capacity exceeded; refresh fewer saved selections.");
                 }
+                if (refreshContext.Value != null)
+                {
+                    lock (gate) refreshContext.Value.Pages.Add(RequestKey(snapshot, category, request));
+                    refreshContext.Value.RequestCompleted?.Invoke(document);
+                }
                 return document;
             }
         }
 
-        public async Task SynchronizeCategoryAsync(string category, int expectedPages, Func<Task> synchronize)
+        internal static string RequestKey(ConfigurationSnapshot snapshot, string category, DirectoryRequest request)
         {
-            var previous = cacheOnlyCategory.Value;
-            var context = new RefreshContext { Category = category };
-            cacheOnlyCategory.Value = context;
+            using (var hash = SHA256.Create())
+                return category + ":" + Convert.ToBase64String(hash.ComputeHash(Encoding.UTF8.GetBytes(snapshot.Key + request.Url)));
+        }
+
+        public async Task SynchronizeCategoryAsync(string category, int expectedPages, Func<Task> synchronize,
+            Action<DirectoryRequest> requestStarted = null, Action<int> statusReceived = null,
+            Action<XDocument> requestCompleted = null, IEnumerable<string> requiredPages = null)
+        {
+            var previous = refreshContext.Value;
+            var context = new RefreshContext
+            {
+                Category = category,
+                RequestStarted = requestStarted,
+                StatusReceived = statusReceived,
+                RequestCompleted = requestCompleted
+            };
+            refreshContext.Value = context;
             try
             {
                 await synchronize().ConfigureAwait(false);
-                if (context.Pages.Count != expectedPages)
+                if (context.Error is OperationCanceledException cancellation) throw cancellation;
+                if (context.Error != null) throw new InvalidOperationException("Emby encountered a failed scoped catalogue request.", context.Error);
+                if (context.Pages.Count < expectedPages || (requiredPages != null && requiredPages.Any(id => !context.Pages.Contains(id))))
                     throw new InvalidOperationException("Emby did not enumerate all saved starting pages.");
             }
-            finally { cacheOnlyCategory.Value = previous; }
+            finally { refreshContext.Value = previous; }
         }
 
         public void AssertCategoryRefresh(string category)
         {
-            if (cacheOnlyCategory.Value != null && cacheOnlyCategory.Value.Category != category)
-                throw new InvalidOperationException("Emby attempted to refresh a different radio group.");
+            if (refreshContext.Value != null && refreshContext.Value.Category != category)
+            {
+                var error = new InvalidOperationException("Emby attempted to refresh a different radio group.");
+                RecordRefreshFailure(error);
+                throw error;
+            }
+        }
+
+        public void RecordRefreshFailure(Exception error)
+        {
+            if (refreshContext.Value != null) refreshContext.Value.Error = error;
         }
 
         private sealed class CachedPage
@@ -421,11 +512,19 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             public string Category { get; set; }
             public HashSet<string> Pages { get; } = new HashSet<string>();
+            public int RequestCount { get; set; }
+            public Exception Error { get; set; }
+            public Action<DirectoryRequest> RequestStarted { get; set; }
+            public Action<int> StatusReceived { get; set; }
+            public Action<XDocument> RequestCompleted { get; set; }
         }
 
-        public async Task<XDocument> FetchAsync(DirectoryRequest request, CancellationToken token, Action<int> statusReceived = null)
+        public Task<XDocument> FetchAsync(DirectoryRequest request, CancellationToken token, Action<int> statusReceived = null) =>
+            FetchCoreAsync(request, token, statusReceived, false);
+
+        private async Task<XDocument> FetchCoreAsync(DirectoryRequest request, CancellationToken token, Action<int> statusReceived, bool categoryRequest)
         {
-            if (cacheOnlyCategory.Value != null)
+            if (refreshContext.Value != null && !categoryRequest)
                 throw new InvalidOperationException("Emby requested uncached metadata outside the bounded group refresh.");
             if (fetch != null) return await fetch(request, token).ConfigureAwait(false);
             using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
@@ -658,6 +757,9 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
             }
         }
+
+        public Task<ArtworkResult> OpenArtworkAsync(NavigationEntry entry, CancellationToken token) =>
+            TuneInArtwork.OpenAsync(entry, transport, token);
 
         internal static IEnumerable<string> PlaylistUrls(string text)
         {

@@ -2,6 +2,8 @@ using MediaBrowser.Controller;
 using MediaBrowser.Controller.Channels;
 using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Providers;
+using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Channels;
 using MediaBrowser.Model.Drawing;
 using MediaBrowser.Model.Dto;
@@ -18,22 +20,26 @@ using System.Xml.Linq;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
-    public class TuneInChannel : IChannel, IRequiresMediaInfoCallback, IHasChangeEvent, IHasChannelFeatures, ISupportsMediaProbe
+    public class TuneInChannel : IChannel, IRequiresMediaInfoCallback, IHasChannelFeatures, ISupportsMediaProbe
     {
         private readonly IServerApplicationHost host;
         private readonly ILogger logger;
         private readonly TuneInDirectory directory;
+        private readonly ILibraryManager library;
+        private const string ArtworkVersion = "3";
+        private const string ArtworkVersionKey = "TuneInForkArtwork";
 
-        public TuneInChannel(IServerApplicationHost host, ILogManager logManager)
-            : this(host, logManager.GetLogger(typeof(TuneInChannel).Name), TuneInDirectory.Instance)
+        public TuneInChannel(IServerApplicationHost host, ILogManager logManager, ILibraryManager libraryManager)
+            : this(host, logManager.GetLogger(typeof(TuneInChannel).Name), TuneInDirectory.Instance, libraryManager)
         {
         }
 
-        internal TuneInChannel(IServerApplicationHost host, ILogger logger, TuneInDirectory directory)
+        internal TuneInChannel(IServerApplicationHost host, ILogger logger, TuneInDirectory directory, ILibraryManager library = null)
         {
             this.host = host;
             this.logger = logger;
             this.directory = directory;
+            this.library = library;
         }
 
         public string Name => "TuneIn (fork)";
@@ -41,14 +47,15 @@ namespace MediaBrowser.Plugins.TuneIn
         public string HomePageUrl => "https://tunein.com/";
         public ChannelParentalRating ParentalRating => ChannelParentalRating.GeneralAudience;
         public bool IsEnabledFor(string userId) => true;
-        public event EventHandler ContentChanged
-        {
-            add { directory.Changed += value; }
-            remove { directory.Changed -= value; }
-        }
         public ChannelFeatures Features => new ChannelFeatures { ShowRootFoldersAtTopLevel = false };
 
         public async Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken token)
+        {
+            try { return await GetChannelItemsCore(query, token).ConfigureAwait(false); }
+            catch (Exception error) { directory.RecordRefreshFailure(error); throw; }
+        }
+
+        private async Task<ChannelItemResult> GetChannelItemsCore(InternalChannelItemQuery query, CancellationToken token)
         {
             var snapshot = directory.Snapshot();
             var items = new List<ChannelItemInfo>();
@@ -88,15 +95,37 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
-        private ChannelItemInfo Folder(ConfigurationSnapshot snapshot, NavigationEntry entry) => new ChannelItemInfo
+        private ChannelItemInfo Folder(ConfigurationSnapshot snapshot, NavigationEntry entry)
         {
-            Id = directory.Register(snapshot, entry),
-            Name = entry.Name,
-            Type = ChannelItemType.Folder
-        };
+            var id = directory.Register(snapshot, entry);
+            return new ChannelItemInfo
+            {
+                Id = id,
+                Name = entry.Name,
+                Type = ChannelItemType.Folder,
+                ImageUrl = ArtworkUrl(id) + "?v=" + ArtworkVersion
+            };
+        }
 
         private async Task<List<ChannelItemInfo>> BrowseAsync(ConfigurationSnapshot snapshot, NavigationEntry entry, CancellationToken token)
         {
+            if (IsLanguageMusicHub(entry))
+            {
+                return snapshot.Selections("music").Select(selection =>
+                {
+                    var selected = new DirectoryRequest();
+                    selected.Parameters["id"] = selection.Id;
+                    return Folder(snapshot, new NavigationEntry
+                    {
+                        Category = "language",
+                        SelectionId = entry.SelectionId,
+                        ContentCategory = "music",
+                        MusicSelectionId = selection.Id,
+                        Request = selected,
+                        Name = selection.Name ?? selection.Id
+                    });
+                }).ToList();
+            }
             if (entry.Category == "language")
             {
                 var languages = await directory.SelectAsync("language", null, null, false, token).ConfigureAwait(false);
@@ -120,13 +149,18 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
                     if (!ValidStation(station))
                         throw new InvalidDataException("Invalid TuneIn station identifier.");
-                    var id = directory.Register(snapshot, new NavigationEntry
+                    var stationEntry = new NavigationEntry
                     {
                         Category = entry.Category,
                         SelectionId = entry.SelectionId,
+                        ContentCategory = entry.Category == "language" ? LanguageGroup(entry, entry.Request) : null,
+                        MusicSelectionId = entry.MusicSelectionId,
                         StationId = station,
                         Name = name
-                    });
+                    };
+                    var id = directory.Register(snapshot, stationEntry);
+                    stationEntry.ArtworkReference = ArtworkReference(row);
+                    var imageId = stationEntry.ArtworkReference == null ? id : directory.Register(snapshot, stationEntry);
                     items.Add(new ChannelItemInfo
                     {
                         Id = id,
@@ -134,7 +168,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         Type = ChannelItemType.Media,
                         ContentType = station[0] == 's' ? ChannelMediaContentType.Song : ChannelMediaContentType.Podcast,
                         MediaType = ChannelMediaType.Audio,
-                        IsLiveStream = station[0] == 's'
+                        IsLiveStream = station[0] == 's',
+                        ImageUrl = ArtworkUrl(imageId) + (stationEntry.ArtworkReference == null ? "?v=" + ArtworkVersion : "")
                     });
                 }
                 else if (type == "link")
@@ -142,6 +177,12 @@ namespace MediaBrowser.Plugins.TuneIn
                     var link = DirectoryRequest.ParseLink(TuneInDirectory.Attribute(row, "URL"));
                     if (link.Method != "Browse.ashx") continue;
                     var next = ScopedRequest(snapshot, entry, link);
+                    var contentCategory = entry.Category == "language" ? LanguageGroup(entry, next) : null;
+                    if (contentCategory != null && contentCategory != "language" && !snapshot.Enabled(contentCategory))
+                        continue;
+                    if (entry.ContentCategory != null && entry.ContentCategory != "language"
+                        && contentCategory != entry.ContentCategory) continue;
+                    if (entry.MusicSelectionId != null && next.Parameters.ContainsKey("c")) continue;
                     var classifier = next.Parameters.GetValueOrDefault("c");
                     if (classifier != null && classifier != entry.Category
                         && !(entry.Category == "language" && new[] { "lang", "music", "talk", "sports" }.Contains(classifier))
@@ -151,6 +192,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         && next.Parameters.GetValueOrDefault("id") != request.Parameters.GetValueOrDefault("id"))
                         throw new InvalidDataException("TuneIn pagination escaped its selected node.");
                     var id = next.Parameters.GetValueOrDefault("id");
+                    if (id == null && classifier != null && (entry.Category == "music" || entry.Category == "location"
+                        || entry.Category == "local" && entry.SelectionId != "coordinates")) continue;
                     if ((entry.Category == "location" || entry.Category == "local") && id != null
                         && !ConfigurationSnapshot.ValidId(id, "location")) continue;
                     if (entry.Category == "music" && id != null && !ConfigurationSnapshot.ValidId(id, "music")) continue;
@@ -159,6 +202,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     {
                         Category = entry.Category,
                         SelectionId = entry.SelectionId,
+                        ContentCategory = contentCategory,
+                        MusicSelectionId = entry.MusicSelectionId,
                         Request = next,
                         Name = name
                     }));
@@ -199,11 +244,30 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal static DirectoryRequest CatalogueRequest(ConfigurationSnapshot snapshot, NavigationEntry entry)
         {
+            if (entry.Category == "language" && !TuneInDirectory.LanguageContentAllowed(snapshot, entry))
+                throw new InvalidOperationException("TuneIn language sub-group is disabled. Refresh the language group.");
             var request = ScopedRequest(snapshot, entry, entry.Request);
             request.Parameters["formats"] = "mp3,aac";
             request.Parameters["partnerid"] = "uD1X52pA";
             return request;
         }
+
+        internal static string LanguageGroup(NavigationEntry entry, DirectoryRequest request)
+        {
+            var id = request?.Parameters.GetValueOrDefault("id");
+            if (id == "c424724") return "music";
+            if (id == "c424725") return "talk";
+            if (id == "c424726") return "sports";
+            var classifier = request?.Parameters.GetValueOrDefault("c");
+            if (classifier == "music" || classifier == "talk" || classifier == "sports") return classifier;
+            if (classifier == "lang") return entry.ContentCategory ?? "language";
+            return entry.ContentCategory ?? (id == null ? "language" : "");
+        }
+
+        internal static bool IsLanguageMusicHub(NavigationEntry entry) =>
+            entry.Category == "language" && entry.MusicSelectionId == null && entry.StationId == null
+            && entry.Request != null && (entry.Request.Parameters.GetValueOrDefault("id") == "c424724"
+                || !entry.Request.Parameters.ContainsKey("id") && entry.Request.Parameters.GetValueOrDefault("c") == "music");
 
         internal static NavigationEntry CategoryEntry(string category) =>
             new NavigationEntry { Category = category, Name = CategoryName(category) };
@@ -263,6 +327,84 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private static bool ValidStation(string value) => value != null && Regex.IsMatch(value, @"^[spt][1-9][0-9]{0,9}$");
 
+        private string ArtworkUrl(string id) =>
+            host.GetLocalApiUrl(System.Net.IPAddress.Loopback).TrimEnd('/') + "/TuneInFork/Artwork/" + id;
+
+        internal void ReplaceFolderArtwork(string folderId, CancellationToken token)
+        {
+            if (library == null) throw new InvalidOperationException("The TuneIn library manager is unavailable.");
+            token.ThrowIfCancellationRequested();
+            var snapshot = directory.Snapshot();
+            var category = directory.Resolve(snapshot, folderId).Category;
+            var roots = library.GetItemList(new InternalItemsQuery { ExternalId = folderId, IsFolder = true }, token);
+            if (roots.Length != 1) throw new InvalidOperationException("The refreshed TuneIn section folder is missing or ambiguous.");
+            ReplaceChannelArtwork(library.GetItemById(roots[0].ParentId));
+            Replace(roots[0]);
+            for (var offset = 0; ; offset += 100)
+            {
+                token.ThrowIfCancellationRequested();
+                var folders = library.GetItemList(new InternalItemsQuery
+                {
+                    ParentIds = new[] { roots[0].InternalId },
+                    Recursive = true,
+                    IsFolder = true,
+                    StartIndex = offset,
+                    Limit = 100
+                }, token);
+                foreach (var folder in folders) Replace(folder);
+                if (folders.Length < 100) break;
+            }
+
+            void Replace(BaseItem folder)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!(folder is MediaBrowser.Controller.Entities.Folder)) return;
+                NavigationEntry entry;
+                try { entry = directory.Resolve(snapshot, folder.ExternalId); }
+                catch (Exception error) when (error is ArgumentException || error is InvalidOperationException || error is InvalidDataException)
+                {
+                    logger?.Warn("Skipped stale or invalid TuneIn folder artwork ({0}).", error.GetType().Name);
+                    return;
+                }
+                if (entry.Category != category || entry.StationId != null) return;
+                var version = ArtworkVersion + ":" + TuneInArtwork.Category(entry);
+                if (folder.GetProviderId(ArtworkVersionKey) == version && folder.HasImage(ImageType.Primary, 0)) return;
+                // Native channel import ignores ImageUrl once an item already has a primary image.
+                folder.SetImage(new ItemImageInfo
+                {
+                    Path = ArtworkUrl(folder.ExternalId) + "?v=" + ArtworkVersion,
+                    Type = ImageType.Primary,
+                    DateModified = DateTimeOffset.UtcNow
+                }, 0);
+                folder.SetProviderId(ArtworkVersionKey, version);
+                library.UpdateItem(folder, library.GetItemById(folder.ParentId), ItemUpdateType.ImageUpdate | ItemUpdateType.MetadataImport);
+            }
+        }
+
+        private void ReplaceChannelArtwork(BaseItem parent)
+        {
+            if (!(parent is Channel) || parent.GetProviderId("TuneInForkBranding") == "1"
+                && GetSupportedChannelImages().All(type => parent.HasImage(type, 0))) return;
+            foreach (var type in GetSupportedChannelImages())
+                parent.SetImage(new ItemImageInfo
+                {
+                    Path = host.GetLocalApiUrl(System.Net.IPAddress.Loopback).TrimEnd('/') + "/TuneInFork/Branding?v=1",
+                    Type = type,
+                    DateModified = DateTimeOffset.UtcNow
+                }, 0);
+            parent.SetProviderId("TuneInForkBranding", "1");
+            library.UpdateItem(parent, library.GetItemById(parent.ParentId), ItemUpdateType.ImageUpdate | ItemUpdateType.MetadataImport);
+        }
+
+        private string ArtworkReference(XElement row)
+        {
+            var value = TuneInDirectory.Attribute(row, "image");
+            if (string.IsNullOrEmpty(value)) return null;
+            if (TuneInArtwork.TryReference(value, out var reference)) return reference;
+            logger?.Warn("TuneIn station artwork destination rejected; using bundled group artwork.");
+            return null;
+        }
+
         public Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id, CancellationToken token)
         {
             var snapshot = directory.Snapshot();
@@ -290,7 +432,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public IEnumerable<ImageType> GetSupportedChannelImages() => new[] { ImageType.Primary, ImageType.Thumb, ImageType.Backdrop };
 
-        private static string CategoryName(string category)
+        internal static string CategoryName(string category)
         {
             switch (category)
             {

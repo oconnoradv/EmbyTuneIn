@@ -15,12 +15,33 @@ category and an opaque current job ID, and never accept URLs, coordinates or cus
 request parameters. Verify real-host non-admin/anonymous and cross-origin behavior
 in manual tests; SDK attributes alone are not proof of browser CSRF enforcement.
 Status polling performs no provider requests. Jobs are bounded to eight category
-slots, one active job/category, enabled saved starting pages and a 20-minute limit;
+slots, one active job/category, enabled saved scopes, 1000 catalogue requests and a 20-minute limit;
 configuration/category invalidation cancels applicable requests. The response cache
 is capped at 128 pages/8 MiB serialized XML and remains protected by the same schema.
-Native scoped Emby synchronization is cache-only: requests outside that group's
-refreshed first pages are rejected, and missing enumeration is not counted as success.
+Native scoped Emby synchronization fetches selected descendants on demand to the
+same eight-level limit as the host scheduled refresh. Cross-group or unfiltered
+selection-hub escapes are rejected; failures swallowed by the host are remembered
+and rethrown at the job boundary. Missing saved-node enumeration is not success.
+The eight dedicated native tasks have no default triggers and reuse the same gates,
+scope, cancellation, limits and failure reporting; a disabled group never queries.
+Compatibility refresh APIs execute those same native workers so host task history
+is genuine. The settings page has no refresh/interval controls or status polling.
+A pending launch cannot contact TuneIn before native execution starts;
+launch failures/no-ops and pre-start cancellation cannot claim a populated section.
 Status exposes response codes/counts/states, not request URLs or configuration secrets.
+
+Schedule GET/POST endpoints also require an authenticated administrator. Applying
+shared/per-group intervals or disabling Emby's all-provider refresh triggers is
+explicit opt-in; startup and ordinary configuration Save never change triggers.
+Only fixed task keys are managed. Integer intervals and unique category overrides
+are validated before mutation; original triggers are persisted first and restored
+when management is released. Trigger-write errors attempt rollback and remain
+visible failures. Verify actual host authorization/CSRF and trigger persistence
+manually, especially because the built-in task affects every channel provider.
+Refresh history and schedule/trigger backups use a separate private data file;
+bounded XML loading prohibits DTD/entities. They do not change signed station
+configuration or expose account/coordinate values. Protect and back up the state
+file until managed triggers have been restored; active counters remain in memory.
 
 Navigation identifiers are bounded, signed payloads: HMAC-SHA256 binds category,
 selection ancestry/navigation parameters and the entire configuration fingerprint.
@@ -28,8 +49,10 @@ The key is generated at runtime and persisted in administrator-only plugin
 configuration. Signature checks precede parsing; XML DTD/entities are prohibited.
 Identifiers survive unchanged-config restarts but are rejected after settings,
 selection or category changes. Coordinates/account are derived from current
-configuration, not embedded in navigation IDs. Emby's current `IHasChangeEvent`
-notifies cache consumers; deprecated `IHasCacheKey` is not relied on.
+configuration, not embedded in navigation IDs. Cache invalidation stays inside the
+plugin: `IHasChangeEvent` and deprecated `IHasCacheKey` are not implemented.
+Install/update/Save do not request the global task; this does not disable existing
+host/administrator task triggers.
 
 Catalogue requests are rebuilt as escaped HTTPS queries to the exact
 `opml.radiotime.com` host and approved Browse/Describe/Tune paths. Legacy HTTP links
@@ -37,7 +60,29 @@ are treated only as data from that trusted HTTPS response and rebuilt as HTTPS;
 HTTP catalogue requests and arbitrary client/persisted URLs are never accepted.
 Related paths are dropped, language scopes are reapplied and cross-node pagination
 is rejected. Remote titles use text DOM rendering, not XPath or HTML interpolation.
-Untrusted remote image URLs are not emitted to Emby.
+Untrusted remote image URLs are not emitted to Emby. Item image URLs target a
+loopback-only endpoint with the same signed/configuration-gated authorization as
+playback. Group PNGs are embedded resources. Station logos retain only a signed
+CDN index/relative path (separate from stable playback IDs), never an arbitrary host.
+Only the API-advertised `cdn-profiles.tunein.com` and
+`cdn-radiotime-logos.tunein.com` destinations are allowed, upgraded to HTTPS;
+every redirect remains on those hosts and every DNS answer is public/pinned.
+Downloads have a 30-second/2 MiB budget and PNG/JPEG signature/dimension limits
+(4096 per side, 16 Mi pixels). SVG/active content and other formats are rejected.
+Missing/rejected logo metadata uses bundled group artwork, with rejected
+destinations logged without URLs. Image retrieval is lazy and does not query the
+station catalogue or resolve/play a stream; explicit refresh populates image URLs
+for existing items. Emby's image cache/rendering still needs real-server verification.
+Group refresh also migrates obsolete stored primary image references on the chosen
+section's folders. Every folder must resolve through current signed navigation and
+belong to that group; stations and other groups are not modified. Only the same
+loopback artwork URLs are written. No provider URLs are downloaded by this
+migration, no arbitrary image files are deleted, and the per-folder revision marker
+avoids overwriting subsequent custom images on every refresh.
+
+The relay's HTTP result factory is constructor-injected, not assumed to be populated
+through a service property. A response-construction failure releases the opened
+radio connection and its operation rather than leaking the stream.
 
 The server-local relay performs radio and playlist I/O itself. Every target and
 redirect is URI-validated and DNS-checked; a single non-public answer rejects the

@@ -25,11 +25,13 @@ namespace MediaBrowser.Plugins.TuneIn.Security
             this.connect = connect;
         }
 
-        public async Task<SafeResponse> OpenAsync(string value, bool catalogue, CancellationToken token, Action<int> statusReceived = null)
+        public async Task<SafeResponse> OpenAsync(string value, bool catalogue, CancellationToken token, Action<int> statusReceived = null,
+            Action<Uri> validateDestination = null)
         {
             var uri = PublicAddressPolicy.ValidateUri(value, catalogue);
             for (var redirects = 0; redirects <= 5; redirects++)
             {
+                validateDestination?.Invoke(uri);
                 var lookup = resolve(uri.DnsSafeHost);
                 if (await Task.WhenAny(lookup, Task.Delay(TimeSpan.FromSeconds(20), token)).ConfigureAwait(false) != lookup)
                 {

@@ -7,7 +7,7 @@ No upstream pull request or merge is created by building or publishing this fork
 ## Versioning and independent identity
 
 Upstream currently declares assembly/file version `1.2.8.0`. The fork's new
-configuration/refresh functionality uses SemVer `1.3.0-fork.1`: the prerelease
+configuration/refresh functionality uses SemVer `1.3.0-fork.9`: the prerelease
 suffix identifies a fork test candidate, not an official upstream release.
 The `.csproj` `<Version>` is the source of truth. The SDK derives assembly/file
 version `1.3.0.0`; informational version includes the exact source commit.
@@ -18,8 +18,14 @@ Upstream maintainers decide their own final release number and compatibility pol
 The HTTP user agent, configuration-controller name and release verifier derive the
 version rather than maintaining independent constants. When changing `<Version>`,
 update the HTML heading/controller reference and README release references.
+Both main-page and controller names are derived from that version to avoid
+restoring stale dashboard markup. Use plugin `viewshow`/`viewbeforehide` events;
+let Emby's plugin adapter provide BaseView and native transition handling rather
+than depending on a legacy `baseView` AMD alias.
 Verification rejects inconsistent page/documentation versions. Never replace
-published tags/assets or relabel v0.0.1-v0.0.3; they remain historical releases.
+published tags/assets. Superseded prerelease records/assets may be retired only
+on the repository owner's explicit request, after replacement artifacts and
+consolidated documentation are verified; preserve original source tags.
 
 Keep the independent plugin GUID, `MediaBrowser.Plugins.TuneIn.Fork.dll` and XML
 filename, and `TuneInFork` routes while manually testing this fork. Otherwise Emby
@@ -48,10 +54,41 @@ release evidence belong in the source commit. The removed HtmlAgilityPack/IniPar
 sources are unused and replaced by bounded platform parsing; do not reintroduce them.
 Retain the upstream license and editable/static assets that remain applicable.
 
+Inject service dependencies, including `IHttpResultFactory`, through constructors.
+Do not depend on `IHasResultFactory` property population: an unset factory caused
+relay HTTP 500 responses. Transfer audio-stream ownership to the host response
+only on success; release it if response construction fails.
+
+Item artwork URLs must stay on the server's loopback endpoint. Keep station logo
+references separately signed so artwork updates cannot change playback/item IDs.
+Never hand raw provider image URLs to Emby's downloader or the client.
+
+Category PNGs are checked-in source assets. Regenerate the eight original icon
+cards on Windows with `powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\New-CategoryArtwork.ps1`
+(process-scoped policy only; System.Drawing and Segoe UI required). Inspect the
+results before committing. The root library assets are an original futuristic
+544x306 landscape design without a FORK subtitle; preserve that exact size.
+Do not alter station logos when migrating bundled root/group artwork.
+
+Keep refresh history and schedule/trigger backups in the independent state file,
+not the signed station configuration. Schedule changes must be administrator-only,
+explicitly applied and reversible; never change the built-in all-provider task's
+triggers on startup or ordinary configuration Save. Its read-only description and
+native execution result must not be modified through reflection or fabricated.
+The settings page has no refresh/interval sections or polling. Native group tasks
+remain the primary interface; compatibility refresh APIs must execute the real
+native task via `ITaskManager`, so native Last ran remains genuine.
+Do not implement `IHasChangeEvent` or queue the global task on install/update/Save:
+configuration invalidation must stay local. Existing host triggers are independent.
+Native channel import preserves existing primary images. Folder artwork upgrades
+must update/persist the scoped library items' primary image references, retain
+stable playback IDs, and use an artwork revision marker to avoid repeated resets.
+
 ## Upstream review checklist
 
 Prepare the PR from the tested feature branch in `oconnoradv/EmbyTuneIn` to
-`MediaBrowser/TuneIn:master`, not from this fork's unchanged baseline `master`.
+`MediaBrowser/TuneIn:master`. The fork's `master` contains the consolidated
+squash-merged implementation.
 Fetch the latest upstream `master` and inspect the comparison before submission;
 do not force-push, discard work or merge upstream changes without reviewing them.
 
@@ -72,8 +109,10 @@ as an official upstream replacement:
   during discovery; no automatic catalogue crawl or setup playback.
 - Protected local relay and transcoding instead of handing untrusted stream URLs
   directly to Emby; supported/unsupported formats and network policies are documented.
-- Per-group refresh covers saved first pages only. Native host synchronization is
-  bounded/cache-only and must be exercised on the real server before acceptance.
+- Eight Internet Channels tasks and compatible administrator APIs populate configured sections
+  via the host's eight-level traversal, with on-demand scoped requests and explicit
+  request/time limits. Native registration, cancellation and actual station import
+  must be exercised on the real server before acceptance.
 
 Do not submit or advertise the PR as runtime-verified until the administrator has
 completed the relevant Emby manual tests. See README.md and SECURITY.md.

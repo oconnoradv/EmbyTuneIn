@@ -73,6 +73,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         {
             var service = new TuneInService { Request = DispatchProxy.Create<IRequest, RemoteRequestProxy>() };
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.Get(new GetTuneInRelay { Id = "arbitrary" }));
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.Get(new GetTuneInArtwork { Id = "arbitrary" }));
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.Get(new GetTuneInBranding()));
         }
 
         public class RemoteRequestProxy : DispatchProxy
@@ -92,7 +94,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var requests = 0;
             var directory = new TuneInDirectory(() => config, (request, token) =>
             { requests++; return Task.FromResult(Opml("")); });
-            var channel = new TuneInChannel(null, null, directory);
+            var channel = new TuneInChannel(ArtworkHost(), null, directory);
             Assert.Empty((await channel.GetChannelItems(new InternalChannelItemQuery(), CancellationToken.None)).Items);
             Assert.Empty((await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = "subcat_http://127.0.0.1" }, CancellationToken.None)).Items);
             Assert.Equal(0, requests);
@@ -108,7 +110,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             config.EnableFavorites = true;
             config.EnableMusic = true;
             var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("Unexpected API request"));
-            var channel = new TuneInChannel(null, null, directory);
+            var channel = new TuneInChannel(ArtworkHost(), null, directory);
             var root = await channel.GetChannelItems(new InternalChannelItemQuery(), CancellationToken.None);
             Assert.Equal("Talk", Assert.Single(root.Items).Name);
             Assert.Throws<InvalidOperationException>(() => directory.Resolve(directory.Snapshot(), "stream_http://127.0.0.1"));
@@ -141,7 +143,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 return Task.FromResult(Opml("<outline type='link' text='Local branch' URL='http://opml.radiotime.com/Browse.ashx?id=r123'/>"
                     + "<outline key='related'><outline type='link' text='World' URL='http://opml.radiotime.com/Browse.ashx?id=r0'/></outline>"));
             });
-            var channel = new TuneInChannel(null, null, directory);
+            var channel = new TuneInChannel(ArtworkHost(), null, directory);
             var root = await channel.GetChannelItems(new InternalChannelItemQuery(), CancellationToken.None);
             var first = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = root.Items[0].Id }, CancellationToken.None);
             await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = Assert.Single(first.Items).Id }, CancellationToken.None);
@@ -165,7 +167,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.False(request.Parameters.ContainsKey("latlon"));
                 return Task.FromResult(Opml("<outline type='audio' text='Station' guide_id='s1'/>"));
             });
-            var channel = new TuneInChannel(null, null, directory);
+            var channel = new TuneInChannel(ArtworkHost(), null, directory);
             var root = await channel.GetChannelItems(new InternalChannelItemQuery(), CancellationToken.None);
             var stations = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = root.Items[0].Id }, CancellationToken.None);
             Assert.Single(stations.Items);
@@ -190,6 +192,191 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 DirectoryRequest.ParseLink("http://opml.radiotime.com/Browse.ashx?id=g22&filter=l122,l999")));
         }
 
+        [Theory]
+        [InlineData("music", "c424724")]
+        [InlineData("talk", "c424725")]
+        [InlineData("sports", "c424726")]
+        public async Task LanguageHubsRespectGroupSwitchesAndDescendantsKeepTheirScope(string group, string hub)
+        {
+            var config = Ready();
+            config.EnableLanguage = true;
+            config.Languages.Add(Selection("l122"));
+            config.EnableMusic = true;
+            config.Music.Add(Selection("g19"));
+            config.EnableTalk = true;
+            config.EnableSports = true;
+            var requests = 0;
+            var directory = new TuneInDirectory(() => config, (request, token) =>
+            {
+                requests++;
+                if (!request.Parameters.ContainsKey("filter"))
+                    return Task.FromResult(Opml("<outline type='link' text='Language' URL='https://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=l122'/>"));
+                Assert.EndsWith("l122", request.Parameters["filter"]);
+                if (request.Parameters.GetValueOrDefault("c") == "lang")
+                    return Task.FromResult(Opml("<outline type='link' text='Hub' URL='https://opml.radiotime.com/Browse.ashx?id=" + hub + "'/>"
+                        + "<outline type='link' text='Classifier' URL='https://opml.radiotime.com/Browse.ashx?c=" + group + "'/>"
+                        + "<outline type='link' text='Other enabled group' URL='https://opml.radiotime.com/Browse.ashx?c="
+                        + (group == "sports" ? "talk" : "sports") + "'/>"));
+                return Task.FromResult(Opml("<outline type='link' text='Descendant' URL='https://opml.radiotime.com/Browse.ashx?id=g22'/>"
+                    + "<outline type='audio' text='Station' guide_id='s1'/>"));
+            });
+            var channel = new TuneInChannel(ArtworkHost(), null, directory);
+            var snapshot = directory.Snapshot();
+            var selected = directory.Register(snapshot, TuneInChannel.StartingEntries(snapshot, "language").Single());
+            var hubs = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = selected }, CancellationToken.None);
+            Assert.Equal(3, hubs.Items.Count);
+            var children = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = hubs.Items[0].Id }, CancellationToken.None);
+            if (group == "music")
+            {
+                var genre = Assert.Single(children.Items);
+                Assert.Equal("g19", directory.Resolve(directory.Snapshot(), genre.Id).MusicSelectionId);
+                children = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = genre.Id }, CancellationToken.None);
+            }
+            Assert.Equal(2, children.Items.Count);
+            var restarted = new TuneInDirectory(() => config, (_, __) => throw new Exception("Unexpected request"));
+            Assert.All(children.Items, item => Assert.Equal(group, restarted.Resolve(restarted.Snapshot(), item.Id).ContentCategory));
+            var descendants = children.Items.Select(item => restarted.Resolve(restarted.Snapshot(), item.Id)).ToList();
+
+            if (group == "music") config.EnableMusic = false;
+            if (group == "talk") config.EnableTalk = false;
+            if (group == "sports") config.EnableSports = false;
+            snapshot = directory.Snapshot();
+            selected = directory.Register(snapshot, TuneInChannel.StartingEntries(snapshot, "language").Single());
+            Assert.Equal("Other enabled group", Assert.Single((await channel.GetChannelItems(
+                new InternalChannelItemQuery { FolderId = selected }, CancellationToken.None)).Items).Name);
+            var before = requests;
+            foreach (var stale in descendants)
+            {
+                var currentId = directory.Register(snapshot, stale);
+                await Assert.ThrowsAsync<InvalidOperationException>(() => channel.GetChannelItems(
+                    new InternalChannelItemQuery { FolderId = currentId }, CancellationToken.None));
+                Assert.Throws<InvalidOperationException>(() => directory.Resolve(snapshot, currentId));
+            }
+            Assert.Equal(before, requests);
+        }
+
+        [Theory]
+        [InlineData("l122")]
+        [InlineData("l99")]
+        public async Task LanguageMusicUsesOnlySavedSelectionsAndPreservesBothScopesAtEveryDepth(string language)
+        {
+            var config = Ready();
+            config.EnableLanguage = true;
+            config.Languages.AddRange(new[] { Selection("l122"), Selection("l99") });
+            config.EnableMusic = true;
+            config.EnableTalk = true;
+            config.Music.AddRange(new[] { Selection("g19"), Selection("c57944"),
+                new CatalogSelection { Id = "g54", Enabled = false } });
+            var requests = new List<DirectoryRequest>();
+            var directory = new TuneInDirectory(() => config, (request, token) =>
+            {
+                requests.Add(request.Copy());
+                if (!request.Parameters.ContainsKey("filter"))
+                    return Task.FromResult(Opml("<outline type='link' text='English' URL='https://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=l122'/>"
+                        + "<outline type='link' text='Other language' URL='https://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=l99'/>"));
+                Assert.EndsWith(language, request.Parameters["filter"]);
+                Assert.False(request.Parameters.ContainsKey("c"));
+                Assert.Contains(request.Parameters["id"], new[] { "g19", "g115", "c57944" });
+                return Task.FromResult(Opml("<outline type='audio' text='Station' guide_id='s1' image='https://cdn-profiles.tunein.com/logo.png'/>"
+                    + "<outline type='link' text='Subgenre' URL='https://opml.radiotime.com/Browse.ashx?id=g115&amp;filter=s:l999'/>"
+                    + "<outline type='link' text='More' key='nextStations' URL='https://opml.radiotime.com/Browse.ashx?id="
+                    + request.Parameters["id"] + "&amp;offset=50&amp;filter=s:l999'/>"
+                    + "<outline type='link' text='Global music' URL='https://opml.radiotime.com/Browse.ashx?c=music'/>"
+                    + "<outline type='link' text='Talk escape' URL='https://opml.radiotime.com/Browse.ashx?id=c424725'/>"
+                    + "<outline key='related'><outline type='link' text='Other genre' URL='https://opml.radiotime.com/Browse.ashx?id=g54'/></outline>"));
+            });
+            var channel = new TuneInChannel(ArtworkHost(), null, directory);
+            var snapshot = directory.Snapshot();
+            var hub = directory.Register(snapshot, new NavigationEntry
+            {
+                Category = "language",
+                SelectionId = language,
+                ContentCategory = "music",
+                Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?c=music&filter=" + language)
+            });
+            var genres = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = hub }, CancellationToken.None);
+            Assert.Equal(new[] { "g19", "c57944" }, genres.Items.Select(item => item.Name));
+            Assert.Empty(requests);
+            var page = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = genres.Items[0].Id }, CancellationToken.None);
+            Assert.Equal(new[] { "Station", "Subgenre", "More" }, page.Items.Select(item => item.Name));
+            var child = await channel.GetChannelItems(new InternalChannelItemQuery
+            { FolderId = page.Items.Single(item => item.Name == "Subgenre").Id }, CancellationToken.None);
+            await channel.GetChannelItems(new InternalChannelItemQuery
+            { FolderId = page.Items.Single(item => item.Name == "More").Id }, CancellationToken.None);
+            await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = genres.Items[1].Id }, CancellationToken.None);
+            Assert.Equal(5, requests.Count);
+            Assert.Contains(requests, request => request.Parameters.GetValueOrDefault("offset") == "50"
+                && request.Parameters["filter"] == "s:" + language);
+            var restarted = new TuneInDirectory(() => config, (_, __) => throw new Exception("Unexpected API request"));
+            var descendants = page.Items.Concat(child.Items).Select(item => restarted.Resolve(restarted.Snapshot(), item.Id)).ToList();
+            foreach (var descendant in descendants)
+            {
+                Assert.Equal(language, descendant.SelectionId);
+                Assert.Equal("g19", descendant.MusicSelectionId);
+                Assert.Equal("music", descendant.ContentCategory);
+            }
+            var artworkId = page.Items[0].ImageUrl.Split('/').Last();
+            Assert.Equal("g19", restarted.Resolve(restarted.Snapshot(), artworkId).MusicSelectionId);
+            config.Music[0].Enabled = false;
+            snapshot = directory.Snapshot();
+            foreach (var descendant in descendants)
+            {
+                Assert.Throws<InvalidOperationException>(() => directory.Resolve(snapshot, directory.Register(snapshot, descendant)));
+                if (descendant.Request != null)
+                    Assert.Throws<InvalidOperationException>(() => TuneInChannel.CatalogueRequest(snapshot, descendant));
+            }
+            var currentHub = directory.Register(snapshot, new NavigationEntry
+            {
+                Category = "language",
+                SelectionId = language,
+                ContentCategory = "music",
+                Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=c424724")
+            });
+            Assert.Equal("c57944", Assert.Single((await channel.GetChannelItems(
+                new InternalChannelItemQuery { FolderId = currentHub }, CancellationToken.None)).Items).Name);
+            Assert.Equal(5, requests.Count);
+        }
+
+        [Fact]
+        public void LegacyLanguageMusicItemsWithoutSavedGenreScopeCannotBypassSelections()
+        {
+            var config = Ready();
+            config.EnableLanguage = true;
+            config.Languages.Add(Selection("l122"));
+            config.EnableMusic = true;
+            config.Music.Add(Selection("g19"));
+            var directory = new TuneInDirectory(() => config);
+            var snapshot = directory.Snapshot();
+            foreach (var entry in new[]
+            {
+                new NavigationEntry { Category = "language", SelectionId = "l122", ContentCategory = "music", StationId = "s1" },
+                new NavigationEntry { Category = "language", SelectionId = "l122", ContentCategory = "music",
+                    Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=g54&filter=l122") },
+                new NavigationEntry { Category = "language", SelectionId = "l122", ContentCategory = "music",
+                    MusicSelectionId = "g54", StationId = "s1" }
+            })
+                Assert.Throws<InvalidOperationException>(() => directory.Resolve(snapshot, directory.Register(snapshot, entry)));
+        }
+
+        [Fact]
+        public void LegacyLanguageDescendantsWithoutGroupAncestryCannotBypassSwitches()
+        {
+            var config = Ready();
+            config.EnableLanguage = true;
+            config.Languages.Add(Selection("l122"));
+            var directory = new TuneInDirectory(() => config);
+            var snapshot = directory.Snapshot();
+            foreach (var entry in new[]
+            {
+                new NavigationEntry { Category = "language", SelectionId = "l122", StationId = "s1" },
+                new NavigationEntry { Category = "language", SelectionId = "l122",
+                    Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=g22&filter=l122") },
+                new NavigationEntry { Category = "language", SelectionId = "l122",
+                    Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=c424725&filter=l122") }
+            })
+                Assert.Throws<InvalidOperationException>(() => directory.Resolve(snapshot, directory.Register(snapshot, entry)));
+        }
+
         [Fact]
         public async Task UnknownLanguageCannotSilentlyFallBackToUnfilteredStations()
         {
@@ -204,7 +391,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.False(request.Parameters.ContainsKey("filter"));
                 return Task.FromResult(Opml("<outline type='link' text='Known language' URL='http://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=l1'/>"));
             });
-            var channel = new TuneInChannel(null, null, directory);
+            var channel = new TuneInChannel(ArtworkHost(), null, directory);
             var root = await channel.GetChannelItems(new InternalChannelItemQuery(), CancellationToken.None);
             var languages = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = root.Items[0].Id }, CancellationToken.None);
             await Assert.ThrowsAsync<InvalidOperationException>(() => channel.GetChannelItems(new InternalChannelItemQuery
@@ -302,7 +489,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.True(System.Net.IPAddress.IsLoopback((System.Net.IPAddress)args[0]));
                 return "http://127.0.0.1:8096/emby";
             }
+
         }
+
+        public static IServerApplicationHost ArtworkHost() => DispatchProxy.Create<IServerApplicationHost, SourceHostProxy>();
 
         public class QuietLoggerProxy : DispatchProxy
         {
@@ -327,9 +517,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         {
             var selector = (AuthenticatedAttribute)Attribute.GetCustomAttribute(typeof(GetTuneInSelectors), typeof(AuthenticatedAttribute));
             var relay = (AuthenticatedAttribute)Attribute.GetCustomAttribute(typeof(GetTuneInRelay), typeof(AuthenticatedAttribute));
+            var artwork = (AuthenticatedAttribute)Attribute.GetCustomAttribute(typeof(GetTuneInArtwork), typeof(AuthenticatedAttribute));
+            var branding = (AuthenticatedAttribute)Attribute.GetCustomAttribute(typeof(GetTuneInBranding), typeof(AuthenticatedAttribute));
             Assert.Equal("Admin", selector.Roles);
             Assert.False(selector.AllowLocal);
             Assert.True(relay.AllowLocalOnly);
+            Assert.True(artwork.AllowLocalOnly);
+            Assert.True(branding.AllowLocalOnly);
         }
 
         [Fact]
@@ -351,6 +545,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal("TuneIn", main.DisplayName);
                 Assert.False(script.EnableInMainMenu);
                 Assert.NotEqual(main.Name, script.Name);
+                Assert.Equal(Plugin.ConfigurationPageName, main.Name);
+                Assert.NotEqual("tuneinfork", main.Name);
                 Assert.NotEqual(new Guid("10b82431-f939-4507-a8e2-9509dd3fd6ae"), plugin.Id);
                 Assert.Equal("MediaBrowser.Plugins.TuneIn.Fork", typeof(Plugin).Assembly.GetName().Name);
                 Assert.Equal("MediaBrowser.Plugins.TuneIn.Fork.xml", plugin.ConfigurationFileName);
@@ -371,7 +567,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         {
             protected override object Invoke(MethodInfo method, object[] args)
             {
-                Assert.Equal("get_PluginConfigurationsPath", method.Name);
+                Assert.Contains(method.Name, new[] { "get_PluginConfigurationsPath", "get_DataPath" });
                 return System.IO.Path.Combine(System.IO.Path.GetTempPath(), "TuneInForkPageTest");
             }
         }
@@ -406,7 +602,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 return Task.FromResult(Opml("<outline type='audio' text='Station' guide_id='s1'/>"
                     + "<outline type='link' text='Next' key='nextStations' URL='http://opml.radiotime.com/Browse.ashx?id=g1&amp;offset=50'/>"));
             });
-            var channel = new TuneInChannel(null, null, directory);
+            var channel = new TuneInChannel(ArtworkHost(), null, directory);
             var root = await channel.GetChannelItems(new InternalChannelItemQuery(), CancellationToken.None);
             var genres = await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = root.Items.Single(i => i.Name == "Music").Id }, CancellationToken.None);
             Assert.Equal(0, count);
