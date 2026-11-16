@@ -92,6 +92,13 @@ re-resolution at connection time. Loopback, private, link-local, multicast,
 carrier-grade NAT, mapped IPv6, documentation and transition ranges are rejected.
 Redirects are bounded and HTTPS downgrades are rejected. HTTP headers, metadata,
 playlist sizes and nesting are bounded; API faults inside HTTP 200 are errors.
+Radio response status/header lines may end in LF instead of CRLF for legacy
+provider compatibility. Repeated advisory ICY/CORS/cache headers are merged, but
+duplicate Content-Length, Transfer-Encoding, Content-Encoding, Content-Type and
+Location fields are rejected, as are invalid header names/control characters.
+Legacy radio `Transfer-Encoding: identity` is close-delimited; any transfer
+encoding combined with Content-Length is rejected. Catalogue parsing and chunk
+framing remain strict.
 No unrestricted stream URLs reach Emby's HTTP client/transcoder. Relay access
 requires a server-local socket, with Emby's local-only authentication attribute as
 an additional host control. In-flight requests are cancelled after settings changes.

@@ -8,6 +8,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -74,7 +75,7 @@ namespace MediaBrowser.Plugins.TuneIn.Security
                             + "\r\nUser-Agent: EmbyTuneInFork/" + Plugin.ReleaseVersion + "\r\nAccept-Encoding: identity"
                             + "\r\nConnection: close\r\n\r\n");
                         await stream.WriteAsync(request, 0, request.Length, token).ConfigureAwait(false);
-                        var statusLine = await ReadLineAsync(stream, 4096, token).ConfigureAwait(false);
+                        var statusLine = await ReadLineAsync(stream, 4096, token, !catalogue).ConfigureAwait(false);
                         var parts = statusLine.Split(' ');
                         if (parts.Length < 2 || !parts[0].StartsWith("HTTP/1.", StringComparison.Ordinal)
                             || !int.TryParse(parts[1], out var status))
@@ -84,14 +85,29 @@ namespace MediaBrowser.Plugins.TuneIn.Security
                         var size = statusLine.Length;
                         while (true)
                         {
-                            var line = await ReadLineAsync(stream, 8192, token).ConfigureAwait(false);
+                            var line = await ReadLineAsync(stream, 8192, token, !catalogue).ConfigureAwait(false);
                             size += line.Length + 2;
                             if (size > 32768) throw new InvalidDataException("Radio headers exceed limit.");
                             if (line.Length == 0) break;
                             var colon = line.IndexOf(':');
-                            if (colon <= 0 || headers.ContainsKey(line.Substring(0, colon)))
-                                throw new InvalidDataException("Invalid or duplicate radio header.");
-                            headers.Add(line.Substring(0, colon), line.Substring(colon + 1).Trim());
+                            if (colon <= 0 || !Regex.IsMatch(line.Substring(0, colon), @"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+                                || line.Any(c => (c < 32 && c != '\t') || c == 127))
+                                throw new InvalidDataException("Invalid radio header.");
+                            var name = line.Substring(0, colon);
+                            var valueText = line.Substring(colon + 1).Trim();
+                            if (headers.TryGetValue(name, out var previous))
+                            {
+                                // Radio servers repeat advisory ICY/CORS/cache fields. Never merge fields
+                                // that determine framing, decoding or redirect destinations.
+                                if (catalogue || name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)
+                                    || name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)
+                                    || name.Equals("Content-Encoding", StringComparison.OrdinalIgnoreCase)
+                                    || name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)
+                                    || name.Equals("Location", StringComparison.OrdinalIgnoreCase))
+                                    throw new InvalidDataException("Duplicate radio framing or destination header.");
+                                headers[name] = previous + ", " + valueText;
+                            }
+                            else headers.Add(name, valueText);
                         }
                         if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308)
                         {
@@ -111,13 +127,15 @@ namespace MediaBrowser.Plugins.TuneIn.Security
                         if (headers.TryGetValue("Content-Encoding", out var encoding)
                             && !encoding.Equals("identity", StringComparison.OrdinalIgnoreCase))
                             throw new InvalidDataException("Unexpected radio content encoding.");
-                        var chunked = headers.TryGetValue("Transfer-Encoding", out var transfer);
-                        if (chunked && !transfer.Equals("chunked", StringComparison.OrdinalIgnoreCase))
+                        var hasTransfer = headers.TryGetValue("Transfer-Encoding", out var transfer);
+                        var chunked = hasTransfer && transfer.Equals("chunked", StringComparison.OrdinalIgnoreCase);
+                        if (hasTransfer && !chunked
+                            && (catalogue || !transfer.Equals("identity", StringComparison.OrdinalIgnoreCase)))
                             throw new InvalidDataException("Unsupported radio transfer encoding.");
                         long? length = null;
                         if (headers.TryGetValue("Content-Length", out var contentLength))
                         {
-                            if (chunked || !long.TryParse(contentLength, NumberStyles.None,
+                            if (hasTransfer || !long.TryParse(contentLength, NumberStyles.None,
                                 CultureInfo.InvariantCulture, out var parsed) || parsed < 0)
                                 throw new InvalidDataException("Invalid radio content length.");
                             length = parsed;
@@ -138,7 +156,8 @@ namespace MediaBrowser.Plugins.TuneIn.Security
             throw new InvalidDataException("Radio redirect limit exceeded.");
         }
 
-        internal static async Task<string> ReadLineAsync(Stream stream, int limit, CancellationToken token)
+        internal static async Task<string> ReadLineAsync(Stream stream, int limit, CancellationToken token,
+            bool allowLf = false)
         {
             var bytes = new List<byte>();
             var buffer = new byte[1];
@@ -148,9 +167,12 @@ namespace MediaBrowser.Plugins.TuneIn.Security
                     throw new EndOfStreamException("Truncated radio response.");
                 if (buffer[0] == 10)
                 {
-                    if (bytes.Count == 0 || bytes[bytes.Count - 1] != 13)
+                    var crlf = bytes.Count > 0 && bytes[bytes.Count - 1] == 13;
+                    if (!crlf && !allowLf)
                         throw new InvalidDataException("Invalid radio line ending.");
-                    return Encoding.ASCII.GetString(bytes.Take(bytes.Count - 1).ToArray());
+                    var line = bytes.Take(bytes.Count - (crlf ? 1 : 0)).ToArray();
+                    if (line.Contains((byte)13)) throw new InvalidDataException("Invalid radio line ending.");
+                    return Encoding.ASCII.GetString(line);
                 }
                 bytes.Add(buffer[0]);
             }

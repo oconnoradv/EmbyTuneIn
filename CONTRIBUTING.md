@@ -72,6 +72,10 @@ dotnet test .\MediaBrowser.Plugins.TuneIn.Tests --filter "(FullyQualifiedName~Pl
 
 Without that variable the real-codec tests are explicitly skipped, not counted
 as codec validation. Passing them does not establish real Emby runtime behavior.
+With that variable set, `dotnet test .\MediaBrowser.Plugins.TuneIn.Tests --filter
+"FullyQualifiedName~LiveProviderPreRollHandsOff"` explicitly contacts four provider
+stations through the pinned transport and checks decoded audio after the pre-roll.
+These Live tests depend on provider availability and may consume required ads.
 
 Item artwork URLs must stay on the server's loopback endpoint. Keep station logo
 references separately signed so artwork updates cannot change playback/item IDs.

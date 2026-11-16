@@ -7,6 +7,15 @@ features explicitly removed below are not promises of current functionality.
 Superseded prerelease download records/assets are retired after the replacement
 release is verified; original source tags remain unchanged for provenance.
 
+## Unreleased
+
+- Fix live-opening failures after a successful pre-roll when radio providers repeat
+  advisory ICY headers, use LF-only HTTP response lines, or send legacy
+  `Transfer-Encoding: identity`. Keep catalogue parsing strict, chunk framing
+  strict and duplicate framing/decoding/redirect headers rejected.
+- Add full-provider pre-roll-to-live tests for the four stations identified in
+  runtime logs, alongside deterministic protocol/sequence regressions.
+
 ## 1.3.0-fork.10 - playback handoff
 
 - Deprecate all earlier fork versions for the pre-roll-to-live playback defect.

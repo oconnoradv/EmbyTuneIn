@@ -257,6 +257,104 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             + Encoding.UTF8.GetByteCount(body) + "\r\n\r\n" + body);
 
         [Theory]
+        [InlineData("\r\n")]
+        [InlineData("\n")]
+        public async Task RadioResponsesAcceptLfLinesAndRepeatedAdvisoryHeaders(string newline)
+        {
+            var response = string.Join(newline, new[] { "HTTP/1.1 200 OK", "Content-Type: audio/mpeg",
+                "icy-br: 128", "Icy-Br: 128", "Access-Control-Allow-Origin: *", "Access-Control-Allow-Origin: *",
+                "Content-Length: 4", "", "LIVE" });
+            var transport = new SafeHttpTransport(_ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
+                (_, __, ___) => Task.FromResult<Stream>(new DuplexStream(response)));
+            using (var stream = await transport.OpenAsync("https://radio.test/live", false, CancellationToken.None))
+            {
+                Assert.Equal("audio/mpeg", stream.ContentType);
+                Assert.Equal("LIVE", Encoding.ASCII.GetString(
+                    await TuneInDirectory.ReadBoundedAsync(stream.Body, 100, CancellationToken.None)));
+            }
+        }
+
+        [Theory]
+        [InlineData("Content-Length: 4\r\ncontent-length: 4")]
+        [InlineData("Transfer-Encoding: chunked\r\ntransfer-encoding: chunked")]
+        [InlineData("Content-Encoding: identity\r\ncontent-encoding: identity")]
+        [InlineData("Content-Type: audio/mpeg\r\ncontent-type: audio/mpeg")]
+        [InlineData("Location: https://radio.test/one\r\nlocation: https://radio.test/two")]
+        [InlineData("Content-Length : 4")]
+        [InlineData("icy-name: bad\rvalue")]
+        public async Task RadioFramingAmbiguityAndMalformedHeadersRemainRejected(string headers)
+        {
+            var transport = new SafeHttpTransport(_ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
+                (_, __, ___) => Task.FromResult<Stream>(new DuplexStream("HTTP/1.1 200 OK\r\n" + headers + "\r\n\r\nLIVE")));
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                transport.OpenAsync("https://radio.test/live", false, CancellationToken.None));
+        }
+
+        [Theory]
+        [InlineData("HTTP/1.1 200 OK\nContent-Length: 4\n\nLIVE")]
+        [InlineData("HTTP/1.1 200 OK\r\nicy-br: 128\r\nicy-br: 128\r\n\r\nLIVE")]
+        public async Task CatalogueResponsesRetainStrictLineAndDuplicatePolicy(string response)
+        {
+            var transport = new SafeHttpTransport(_ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
+                (_, __, ___) => Task.FromResult<Stream>(new DuplexStream(response)));
+            await Assert.ThrowsAsync<InvalidDataException>(() => transport.OpenAsync(
+                "https://opml.radiotime.com/Tune.ashx?id=s1", true, CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task LfRadioRedirectStillRejectsPrivateDnsBeforeConnecting()
+        {
+            var connections = 0;
+            var transport = new SafeHttpTransport(host => Task.FromResult(new[] {
+                host == "radio.test" ? IPAddress.Parse("8.8.8.8") : IPAddress.Loopback }),
+                (_, __, ___) =>
+                {
+                    connections++;
+                    return Task.FromResult<Stream>(new DuplexStream(
+                        "HTTP/1.1 302 Found\nLocation: https://private.test/live\n\n"));
+                });
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                transport.OpenAsync("https://radio.test/live", false, CancellationToken.None));
+            Assert.Equal(1, connections);
+        }
+
+        [Fact]
+        public async Task LegacyRadioIdentityTransferIsCloseDelimitedWithoutChunkDecoding()
+        {
+            var transport = new SafeHttpTransport(_ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
+                (_, __, ___) => Task.FromResult<Stream>(new DuplexStream(
+                    "HTTP/1.1 200 OK\nContent-Type: audio/mpeg\nTransfer-Encoding: identity\n\nLIVE")));
+            using (var response = await transport.OpenAsync("https://radio.test/live", false, CancellationToken.None))
+                Assert.Equal("LIVE", Encoding.ASCII.GetString(
+                    await TuneInDirectory.ReadBoundedAsync(response.Body, 100, CancellationToken.None)));
+        }
+
+        [Theory]
+        [InlineData("identity\r\nContent-Length: 4")]
+        [InlineData("chunked\r\nContent-Length: 4")]
+        [InlineData("identity, chunked")]
+        [InlineData("gzip")]
+        public async Task TransferCompatibilityStillRejectsAmbiguousOrUnsupportedFraming(string transfer)
+        {
+            var transport = new SafeHttpTransport(_ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
+                (_, __, ___) => Task.FromResult<Stream>(new DuplexStream(
+                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: " + transfer + "\r\n\r\nLIVE")));
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                transport.OpenAsync("https://radio.test/live", false, CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task RadioLfCompatibilityDoesNotRelaxChunkFraming()
+        {
+            var transport = new SafeHttpTransport(_ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
+                (_, __, ___) => Task.FromResult<Stream>(new DuplexStream(
+                    "HTTP/1.1 200 OK\nTransfer-Encoding: chunked\n\n4\nLIVE\n0\n\n")));
+            using (var response = await transport.OpenAsync("https://radio.test/live", false, CancellationToken.None))
+                await Assert.ThrowsAsync<InvalidDataException>(() =>
+                    TuneInDirectory.ReadBoundedAsync(response.Body, 100, CancellationToken.None));
+        }
+
+        [Theory]
         [InlineData(false)]
         [InlineData(true)]
         public async Task RelayUsesInjectedFactoryAndTransfersOrReleasesStreamOwnership(bool factoryFails)

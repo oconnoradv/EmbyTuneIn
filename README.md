@@ -288,6 +288,13 @@ abandoned probes release the upstream connection and decoder. Unknown provider
 ad formats are not guessed from arbitrary filenames. Real Emby probe-to-playback
 handoff and sustained playback still require the manual checks below.
 
+Radio HTTP response parsing accepts provider LF-only status/header lines,
+repeated advisory fields such as `icy-br`, and legacy identity transfer encoding
+as a close-delimited body. Duplicate framing/decoding/redirect headers and
+transfer-encoding/content-length ambiguity are still rejected. Catalogue responses
+and chunk framing retain their strict parsing. These compatibility rules do not
+relax DNS, redirect or local-only relay protections.
+
 **HLS, HTTPS-to-HTTP
 redirect downgrades, private-network radio services, proxy-only networks and malformed
 or incompatible streams are rejected**. The initial public radio URL can be HTTP

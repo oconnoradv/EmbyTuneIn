@@ -59,6 +59,28 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public async Task RequiredAdTransitionsToLegacyLiveHeadersWithoutEndingTheRelay()
+        {
+            var opened = 0;
+            var directory = Directory(PreRoll + "\n" + Live, uri =>
+            {
+                opened++;
+                return uri.Host == "radio.test"
+                    ? new HttpStream("HTTP/1.1 200 OK\nContent-Type: audio/mpeg\nicy-br: 128\nicy-br: 128"
+                        + "\nTransfer-Encoding: identity\n\nLIVE")
+                    : Reply("audio/mpeg", Encoding.ASCII.GetBytes("AD"));
+            });
+            using (var response = await directory.OpenStreamAsync(directory.Snapshot(), Station, CancellationToken.None,
+                _ => throw new Exception("A compatible live response must not require fallback."),
+                (source, _) => new OwnedStream(source)))
+            {
+                var bytes = await TuneInDirectory.ReadBoundedAsync(response.Body, 1000, CancellationToken.None);
+                Assert.Equal("ADLIVE", Encoding.ASCII.GetString(bytes, 44, bytes.Length - 44));
+            }
+            Assert.Equal(2, opened);
+        }
+
+        [Fact]
         public async Task KexpStyleLiveAlternativesRemainPassthroughWithoutDecoderOrSequentialPlayback()
         {
             var opened = 0;
@@ -298,6 +320,39 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             }
         }
 
+        [FfmpegTheory]
+        [Trait("Category", "Live")]
+        [InlineData("s6031")]
+        [InlineData("s31466")]
+        [InlineData("s141866")]
+        [InlineData("s301791")]
+        public async Task LiveProviderPreRollHandsOffThroughPinnedTransportAndActualDecoder(string station)
+        {
+            var encoder = Environment.GetEnvironmentVariable("TUNEIN_TEST_FFMPEG");
+            var directory = new TuneInDirectory(() => Config());
+            var stages = 0;
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120)))
+            using (var response = await directory.OpenStreamAsync(directory.Snapshot(),
+                new NavigationEntry { Category = "talk", StationId = station }, timeout.Token,
+                _ => { }, (source, token) =>
+                {
+                    Interlocked.Increment(ref stages);
+                    return new PcmDecoderStream(encoder, source, token);
+                }))
+            {
+                Assert.Equal("audio/wav", response.ContentType);
+                var buffer = new byte[19200];
+                var liveBytes = 0;
+                while (liveBytes < 192000)
+                {
+                    var size = await response.Body.ReadAsync(buffer, 0, buffer.Length, timeout.Token);
+                    Assert.True(size > 0, "Relay ended before live music.");
+                    if (Volatile.Read(ref stages) >= 2) liveBytes += size;
+                }
+                Assert.Equal(2, stages);
+            }
+        }
+
         [FfmpegFact]
         public async Task HostRelayUsesConfiguredDecoderAndReleasesItOnFactoryFailure()
         {
@@ -421,6 +476,16 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("TUNEIN_TEST_FFMPEG")))
                     Skip = "Set TUNEIN_TEST_FFMPEG to run real codec/process regression coverage.";
                 Timeout = 30000;
+            }
+        }
+
+        public sealed class FfmpegTheoryAttribute : TheoryAttribute
+        {
+            public FfmpegTheoryAttribute()
+            {
+                if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("TUNEIN_TEST_FFMPEG")))
+                    Skip = "Set TUNEIN_TEST_FFMPEG to run real codec/process regression coverage.";
+                Timeout = 150000;
             }
         }
     }
