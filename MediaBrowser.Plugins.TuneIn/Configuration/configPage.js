@@ -25,6 +25,71 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         return element;
     }
 
+    function refreshControls(instance, busy) {
+        instance.refreshBusy = busy;
+        instance.view.querySelector('.channelRefreshUpdate').disabled = busy;
+        instance.view.querySelector('.channelRefreshFailure').disabled = busy || !instance.failedAttempt;
+    }
+
+    function updateRefreshStatus(instance) {
+        if (instance.refreshBusy) return Promise.resolve();
+        var epoch = instance.viewEpoch;
+        var view = instance.view;
+        instance.failedAttempt = null;
+        view.querySelector('.channelRefreshLog').textContent = '';
+        view.querySelector('.channelRefreshLog').hidden = true;
+        view.querySelector('.channelRefreshMessage').textContent = '';
+        view.querySelector('.channelRefreshStatus').textContent = 'Loading refresh status...';
+        refreshControls(instance, true);
+        return ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('TuneInFork/ChannelRefresh'), dataType: 'json' }).then(function (status) {
+            if (!instance.viewActive || epoch !== instance.viewEpoch) return;
+            if (!status || ['Idle', 'Running', 'Cancelling'].indexOf(status.State) === -1
+                || ['NeverRun', 'Completed', 'Failed', 'Cancelled', 'Aborted'].indexOf(status.LastResult) === -1
+                || status.LastResult === 'Failed' && (typeof status.FailedAttempt !== 'string' || !status.FailedAttempt))
+                throw new Error('Invalid task status.');
+            instance.failedAttempt = status.FailedAttempt || null;
+            var text = 'Task: ' + status.State + '. Last result: '
+                + (status.LastResult === 'NeverRun' ? 'Never run' : status.LastResult) + '.';
+            if (status.State === 'Running' && typeof status.Progress === 'number' && isFinite(status.Progress))
+                text += ' Progress: ' + Math.round(Math.max(0, Math.min(100, status.Progress))) + '%.';
+            if (status.FinishedUtc) text += ' Last finished: ' + status.FinishedUtc + '.';
+            view.querySelector('.channelRefreshStatus').textContent = text;
+        }).catch(function () {
+            if (instance.viewActive && epoch === instance.viewEpoch)
+                view.querySelector('.channelRefreshStatus').textContent = 'Unable to load refresh status. Check administrator access and the server log, then choose Update status.';
+        }).then(function () {
+            if (instance.viewActive && epoch === instance.viewEpoch) refreshControls(instance, false);
+        });
+    }
+
+    function retrieveRefreshFailure(instance) {
+        if (instance.refreshBusy || !instance.failedAttempt) return Promise.resolve();
+        var epoch = instance.viewEpoch;
+        var view = instance.view;
+        var attempt = instance.failedAttempt;
+        view.querySelector('.channelRefreshMessage').textContent = 'Retrieving failed task report...';
+        refreshControls(instance, true);
+        return ApiClient.ajax({ type: 'GET', dataType: 'json',
+            url: ApiClient.getUrl('TuneInFork/ChannelRefresh/Failure', { Attempt: attempt }) }).then(function (report) {
+            if (!instance.viewActive || epoch !== instance.viewEpoch) return;
+            if (!report || report.Attempt !== attempt || typeof report.Text !== 'string' || !report.Text)
+                throw new Error('Invalid task report.');
+            view.querySelector('.channelRefreshLog').textContent = report.Text;
+            view.querySelector('.channelRefreshLog').hidden = false;
+            view.querySelector('.channelRefreshMessage').textContent = report.Truncated
+                ? 'Report retrieved; limited to 65,536 characters. Consult the server log for the full details.'
+                : 'Failed task report retrieved. Redact private details before sharing.';
+        }).catch(function () {
+            if (!instance.viewActive || epoch !== instance.viewEpoch) return;
+            instance.failedAttempt = null;
+            view.querySelector('.channelRefreshLog').textContent = '';
+            view.querySelector('.channelRefreshLog').hidden = true;
+            view.querySelector('.channelRefreshMessage').textContent = 'Unable to retrieve the report. The task result may have changed, or access failed. Choose Update status and retry.';
+        }).then(function () {
+            if (instance.viewActive && epoch === instance.viewEpoch) refreshControls(instance, false);
+        });
+    }
+
     function checkbox(text, checked, onChange) {
         var label = document.createElement('label');
         label.className = 'checkboxContainer emby-checkbox-label';
@@ -160,7 +225,7 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         loading.show();
         ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
             Dashboard.processPluginConfigurationUpdateResult(result);
-            message(instance, 'Configuration saved. ' + browsingStatus(config) + ' No catalogue crawl was started. Use Scheduled Tasks / Internet Channels to refresh a group.');
+            message(instance, 'Configuration saved. ' + browsingStatus(config) + ' No catalogue crawl was started. Use the built-in Refresh Internet Channels task under Scheduled Tasks.');
         }).catch(function () {
             message(instance, 'Configuration was not saved. Check validation and administrator access.');
         }).then(function () { loading.hide(); });
@@ -171,6 +236,8 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         view.querySelector('form').addEventListener('submit', onSubmit.bind(this));
         view.addEventListener('viewshow', onResume.bind(this));
         view.addEventListener('viewbeforehide', onPause.bind(this));
+        view.querySelector('.channelRefreshUpdate').addEventListener('click', updateRefreshStatus.bind(null, this));
+        view.querySelector('.channelRefreshFailure').addEventListener('click', retrieveRefreshFailure.bind(null, this));
     }
 
     function onResume() {
@@ -178,6 +245,13 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         instance.viewActive = true;
         instance.viewEpoch = (instance.viewEpoch || 0) + 1;
         var epoch = instance.viewEpoch;
+        instance.refreshBusy = false;
+        instance.failedAttempt = null;
+        instance.view.querySelector('.channelRefreshLog').textContent = '';
+        instance.view.querySelector('.channelRefreshLog').hidden = true;
+        instance.view.querySelector('.channelRefreshMessage').textContent = '';
+        instance.view.querySelector('.channelRefreshStatus').textContent = 'Refresh status has not been loaded.';
+        refreshControls(instance, false);
         loading.show();
         return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
             if (!instance.viewActive || epoch !== instance.viewEpoch) return;
@@ -201,6 +275,7 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
             selectors.forEach(function (spec) { pickerList.appendChild(createSelector(instance, spec)); });
             $(view).trigger('create');
             message(instance, browsingStatus(config) + ' Selectors contact TuneIn only when you explicitly load or expand them.');
+            return updateRefreshStatus(instance);
         }).catch(function () {
             if (instance.viewActive && epoch === instance.viewEpoch)
                 message(instance, 'Unable to load plugin configuration. Check administrator access.');

@@ -38,16 +38,15 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public void RefreshRoutesAreAdminOnlyAndMutationIsPostOnly()
+        public void NativeRefreshDiagnosticsAreAdministratorOnlyAndReadOnly()
         {
-            foreach (var type in new[] { typeof(GetTuneInRefresh), typeof(StartTuneInRefresh), typeof(CancelTuneInRefresh),
-                typeof(GetTuneInSchedule), typeof(SetTuneInSchedule) })
+            foreach (var type in new[] { typeof(GetTuneInChannelRefresh), typeof(GetTuneInChannelRefreshFailure) })
             {
                 var auth = (AuthenticatedAttribute)Attribute.GetCustomAttribute(type, typeof(AuthenticatedAttribute));
                 Assert.Equal("Admin", auth.Roles);
                 Assert.False(auth.AllowLocal);
                 var route = (MediaBrowser.Model.Services.RouteAttribute)Attribute.GetCustomAttribute(type, typeof(MediaBrowser.Model.Services.RouteAttribute));
-                Assert.Equal(type == typeof(GetTuneInRefresh) || type == typeof(GetTuneInSchedule) ? "GET" : "POST", route.Verbs);
+                Assert.Equal("GET", route.Verbs);
             }
         }
 
@@ -390,24 +389,14 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public void EightIndependentNativeTasksAreVisibleWithoutAutomaticTriggers()
+        public void PluginRegistersNoScheduledTasksOrLegacyScheduleMutationRoutes()
         {
-            var logs = DispatchProxy.Create<ILogManager, TaskManagerProxy>();
-            var tasks = typeof(Plugin).Assembly.GetTypes().Where(type =>
-                !type.IsAbstract && typeof(TuneInRadioGroupRefreshTask).IsAssignableFrom(type))
-                .Select(type => (TuneInRadioGroupRefreshTask)Activator.CreateInstance(type, null, logs)).ToList();
-            Assert.Equal(8, tasks.Count);
-            Assert.Equal(8, tasks.Select(task => task.Key).Distinct().Count());
-            Assert.All(tasks, task =>
-            {
-                Assert.Equal("Internet Channels", task.Category);
-                Assert.False(task.IsHidden);
-                Assert.True(task.IsEnabled);
-                Assert.StartsWith("Refresh TuneIn - ", task.Name);
-                Assert.Empty(task.GetDefaultTriggers());
-                Assert.DoesNotContain("Refresh Internet Channels refreshes all channel providers", task.Description);
-                Assert.DoesNotContain("Use Advanced / TuneIn", task.Description);
-            });
+            Assert.DoesNotContain(typeof(Plugin).Assembly.GetTypes(),
+                type => !type.IsAbstract && typeof(IScheduledTask).IsAssignableFrom(type));
+            Assert.DoesNotContain(typeof(Plugin).Assembly.GetTypes().SelectMany(type =>
+                type.GetCustomAttributes<MediaBrowser.Model.Services.RouteAttribute>()),
+                route => route.Path.StartsWith("/TuneInFork/Schedule", StringComparison.Ordinal)
+                    || route.Path.StartsWith("/TuneInFork/Refresh", StringComparison.Ordinal));
         }
 
         [Fact]
@@ -426,7 +415,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var refresh = new TuneInRefresh(directory);
             var worker = DispatchProxy.Create<IScheduledTaskWorker, ScheduleTests.WorkerProxy>();
             var workerProxy = (ScheduleTests.WorkerProxy)worker;
-            workerProxy.Task = new RefreshTuneInTalk(null, DispatchProxy.Create<ILogManager, TaskManagerProxy>());
+            workerProxy.Task = new LegacyTalkTask();
             var tasks = DispatchProxy.Create<ITaskManager, NativeManagerProxy>();
             var native = (NativeManagerProxy)tasks;
             native.Workers = new[] { worker };
@@ -466,7 +455,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("No catalogue request allowed."));
             var refresh = new TuneInRefresh(directory);
             var worker = DispatchProxy.Create<IScheduledTaskWorker, ScheduleTests.WorkerProxy>();
-            ((ScheduleTests.WorkerProxy)worker).Task = new RefreshTuneInTalk(null, DispatchProxy.Create<ILogManager, TaskManagerProxy>());
+            ((ScheduleTests.WorkerProxy)worker).Task = new LegacyTalkTask();
             var tasks = DispatchProxy.Create<ITaskManager, NativeManagerProxy>();
             var native = (NativeManagerProxy)tasks;
             native.Workers = new[] { worker };
@@ -487,7 +476,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("Cancelled job must not query TuneIn."));
             var refresh = new TuneInRefresh(directory);
             var worker = DispatchProxy.Create<IScheduledTaskWorker, ScheduleTests.WorkerProxy>();
-            ((ScheduleTests.WorkerProxy)worker).Task = new RefreshTuneInTalk(null, DispatchProxy.Create<ILogManager, TaskManagerProxy>());
+            ((ScheduleTests.WorkerProxy)worker).Task = new LegacyTalkTask();
             var tasks = DispatchProxy.Create<ITaskManager, NativeManagerProxy>();
             var native = (NativeManagerProxy)tasks;
             native.Workers = new[] { worker };
@@ -506,6 +495,16 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal(job.Id, status.Id);
             Assert.Equal("Cancelled", status.State);
             Assert.Equal(0, status.TotalRequests);
+        }
+
+        private sealed class LegacyTalkTask : IScheduledTask
+        {
+            public string Key => "TuneInForkRefresh_talk";
+            public string Name => Key;
+            public string Description => Key;
+            public string Category => "Internet Channels";
+            public IEnumerable<TaskTriggerInfo> GetDefaultTriggers() => Array.Empty<TaskTriggerInfo>();
+            public Task Execute(CancellationToken token, IProgress<double> progress) => Task.CompletedTask;
         }
 
         public class NativeManagerProxy : DispatchProxy

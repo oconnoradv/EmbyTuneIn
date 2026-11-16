@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Controller.Channels;
 using MediaBrowser.Model.Tasks;
+using MediaBrowser.Controller.MediaEncoding;
+using System.Linq;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -38,49 +40,38 @@ namespace MediaBrowser.Plugins.TuneIn
     [Authenticated(AllowLocalOnly = true)]
     public class GetTuneInBranding { }
 
-    [Route("/TuneInFork/Refresh", "GET")]
+    [Route("/TuneInFork/ChannelRefresh", "GET")]
     [Authenticated(Roles = "Admin")]
-    public class GetTuneInRefresh : IReturn<RadioGroupRefreshStatus[]> { }
+    public class GetTuneInChannelRefresh : IReturn<ChannelRefreshStatus> { }
 
-    [Route("/TuneInFork/Schedule", "GET")]
+    [Route("/TuneInFork/ChannelRefresh/Failure", "GET")]
     [Authenticated(Roles = "Admin")]
-    public class GetTuneInSchedule : IReturn<TuneInScheduleSettings> { }
-
-    [Route("/TuneInFork/Schedule", "POST")]
-    [Authenticated(Roles = "Admin")]
-    public class SetTuneInSchedule : TuneInScheduleSettings, IReturn<TuneInScheduleSettings> { }
-
-    [Route("/TuneInFork/Refresh/{Category}", "POST")]
-    [Authenticated(Roles = "Admin")]
-    public class StartTuneInRefresh : IReturn<RadioGroupRefreshStatus>
+    public class GetTuneInChannelRefreshFailure : IReturn<ChannelRefreshFailure>
     {
-        public string Category { get; set; }
-    }
-
-    [Route("/TuneInFork/Refresh/{Category}/Cancel", "POST")]
-    [Authenticated(Roles = "Admin")]
-    public class CancelTuneInRefresh : IReturn<RadioGroupRefreshStatus>
-    {
-        public string Category { get; set; }
-        public string Id { get; set; }
+        public string Attempt { get; set; }
     }
 
     public class TuneInService : IService, IRequiresRequest
     {
         private readonly ILogger logger;
-        private readonly IChannelManager channelManager;
         private readonly IHttpResultFactory resultFactory;
         private readonly TuneInDirectory directory;
         private readonly ITaskManager taskManager;
-        public TuneInService(ILogManager logManager, IChannelManager channelManager, IHttpResultFactory resultFactory, ITaskManager taskManager)
-            : this(logManager, channelManager, resultFactory, TuneInDirectory.Instance)
-        { this.taskManager = taskManager ?? throw new ArgumentNullException(nameof(taskManager)); }
-        internal TuneInService(ILogManager logManager, IChannelManager channelManager, IHttpResultFactory resultFactory, TuneInDirectory directory)
+        private readonly IFfmpegManager ffmpegManager;
+        public TuneInService(ILogManager logManager, IChannelManager channelManager, IHttpResultFactory resultFactory,
+            ITaskManager taskManager, IFfmpegManager ffmpegManager)
+            : this(logManager, channelManager, resultFactory, TuneInDirectory.Instance,
+                ffmpegManager ?? throw new ArgumentNullException(nameof(ffmpegManager)))
+        {
+            this.taskManager = taskManager ?? throw new ArgumentNullException(nameof(taskManager));
+        }
+        internal TuneInService(ILogManager logManager, IChannelManager channelManager, IHttpResultFactory resultFactory,
+            TuneInDirectory directory, IFfmpegManager ffmpegManager = null)
         {
             logger = logManager.GetLogger(GetType().Name);
-            this.channelManager = channelManager;
             this.resultFactory = resultFactory ?? throw new ArgumentNullException(nameof(resultFactory));
             this.directory = directory;
+            this.ffmpegManager = ffmpegManager;
         }
         internal TuneInService() { directory = TuneInDirectory.Instance; }
         public IRequest Request { get; set; }
@@ -89,15 +80,10 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInDirectory.Instance.SelectAsync(request.Category, request.Parent, request.Path,
                 request.Refresh, Request.CancellationToken);
 
-        public RadioGroupRefreshStatus[] Get(GetTuneInRefresh request) => TuneInRefresh.Instance.Status();
-        public TuneInScheduleSettings Get(GetTuneInSchedule request) =>
-            new TuneInSchedules(taskManager, Plugin.Instance.RefreshState).Read();
-        public TuneInScheduleSettings Post(SetTuneInSchedule request) =>
-            new TuneInSchedules(taskManager, Plugin.Instance.RefreshState).Apply(request);
-        public RadioGroupRefreshStatus Post(StartTuneInRefresh request) =>
-            TuneInRefresh.Instance.StartNative(request.Category, taskManager, channelManager, logger);
-        public RadioGroupRefreshStatus Post(CancelTuneInRefresh request) =>
-            TuneInRefresh.Instance.Cancel(request.Category, request.Id);
+        public ChannelRefreshStatus Get(GetTuneInChannelRefresh request) =>
+            new TuneInChannelRefresh(taskManager).Status();
+        public ChannelRefreshFailure Get(GetTuneInChannelRefreshFailure request) =>
+            new TuneInChannelRefresh(taskManager).Failure(request.Attempt);
 
         public async Task<object> Get(GetTuneInRelay request)
         {
@@ -110,7 +96,8 @@ namespace MediaBrowser.Plugins.TuneIn
             try
             {
                 var response = await directory.OpenStreamAsync(snapshot, entry, operation.Token,
-                    message => logger.Warn(message)).ConfigureAwait(false);
+                    message => logger?.Warn(message),
+                    DecodeAudio).ConfigureAwait(false);
                 relay = new RelayStream(response, operation);
                 return resultFactory.GetResult(Request, relay, response.ContentType, null);
             }
@@ -120,6 +107,13 @@ namespace MediaBrowser.Plugins.TuneIn
                 else operation.Dispose();
                 throw;
             }
+        }
+
+        private System.IO.Stream DecodeAudio(SafeResponse source, CancellationToken token)
+        {
+            var configuration = ffmpegManager?.FfmpegConfiguration;
+            return new PcmDecoderStream(configuration?.EncoderPath, source, token,
+                configuration?.EnvironmentVariables?.ToDictionary(setting => setting.VariableName, setting => setting.Value));
         }
 
         public async Task<object> Get(GetTuneInArtwork request)
@@ -155,15 +149,28 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             private readonly SafeResponse response;
             private readonly CancellationTokenSource operation;
+            private bool disposed;
             public RelayStream(SafeResponse response, CancellationTokenSource operation)
             { this.response = response; this.operation = operation; }
-            public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken token) =>
-                response.Body.ReadAsync(buffer, offset, count, operation.Token);
+            public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken token)
+            {
+                using (var read = CancellationTokenSource.CreateLinkedTokenSource(token, operation.Token))
+                {
+                    read.Token.ThrowIfCancellationRequested();
+                    return await response.Body.ReadAsync(buffer, offset, count, read.Token).ConfigureAwait(false);
+                }
+            }
             public override int Read(byte[] buffer, int offset, int count) =>
                 ReadAsync(buffer, offset, count, operation.Token).GetAwaiter().GetResult();
             protected override void Dispose(bool disposing)
             {
-                if (disposing) { response.Dispose(); operation.Dispose(); }
+                if (disposing && !disposed)
+                {
+                    disposed = true;
+                    operation.Cancel();
+                    response.Dispose();
+                    operation.Dispose();
+                }
                 base.Dispose(disposing);
             }
             public override bool CanRead => true;

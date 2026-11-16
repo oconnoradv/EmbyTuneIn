@@ -2,7 +2,6 @@ using MediaBrowser.Model.Tasks;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,142 +11,213 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 {
     public class ScheduleTests
     {
-        private static (ITaskManager Manager, WorkerProxy[] Workers) Manager()
-        {
-            var workers = TuneInRefresh.Categories.Select(category => Worker(new FakeTask("TuneInForkRefresh_" + category)))
-                .Concat(new[] { Worker(new RefreshChannelsScheduledTask()) }).ToArray();
-            var manager = DispatchProxy.Create<ITaskManager, ManagerProxy>();
-            ((ManagerProxy)manager).Workers = workers.Select(item => item.Worker).ToArray();
-            return (manager, workers.Select(item => item.Proxy).ToArray());
-        }
-
-        private static (IScheduledTaskWorker Worker, WorkerProxy Proxy) Worker(IScheduledTask task)
+        private static (ITaskManager Manager, WorkerProxy Worker, TuneInRefreshStateStore Store) Fixture(bool disabled = true)
         {
             var worker = DispatchProxy.Create<IScheduledTaskWorker, WorkerProxy>();
             var proxy = (WorkerProxy)worker;
-            proxy.Task = task;
-            proxy.Value = new[] { new TaskTriggerInfo { Type = "DailyTrigger", TimeOfDayTicks = TimeSpan.FromHours(2).Ticks } };
-            return (worker, proxy);
-        }
-
-        [Fact]
-        public void SharedIntervalsOverridesAndGlobalDisableRestoreOriginalTriggers()
-        {
-            var fixture = Manager();
+            proxy.Task = new NativeRefreshTask();
+            proxy.Value = Array.Empty<TaskTriggerInfo>();
+            var manager = DispatchProxy.Create<ITaskManager, ManagerProxy>();
+            ((ManagerProxy)manager).Workers = new[] { worker };
             var store = new TuneInRefreshStateStore();
-            var schedules = new TuneInSchedules(fixture.Manager, store);
-            Assert.False(schedules.Read().ManageIntervals);
-            Assert.All(fixture.Workers, worker => Assert.Equal(0, worker.Writes));
-            var settings = new SetTuneInSchedule
-            {
-                ManageIntervals = true,
-                GlobalIntervalMinutes = 120,
-                DisableGlobalRefreshTrigger = true,
-                Overrides = new List<RadioGroupInterval>
-                {
-                    new RadioGroupInterval { Category = "local", Mode = "custom", Minutes = 30 },
-                    new RadioGroupInterval { Category = "talk", Mode = "manual" }
-                }
-            };
-            var applied = schedules.Apply(settings);
-            Assert.NotNull(applied.AppliedUtc);
-            Assert.Equal(TimeSpan.FromMinutes(30).Ticks, Assert.Single(fixture.Workers[0].Value).IntervalTicks);
-            Assert.Equal(TimeSpan.FromMinutes(120).Ticks, Assert.Single(fixture.Workers[1].Value).IntervalTicks);
-            Assert.Empty(fixture.Workers[4].Value);
-            Assert.Empty(fixture.Workers[8].Value);
-            schedules.Apply(settings);
-            Assert.Equal(9, store.Value.TriggerBackups.Count);
-            schedules.Apply(new TuneInScheduleSettings());
-            Assert.All(fixture.Workers, worker => Assert.Equal("DailyTrigger", Assert.Single(worker.Value).Type));
-            Assert.Empty(store.Value.TriggerBackups);
-            var writes = fixture.Workers.Sum(worker => worker.Writes);
-            schedules.Apply(new TuneInScheduleSettings());
-            Assert.Equal(writes, fixture.Workers.Sum(worker => worker.Writes));
-        }
-
-        [Theory]
-        [InlineData(-1)]
-        [InlineData(525601)]
-        public void InvalidIntervalsCannotTouchTriggers(int minutes)
-        {
-            var fixture = Manager();
-            var schedules = new TuneInSchedules(fixture.Manager, new TuneInRefreshStateStore());
-            Assert.Throws<ArgumentException>(() => schedules.Apply(new TuneInScheduleSettings
-            { ManageIntervals = true, GlobalIntervalMinutes = minutes }));
-            Assert.All(fixture.Workers, worker => Assert.Equal(0, worker.Writes));
+            store.Value.Schedule.DisableGlobalRefreshTrigger = disabled;
+            return (manager, proxy, store);
         }
 
         [Fact]
-        public void InvalidOverridesAndMissingGlobalTaskFailBeforeChangingAnyTriggers()
+        public void MigrationRestoresSavedWeeklyTriggerOnceWithoutExecutingTheTask()
         {
-            var fixture = Manager();
-            var schedules = new TuneInSchedules(fixture.Manager, new TuneInRefreshStateStore());
-            Assert.Throws<ArgumentException>(() => schedules.Apply(new TuneInScheduleSettings
-            { Overrides = new List<RadioGroupInterval> { new RadioGroupInterval { Category = "talk", Mode = "custom", Minutes = 0 } } }));
-            Assert.Throws<ArgumentException>(() => schedules.Apply(new TuneInScheduleSettings
-            { Overrides = new List<RadioGroupInterval> { new RadioGroupInterval { Category = "unknown" } } }));
-            ((ManagerProxy)fixture.Manager).Workers = ((ManagerProxy)fixture.Manager).Workers.Take(8).ToArray();
-            Assert.Throws<InvalidOperationException>(() => schedules.Apply(new TuneInScheduleSettings
-            { ManageIntervals = true, GlobalIntervalMinutes = 30, DisableGlobalRefreshTrigger = true }));
-            Assert.All(fixture.Workers, worker => Assert.Equal(0, worker.Writes));
+            var fixture = Fixture();
+            var saved = new[] { new TaskTriggerInfo { Type = "WeeklyTrigger", DayOfWeek = DayOfWeek.Friday,
+                TimeOfDayTicks = TimeSpan.FromHours(5).Ticks } };
+            fixture.Store.Value.TriggerBackups.Add(new TuneInTriggerBackup { Key = "EmbyGlobalChannels", Triggers = saved });
+            var migration = new TuneInScheduleMigration(fixture.Manager, fixture.Store);
+            migration.Run();
+            Assert.Same(saved, fixture.Worker.Value);
+            Assert.False(fixture.Store.Value.Schedule.DisableGlobalRefreshTrigger);
+            Assert.Empty(fixture.Store.Value.TriggerBackups);
+            migration.Run();
+            Assert.Equal(1, fixture.Worker.Writes);
         }
 
         [Fact]
-        public void TriggerFailureRollsBackAlreadyChangedWorkersAndDoesNotSaveSuccess()
+        public void MigrationUsesNativeDefaultsOnlyWhenLegacySuppressionIsRecorded()
         {
-            var fixture = Manager();
-            fixture.Workers[2].FailNextWrite = true;
-            var schedules = new TuneInSchedules(fixture.Manager, new TuneInRefreshStateStore());
-            Assert.Throws<AggregateException>(() => schedules.Apply(new TuneInScheduleSettings
-            { ManageIntervals = true, GlobalIntervalMinutes = 30 }));
-            Assert.Null(schedules.Read().AppliedUtc);
-            Assert.All(fixture.Workers, worker => Assert.Equal("DailyTrigger", Assert.Single(worker.Value).Type));
+            var fixture = Fixture(false);
+            var migration = new TuneInScheduleMigration(fixture.Manager, fixture.Store);
+            migration.Run();
+            Assert.Equal(0, fixture.Worker.Writes);
+            fixture.Store.Value.Schedule.DisableGlobalRefreshTrigger = true;
+            migration.Run();
+            Assert.Equal("WeeklyTrigger", Assert.Single(fixture.Worker.Value).Type);
         }
 
         [Fact]
-        public void BackupPersistenceFailureCannotChangeHostTriggers()
+        public void AdministratorScheduleEditsAreNotOverwritten()
         {
-            var directory = Path.Combine(Path.GetTempPath(), "tunein-backup-failure-" + Guid.NewGuid().ToString("N"));
+            var fixture = Fixture();
+            var edited = new[] { new TaskTriggerInfo { Type = "DailyTrigger" } };
+            fixture.Worker.Value = edited;
+            fixture.Store.Value.TriggerBackups.Add(new TuneInTriggerBackup
+            { Key = "EmbyGlobalChannels", Triggers = new[] { new TaskTriggerInfo { Type = "WeeklyTrigger" } } });
+            new TuneInScheduleMigration(fixture.Manager, fixture.Store).Run();
+            Assert.Same(edited, fixture.Worker.Value);
+            Assert.Equal(0, fixture.Worker.Writes);
+            Assert.False(fixture.Store.Value.Schedule.DisableGlobalRefreshTrigger);
+        }
+
+        [Fact]
+        public void SavedBackupIsSufficientProvenanceAndAnOriginallyEmptyScheduleStaysEmpty()
+        {
+            var fixture = Fixture(false);
+            fixture.Store.Value.TriggerBackups.Add(new TuneInTriggerBackup
+            { Key = "EmbyGlobalChannels", Triggers = Array.Empty<TaskTriggerInfo>() });
+            new TuneInScheduleMigration(fixture.Manager, fixture.Store).Run();
+            Assert.Empty(fixture.Worker.Value);
+            Assert.Equal(1, fixture.Worker.Writes);
+            Assert.Empty(fixture.Store.Value.TriggerBackups);
+        }
+
+        [Fact]
+        public void IncompleteBackupAndAmbiguousWorkerDoNotFallBackToInventedSchedules()
+        {
+            var fixture = Fixture();
+            fixture.Store.Value.TriggerBackups.Add(new TuneInTriggerBackup { Key = "EmbyGlobalChannels" });
+            Assert.Throws<InvalidOperationException>(() => new TuneInScheduleMigration(fixture.Manager, fixture.Store).Run());
+            Assert.Equal(0, fixture.Worker.Writes);
+            Assert.True(fixture.Store.Value.Schedule.DisableGlobalRefreshTrigger);
+            Assert.Single(fixture.Store.Value.TriggerBackups);
+            var workers = ((ManagerProxy)fixture.Manager).Workers;
+            ((ManagerProxy)fixture.Manager).Workers = new[] { workers[0], workers[0] };
+            Assert.Throws<InvalidOperationException>(() => new TuneInScheduleMigration(fixture.Manager, fixture.Store).Run());
+            Assert.Throws<InvalidOperationException>(() => new TuneInChannelRefresh(fixture.Manager).Status());
+            Assert.Equal(0, fixture.Worker.Writes);
+        }
+
+        [Fact]
+        public void TriggerAndRollbackErrorsAreBothRetained()
+        {
+            var fixture = Fixture();
+            fixture.Worker.FailAllWrites = true;
+            var error = Assert.Throws<AggregateException>(() => new TuneInScheduleMigration(fixture.Manager, fixture.Store).Run());
+            Assert.Equal(2, error.InnerExceptions.Count);
+            Assert.All(error.InnerExceptions, failure => Assert.IsType<IOException>(failure));
+            Assert.True(fixture.Store.Value.Schedule.DisableGlobalRefreshTrigger);
+        }
+
+        [Fact]
+        public void MissingTaskAndTriggerWriteFailuresRetainLegacyBackupForRetry()
+        {
+            var fixture = Fixture();
+            fixture.Worker.FailNextWrite = true;
+            Assert.Throws<IOException>(() => new TuneInScheduleMigration(fixture.Manager, fixture.Store).Run());
+            Assert.True(fixture.Store.Value.Schedule.DisableGlobalRefreshTrigger);
+            Assert.Empty(fixture.Worker.Value);
+            ((ManagerProxy)fixture.Manager).Workers = Array.Empty<IScheduledTaskWorker>();
+            Assert.Throws<InvalidOperationException>(() => new TuneInScheduleMigration(fixture.Manager, fixture.Store).Run());
+            Assert.True(fixture.Store.Value.Schedule.DisableGlobalRefreshTrigger);
+        }
+
+        [Fact]
+        public void StatePersistenceFailureRollsBackHostScheduleAndAllowsRetry()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "tunein-migration-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
             try
             {
-                var fixture = Manager();
-                var schedules = new TuneInSchedules(fixture.Manager, new TuneInRefreshStateStore(directory));
-                Assert.Throws<IOException>(() => schedules.Apply(new TuneInScheduleSettings
-                { ManageIntervals = true, GlobalIntervalMinutes = 60, DisableGlobalRefreshTrigger = true }));
-                Assert.All(fixture.Workers, worker => Assert.Equal(0, worker.Writes));
-                Assert.Null(schedules.Read().AppliedUtc);
+                var fixture = Fixture();
+                var store = new TuneInRefreshStateStore(directory);
+                store.Value.Schedule.DisableGlobalRefreshTrigger = true;
+                Assert.Throws<IOException>(() => new TuneInScheduleMigration(fixture.Manager, store).Run());
+                Assert.True(store.Value.Schedule.DisableGlobalRefreshTrigger);
+                Assert.Empty(fixture.Worker.Value);
                 Assert.False(File.Exists(directory + ".tmp"));
             }
-            finally { Directory.Delete(directory, true); }
+            finally { Directory.Delete(directory); }
         }
 
         [Fact]
-        public void ScheduleBackupsAndRefreshHistorySurviveRestartOutsideConfiguration()
+        public void MigrationPersistsCompletionAndRetainsHistoricalGroupData()
         {
-            var directory = Path.Combine(Path.GetTempPath(), "tunein-schedules-" + Guid.NewGuid().ToString("N"));
+            var directory = Path.Combine(Path.GetTempPath(), "tunein-migration-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
             try
             {
+                var fixture = Fixture();
                 var path = Path.Combine(directory, "state.xml");
-                var fixture = Manager();
                 var store = new TuneInRefreshStateStore(path);
-                var schedules = new TuneInSchedules(fixture.Manager, store);
-                schedules.Apply(new SetTuneInSchedule { DisableGlobalRefreshTrigger = true });
-                var success = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
-                store.Record("talk", "Completed", success);
-                store.Record("talk", "Failed", success.AddMinutes(1));
+                store.Value.Schedule.DisableGlobalRefreshTrigger = true;
+                store.Record("music", "Failed", DateTime.UtcNow);
+                new TuneInScheduleMigration(fixture.Manager, store).Run();
                 var restarted = new TuneInRefreshStateStore(path);
-                var history = restarted.History("talk");
-                Assert.Equal(success, history.LastSuccessfulUtc);
-                Assert.Equal(success.AddMinutes(1), history.LastAttemptUtc);
-                Assert.Equal("Failed", history.LastAttemptState);
-                Assert.True(new TuneInSchedules(fixture.Manager, restarted).Read().DisableGlobalRefreshTrigger);
-                new TuneInSchedules(fixture.Manager, restarted).Apply(new TuneInScheduleSettings());
-                Assert.Equal("DailyTrigger", Assert.Single(fixture.Workers[8].Value).Type);
-                Assert.False(File.Exists(path + ".tmp"));
+                Assert.False(restarted.Value.Schedule.DisableGlobalRefreshTrigger);
+                Assert.Equal("Failed", restarted.History("music").LastAttemptState);
+                new TuneInScheduleMigration(fixture.Manager, restarted).Run();
+                Assert.Equal(1, fixture.Worker.Writes);
             }
-            finally { Directory.Delete(directory, true); }
+            finally { File.Delete(Path.Combine(directory, "state.xml")); Directory.Delete(directory); }
+        }
+
+        [Fact]
+        public void NativeStatusAndFailedReportAreReadOnlyBoundedAndAttemptSpecific()
+        {
+            var fixture = Fixture();
+            var diagnostics = new TuneInChannelRefresh(fixture.Manager);
+            Assert.Equal("NeverRun", diagnostics.Status().LastResult);
+            Assert.Null(diagnostics.Status().FailedAttempt);
+            Assert.Throws<InvalidOperationException>(() => diagnostics.Failure("old"));
+            fixture.Worker.State = TaskState.Running;
+            fixture.Worker.Progress = 35;
+            fixture.Worker.LastResult = new TaskResult
+            {
+                Status = TaskCompletionStatus.Failed,
+                StartTimeUtc = DateTimeOffset.UtcNow.AddMinutes(-2),
+                EndTimeUtc = DateTimeOffset.UtcNow,
+                ErrorMessage = "Provider failed",
+                LongErrorMessage = "<script>Not HTML</script>\n" + new string('x', 100000)
+            };
+            var status = diagnostics.Status();
+            Assert.Equal("Running", status.State);
+            Assert.Equal(35d, status.Progress);
+            Assert.Equal("Failed", status.LastResult);
+            var report = diagnostics.Failure(status.FailedAttempt);
+            Assert.Contains("Provider failed", report.Text);
+            Assert.Contains("<script>Not HTML</script>", report.Text);
+            Assert.True(report.Truncated);
+            Assert.True(report.Text.Length <= 64 * 1024);
+            fixture.Worker.LastResult.EndTimeUtc = fixture.Worker.LastResult.EndTimeUtc.AddSeconds(1);
+            Assert.Throws<InvalidOperationException>(() => diagnostics.Failure(status.FailedAttempt));
+            fixture.Worker.LastResult.Status = TaskCompletionStatus.Completed;
+            Assert.Throws<InvalidOperationException>(() => diagnostics.Failure(diagnostics.Status().FailedAttempt));
+            Assert.Equal(0, fixture.Worker.Writes);
+        }
+
+        [Fact]
+        public void FailureWithoutDetailsIsExplicitAndMissingTaskIsNotReportedAsSuccess()
+        {
+            var fixture = Fixture();
+            fixture.Worker.LastResult = new TaskResult { Status = TaskCompletionStatus.Failed };
+            var diagnostics = new TuneInChannelRefresh(fixture.Manager);
+            Assert.Contains("without error details", diagnostics.Failure(diagnostics.Status().FailedAttempt).Text);
+            ((ManagerProxy)fixture.Manager).Workers = Array.Empty<IScheduledTaskWorker>();
+            Assert.Throws<InvalidOperationException>(() => diagnostics.Status());
+        }
+
+        [Fact]
+        public void OversizedShortAndLongErrorsRemainBoundedWithoutDroppingTruncationNotice()
+        {
+            var fixture = Fixture();
+            fixture.Worker.LastResult = new TaskResult
+            {
+                Status = TaskCompletionStatus.Failed,
+                ErrorMessage = new string('s', 100000),
+                LongErrorMessage = new string('l', 100000)
+            };
+            var diagnostics = new TuneInChannelRefresh(fixture.Manager);
+            var report = diagnostics.Failure(diagnostics.Status().FailedAttempt);
+            Assert.Equal(64 * 1024, report.Text.Length);
+            Assert.True(report.Truncated);
+            Assert.Throws<InvalidOperationException>(() => diagnostics.Failure(null));
         }
 
         public class ManagerProxy : DispatchProxy
@@ -163,16 +233,21 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             public TaskTriggerInfo[] Value { get; set; }
             public int Writes { get; set; }
             public bool FailNextWrite { get; set; }
+            public bool FailAllWrites { get; set; }
             public TaskResult LastResult { get; set; }
+            public TaskState State { get; set; }
+            public double? Progress { get; set; }
             protected override object Invoke(MethodInfo method, object[] args)
             {
                 if (method.Name == "get_ScheduledTask") return Task;
                 if (method.Name == "get_LastExecutionResult") return LastResult;
+                if (method.Name == "get_State") return State;
+                if (method.Name == "get_CurrentProgress") return Progress;
                 if (method.Name == "get_Triggers") return Value;
                 if (method.Name == "set_Triggers")
                 {
                     Writes++;
-                    if (FailNextWrite) { FailNextWrite = false; throw new IOException("Synthetic trigger write failure"); }
+                    if (FailNextWrite || FailAllWrites) { FailNextWrite = false; throw new IOException("Synthetic trigger write failure"); }
                     Value = (TaskTriggerInfo[])args[0];
                     return null;
                 }
@@ -180,20 +255,15 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             }
         }
 
-        private class FakeTask : IScheduledTask
+        private sealed class NativeRefreshTask : IScheduledTask
         {
-            internal FakeTask(string key) { Key = key; }
-            public string Key { get; }
-            public string Name => Key;
-            public string Description => Key;
+            public string Key => "RefreshInternetChannels";
+            public string Name => "Refresh Internet Channels";
+            public string Description => Name;
             public string Category => "Internet Channels";
-            public IEnumerable<TaskTriggerInfo> GetDefaultTriggers() => Array.Empty<TaskTriggerInfo>();
-            public Task Execute(CancellationToken token, IProgress<double> progress) => Task.CompletedTask;
-        }
-
-        private sealed class RefreshChannelsScheduledTask : FakeTask
-        {
-            internal RefreshChannelsScheduledTask() : base("RefreshInternetChannels") { }
+            public IEnumerable<TaskTriggerInfo> GetDefaultTriggers() => new[] { new TaskTriggerInfo { Type = "WeeklyTrigger" } };
+            public Task Execute(CancellationToken token, IProgress<double> progress) =>
+                throw new InvalidOperationException("Status and migration must never start a refresh.");
         }
     }
 }

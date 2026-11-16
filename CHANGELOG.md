@@ -7,6 +7,45 @@ features explicitly removed below are not promises of current functionality.
 Superseded prerelease download records/assets are retired after the replacement
 release is verified; original source tags remain unchanged for provenance.
 
+## 1.3.0-fork.12 - native refresh task integration
+
+- Remove all eight Refresh TuneIn - ... scheduled tasks and their legacy
+  start/cancel/status/schedule APIs. Use Emby's built-in Refresh Internet Channels.
+- Remove plugin schedule suppression. On upgrade, restore a recorded disabled
+  global schedule from its backup or host defaults, preserving later administrator
+  edits and leaving never-managed schedules unchanged.
+- Show native task state/progress/last result in Settings, with manual status
+  update and explicit retrieval of the latest failed task's stored error report.
+  Keep diagnostics administrator-only, bounded and plain-text; no full server-log
+  access, background polling, provider queries or fabricated task results.
+- Retain fork.11's pre-roll handoff and live-provider compatibility fixes.
+  The reported disappearance/recreation of the channel after replacing the DLL
+  remains under investigation pending an upgrade retest and sanitized startup log;
+  this release does not claim to fix it.
+
+## 1.3.0-fork.11 - live-provider compatibility
+
+- Fix live-opening failures after a successful pre-roll when radio providers repeat
+  advisory ICY headers, use LF-only HTTP response lines, or send legacy
+  `Transfer-Encoding: identity`. Keep catalogue parsing strict, chunk framing
+  strict and duplicate framing/decoding/redirect headers rejected.
+- Add full-provider pre-roll-to-live tests for the four stations identified in
+  runtime logs, alongside deterministic protocol/sequence regressions.
+
+## 1.3.0-fork.10 - playback handoff
+
+- Deprecate all earlier fork versions for the pre-roll-to-live playback defect.
+  Some stations without pre-roll can still work; historical source/assets remain
+  for provenance, not as recommended playback builds.
+- Preserve TuneIn's recognized required pre-roll, then hand off to one working
+  live-stream alternative instead of ending at the ad's EOF. Keep stations without
+  pre-roll on their existing compressed passthrough path.
+- Use the host-configured, pipe-only FFmpeg decoder for pre-roll sessions and
+  serve one fixed PCM/WAV format across differing ad/live codecs. Retain protected
+  network resolution, bounded opening, cancellation and scoped configuration.
+- Add deterministic handoff/fallback/error/cleanup coverage and opt-in actual
+  MP3-to-AAC decoder/process regressions. Real Emby runtime verification is pending.
+
 ## 1.3.0-fork.9 - consolidated release
 
 - Original futuristic 544x306 library Primary/Thumb/Backdrop artwork, without a

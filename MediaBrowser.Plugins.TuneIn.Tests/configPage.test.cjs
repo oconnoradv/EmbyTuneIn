@@ -32,12 +32,13 @@ class Element {
 function harness(config) {
     const view = new Element('view');
     for (const name of ['form', 'txtUsername', 'txtLatLon', 'useCoordinates', 'configurationCompleted',
-        'categories', 'selectors', 'status']) {
+        'categories', 'selectors', 'status', 'channelRefreshUpdate', 'channelRefreshFailure',
+        'channelRefreshStatus', 'channelRefreshMessage', 'channelRefreshLog']) {
         const element = new Element(name === 'form' ? 'form' : 'div');
         element.className = name;
         view.appendChild(element);
     }
-    const calls = { catalogue: [], saves: [], configReads: [], configWrites: [], upgrades: [] };
+    const calls = { catalogue: [], saves: [], configReads: [], configWrites: [], upgrades: [], diagnostics: [] };
     let View;
     function BaseView(element) { this.view = element; }
     BaseView.prototype.onResume = function () { return this.view.listeners.viewshow(); };
@@ -47,6 +48,10 @@ function harness(config) {
         getPluginConfiguration: async id => { calls.configReads.push(id); return JSON.parse(JSON.stringify(config)); },
         getUrl: (route, query) => ({ route, query }),
         ajax: async request => {
+            if (request.url.route === 'TuneInFork/ChannelRefresh') {
+                calls.diagnostics.push(request);
+                return { State: 'Idle', LastResult: 'NeverRun' };
+            }
             assert.equal(request.url.route, 'TuneInFork/Selectors');
             calls.catalogue.push(request);
             return { Items: [{ Id: 'l1', Name: '<img src=x onerror=alert(1)>',
@@ -86,20 +91,106 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 const html = () => fs.readFileSync(path.join(__dirname, '..', 'MediaBrowser.Plugins.TuneIn',
     'Configuration', 'configPage.html'), 'utf8');
 
-test('settings contain no refresh or interval controls and never call their APIs on resume or save', async () => {
+test('settings expose native read-only status without scheduling controls or automatic log retrieval', async () => {
     assert.doesNotMatch(html(), /data-section="(?:schedules|refresh)"|scheduleControls|refreshGroups/);
-    assert.match(html(), /Scheduled Tasks \/ Internet Channels/);
+    assert.match(html(), /built-in Refresh Internet Channels task under Scheduled Tasks/);
     const app = harness({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true });
     const requests = [];
-    app.ApiClient.ajax = async request => { requests.push(request); throw new Error('Unexpected request'); };
+    app.ApiClient.ajax = async request => {
+        requests.push(request);
+        assert.equal(request.type, 'GET');
+        assert.equal(request.url.route, 'TuneInFork/ChannelRefresh');
+        return { State: 'Idle', LastResult: 'NeverRun' };
+    };
     await app.instance.onResume();
     app.view.querySelector('form').listeners.submit({ preventDefault() {} });
     await settle();
     app.instance.onPause();
     await app.instance.onResume();
-    assert.equal(requests.length, 0);
+    assert.equal(requests.length, 2);
     assert.equal(app.calls.saves.length, 1);
     assert.equal(app.view.all().some(element => /^Refresh (?:Local Radio|Music|By Language|By Location|Talk|Sports|Podcasts|My Favorites)$/.test(element.textContent)), false);
+});
+
+test('failed native task status enables explicit report retrieval and renders error text safely', async () => {
+    const app = harness({});
+    const requests = [];
+    app.ApiClient.ajax = async request => {
+        requests.push(request);
+        if (request.url.route === 'TuneInFork/ChannelRefresh')
+            return { State: 'Running', Progress: 35, LastResult: 'Failed', FailedAttempt: 'attempt1', FinishedUtc: '2026-11-16T17:00:00Z' };
+        assert.equal(request.url.route, 'TuneInFork/ChannelRefresh/Failure');
+        assert.equal(request.url.query.Attempt, 'attempt1');
+        return { Attempt: 'attempt1', Text: '<script>private error</script>', Truncated: true };
+    };
+    await app.instance.onResume();
+    assert.equal(requests.length, 1);
+    assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Running.*Failed.*35%/);
+    const button = app.view.querySelector('.channelRefreshFailure');
+    assert.equal(button.disabled, false);
+    await button.listeners.click();
+    assert.equal(requests.length, 2);
+    assert.equal(app.view.querySelector('.channelRefreshLog').textContent, '<script>private error</script>');
+    assert.equal(app.view.querySelector('.channelRefreshLog').children.length, 0);
+    assert.equal(app.view.querySelector('.channelRefreshLog').hidden, false);
+    assert.match(app.view.querySelector('.channelRefreshMessage').textContent, /limited/);
+});
+
+test('never-run and successful task statuses disable failed-log retrieval', async () => {
+    for (const result of ['NeverRun', 'Completed', 'Cancelled', 'Aborted']) {
+        const app = harness({});
+        app.ApiClient.ajax = async () => ({ State: 'Idle', LastResult: result });
+        await app.instance.onResume();
+        assert.equal(app.view.querySelector('.channelRefreshFailure').disabled, true);
+        assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Task: Idle/);
+    }
+});
+
+test('status failures and malformed responses show errors and allow retry without claiming success', async () => {
+    const app = harness({});
+    app.ApiClient.ajax = async () => { throw new Error('Denied'); };
+    await app.instance.onResume();
+    assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Unable to load/);
+    assert.equal(app.view.querySelector('.channelRefreshUpdate').disabled, false);
+    app.ApiClient.ajax = async () => ({ State: 'Idle', LastResult: 'Failed' });
+    await app.view.querySelector('.channelRefreshUpdate').listeners.click();
+    assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Unable to load/);
+    assert.equal(app.view.querySelector('.channelRefreshFailure').disabled, true);
+    app.ApiClient.ajax = async () => ({ State: 'Idle', LastResult: 'Completed' });
+    await app.view.querySelector('.channelRefreshUpdate').listeners.click();
+    assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Completed/);
+});
+
+test('changed or unavailable failed report clears stale content and requests a fresh status', async () => {
+    const app = harness({});
+    app.ApiClient.ajax = async () => ({ State: 'Idle', LastResult: 'Failed', FailedAttempt: 'old' });
+    await app.instance.onResume();
+    app.ApiClient.ajax = async () => ({ Attempt: 'new', Text: 'Wrong attempt' });
+    await app.view.querySelector('.channelRefreshFailure').listeners.click();
+    assert.match(app.view.querySelector('.channelRefreshMessage').textContent, /Update status/);
+    assert.equal(app.view.querySelector('.channelRefreshLog').textContent, '');
+    assert.equal(app.view.querySelector('.channelRefreshLog').hidden, true);
+    assert.equal(app.view.querySelector('.channelRefreshFailure').disabled, true);
+});
+
+test('late native status and report responses cannot overwrite a hidden or reopened view', async () => {
+    const app = harness({});
+    let respond;
+    app.ApiClient.ajax = () => new Promise(resolve => { respond = resolve; });
+    const pending = app.instance.onResume();
+    await settle();
+    app.instance.onPause();
+    respond({ State: 'Idle', LastResult: 'Failed', FailedAttempt: 'old' });
+    await pending;
+    assert.equal(app.instance.failedAttempt, null);
+    app.ApiClient.ajax = async () => ({ State: 'Idle', LastResult: 'Failed', FailedAttempt: 'current' });
+    await app.instance.onResume();
+    app.ApiClient.ajax = () => new Promise(resolve => { respond = resolve; });
+    const report = app.view.querySelector('.channelRefreshFailure').listeners.click();
+    app.instance.onPause();
+    respond({ Attempt: 'current', Text: 'Old report' });
+    await report;
+    assert.equal(app.view.querySelector('.channelRefreshLog').textContent, '');
 });
 
 test('settings preserve native view hooks and labeled inputs', async () => {

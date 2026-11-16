@@ -1,13 +1,14 @@
-<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/tuneinforkjs130fork9" data-title="TuneIn">
+<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/tuneinforkjs130fork12" data-title="TuneIn">
     <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
         <form class="auto-center">
             <style>
                 .tuneInSettingsSection { margin: 1em 0; clear: both; }
                 .tuneInSettingsSection > summary { cursor: pointer; padding: .75em 0; font-size: 1.17em; font-weight: bold; }
                 .tuneInSettingsSection[open] > summary { margin-bottom: .5em; }
+                .channelRefreshLog { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24em; overflow-y: auto; }
             </style>
-            <h2>TuneIn Fork 1.3.0-fork.9</h2>
-            <p>Expand a heading to view its settings. Configure categories and selections, then save and enable browsing. New and upgraded installations do not automatically contact TuneIn.</p>
+            <h2>TuneIn Fork 1.3.0-fork.12</h2>
+            <p>Expand a heading to view its settings. Configure categories and selections, then save and enable browsing. Saving configuration does not start a catalogue crawl.</p>
             <details class="tuneInSettingsSection" data-section="setup" open>
                 <summary>Setup and account</summary>
                 <label class="checkboxContainer emby-checkbox-label">
@@ -43,7 +44,16 @@
             <p class="status" role="status" aria-live="polite"></p>
             <p>Disabled categories or categories with no required selections stay unavailable. Saving invalidates old navigation and stops applicable in-flight requests. Return to the channel root after saving or restarting Emby.</p>
             <button is="emby-button" type="submit" class="raised button-submit block"><span>Save configuration</span></button>
-            <p>Refresh and schedule individual groups under Scheduled Tasks / Internet Channels. Installing, updating or saving this plugin does not request the global Refresh Internet Channels task. Existing server triggers remain under your control.</p>
+            <section aria-labelledby="channelRefreshHeading">
+                <h3 id="channelRefreshHeading">Refresh Internet Channels</h3>
+                <p>Run or schedule Emby's built-in Refresh Internet Channels task under Scheduled Tasks. It refreshes all channel providers and honors your TuneIn selections. This plugin no longer adds per-group tasks or disables the built-in schedule.</p>
+                <p class="channelRefreshStatus" role="status" aria-live="polite">Refresh status has not been loaded.</p>
+                <button is="emby-button" type="button" class="raised channelRefreshUpdate"><span>Update status</span></button>
+                <button is="emby-button" type="button" class="raised channelRefreshFailure" disabled><span>Retrieve failed refresh log</span></button>
+                <p class="channelRefreshMessage" role="status" aria-live="polite"></p>
+                <p>The log button retrieves Emby's latest failed task report, not the full server log. A later task result replaces it. Reports may contain private server details; redact them before sharing.</p>
+                <pre class="channelRefreshLog" tabindex="0" aria-label="Failed Internet Channels refresh report" hidden></pre>
+            </section>
         </form>
     </div>
 </div>

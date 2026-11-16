@@ -475,6 +475,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 DispatchProxy.Create<ILogger, QuietLoggerProxy>(), directory);
             var source = Assert.Single(await channel.GetChannelItemMediaInfo(id, CancellationToken.None));
             Assert.StartsWith("http://127.0.0.1:8096/emby/TuneInFork/Relay/", source.Path);
+            Assert.EndsWith("?playback=2", source.Path);
             Assert.False(source.SupportsDirectPlay);
             Assert.False(source.SupportsDirectStream);
             Assert.True(source.SupportsTranscoding);

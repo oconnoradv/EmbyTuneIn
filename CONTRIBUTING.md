@@ -7,7 +7,7 @@ No upstream pull request or merge is created by building or publishing this fork
 ## Versioning and independent identity
 
 Upstream currently declares assembly/file version `1.2.8.0`. The fork's new
-configuration/refresh functionality uses SemVer `1.3.0-fork.9`: the prerelease
+configuration/refresh functionality uses SemVer `1.3.0-fork.12`: the prerelease
 suffix identifies a fork test candidate, not an official upstream release.
 The `.csproj` `<Version>` is the source of truth. The SDK derives assembly/file
 version `1.3.0.0`; informational version includes the exact source commit.
@@ -59,6 +59,24 @@ Do not depend on `IHasResultFactory` property population: an unset factory cause
 relay HTTP 500 responses. Transfer audio-stream ownership to the host response
 only on success; release it if response construction fails.
 
+Pre-roll sessions use the host's `IFfmpegManager` encoder path and pipe-only audio
+decoding. Keep the single fixed PCM/WAV output format for both probing and playback;
+do not concatenate MP3/AAC or turn live alternatives into a sequential queue.
+The optional real-codec/process regression tests require
+`TUNEIN_TEST_FFMPEG` to point to a local FFmpeg executable (including MP3/AAC and
+the test tone generator). Run them alongside the deterministic handoff tests:
+
+```powershell
+dotnet test .\MediaBrowser.Plugins.TuneIn.Tests --filter "(FullyQualifiedName~PlaybackTests|FullyQualifiedName~TransportTests)&Category!=Live"
+```
+
+Without that variable the real-codec tests are explicitly skipped, not counted
+as codec validation. Passing them does not establish real Emby runtime behavior.
+With that variable set, `dotnet test .\MediaBrowser.Plugins.TuneIn.Tests --filter
+"FullyQualifiedName~LiveProviderPreRollHandsOff"` explicitly contacts four provider
+stations through the pinned transport and checks decoded audio after the pre-roll.
+These Live tests depend on provider availability and may consume required ads.
+
 Item artwork URLs must stay on the server's loopback endpoint. Keep station logo
 references separately signed so artwork updates cannot change playback/item IDs.
 Never hand raw provider image URLs to Emby's downloader or the client.
@@ -70,19 +88,21 @@ results before committing. The root library assets are an original futuristic
 544x306 landscape design without a FORK subtitle; preserve that exact size.
 Do not alter station logos when migrating bundled root/group artwork.
 
-Keep refresh history and schedule/trigger backups in the independent state file,
-not the signed station configuration. Schedule changes must be administrator-only,
-explicitly applied and reversible; never change the built-in all-provider task's
-triggers on startup or ordinary configuration Save. Its read-only description and
-native execution result must not be modified through reflection or fabricated.
-The settings page has no refresh/interval sections or polling. Native group tasks
-remain the primary interface; compatibility refresh APIs must execute the real
-native task via `ITaskManager`, so native Last ran remains genuine.
+Keep legacy refresh history and schedule/trigger backups in the independent state
+file, not the signed station configuration. Do not reintroduce per-group task
+registrations, schedule-suppression settings or mutation APIs. The one-time startup
+migration may undo recorded plugin suppression of the exact built-in task, restoring
+saved/native triggers only while its schedule is empty and preserving administrator
+edits. Failed migration must retain state, attempt rollback and log errors.
+Ordinary configuration Save must never change schedules. The built-in task's
+read-only description and native result must not be modified or fabricated.
+Settings reads native status only on open/manual update, without polling. Retrieving
+the native failed-task report requires an explicit click and administrator access;
+bound it, reject stale attempts and render private error details as plain text.
 Do not implement `IHasChangeEvent` or queue the global task on install/update/Save:
 configuration invalidation must stay local. Existing host triggers are independent.
-Native channel import preserves existing primary images. Folder artwork upgrades
-must update/persist the scoped library items' primary image references, retain
-stable playback IDs, and use an artwork revision marker to avoid repeated resets.
+Native channel import preserves existing primary images. Preserve already-migrated
+folder artwork, custom images and stable playback IDs when removing group workers.
 
 ## Upstream review checklist
 
@@ -109,10 +129,10 @@ as an official upstream replacement:
   during discovery; no automatic catalogue crawl or setup playback.
 - Protected local relay and transcoding instead of handing untrusted stream URLs
   directly to Emby; supported/unsupported formats and network policies are documented.
-- Eight Internet Channels tasks and compatible administrator APIs populate configured sections
-  via the host's eight-level traversal, with on-demand scoped requests and explicit
-  request/time limits. Native registration, cancellation and actual station import
-  must be exercised on the real server before acceptance.
+- Built-in Refresh Internet Channels scheduling, removal of plugin-specific workers,
+  one-time undo of legacy schedule suppression, and administrator-only native task
+  diagnostics. Task-list removal, restoration, authorization and actual station
+  import must be exercised on the real server before acceptance.
 
 Do not submit or advertise the PR as runtime-verified until the administrator has
 completed the relevant Emby manual tests. See README.md and SECURITY.md.

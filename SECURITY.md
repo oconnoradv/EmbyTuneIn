@@ -8,40 +8,36 @@ use Emby's `Authenticated(Roles = "Admin")`; configuration writes use Emby's bui
 administrator configuration API, not a new unauthenticated/CSRF-exempt write route.
 Actual host authorization and browser integration require manual Emby testing.
 
-Per-group refresh start/cancel routes are POST-only and all refresh/status routes
-require `Authenticated(Roles = "Admin")`, without a local authentication bypass.
-They use the host ApiClient authentication and host CSRF policy, accept only a fixed
-category and an opaque current job ID, and never accept URLs, coordinates or custom
-request parameters. Verify real-host non-admin/anonymous and cross-origin behavior
-in manual tests; SDK attributes alone are not proof of browser CSRF enforcement.
-Status polling performs no provider requests. Jobs are bounded to eight category
-slots, one active job/category, enabled saved scopes, 1000 catalogue requests and a 20-minute limit;
-configuration/category invalidation cancels applicable requests. The response cache
-is capped at 128 pages/8 MiB serialized XML and remains protected by the same schema.
-Native scoped Emby synchronization fetches selected descendants on demand to the
-same eight-level limit as the host scheduled refresh. Cross-group or unfiltered
-selection-hub escapes are rejected; failures swallowed by the host are remembered
-and rethrown at the job boundary. Missing saved-node enumeration is not success.
-The eight dedicated native tasks have no default triggers and reuse the same gates,
-scope, cancellation, limits and failure reporting; a disabled group never queries.
-Compatibility refresh APIs execute those same native workers so host task history
-is genuine. The settings page has no refresh/interval controls or status polling.
-A pending launch cannot contact TuneIn before native execution starts;
-launch failures/no-ops and pre-start cancellation cannot claim a populated section.
-Status exposes response codes/counts/states, not request URLs or configuration secrets.
+The plugin no longer registers per-group scheduled tasks or exposes their legacy
+refresh/start/cancel/schedule APIs. Administrators run, stop and schedule Emby's
+built-in Refresh Internet Channels task through the native host UI. All TuneIn
+catalogue operations still enforce enabled saved scopes, signed navigation,
+cross-group/selection-hub restrictions and configuration cancellation. The response
+cache remains bounded to 128 pages/8 MiB serialized XML.
 
-Schedule GET/POST endpoints also require an authenticated administrator. Applying
-shared/per-group intervals or disabling Emby's all-provider refresh triggers is
-explicit opt-in; startup and ordinary configuration Save never change triggers.
-Only fixed task keys are managed. Integer intervals and unique category overrides
-are validated before mutation; original triggers are persisted first and restored
-when management is released. Trigger-write errors attempt rollback and remain
-visible failures. Verify actual host authorization/CSRF and trigger persistence
-manually, especially because the built-in task affects every channel provider.
-Refresh history and schedule/trigger backups use a separate private data file;
-bounded XML loading prohibits DTD/entities. They do not change signed station
-configuration or expose account/coordinate values. Protect and back up the state
-file until managed triggers have been restored; active counters remain in memory.
+Read-only `/TuneInFork/ChannelRefresh` and `/TuneInFork/ChannelRefresh/Failure` GET
+routes require `Authenticated(Roles = "Admin")`, without a local bypass. They use
+the host ApiClient authentication and never start/cancel tasks or query providers.
+The failure route accepts only an attempt identity, not a path or URL. It returns
+the latest native failed task's stored error details, capped at 65,536 characters,
+only while that exact result remains current. It does not read arbitrary server
+logs or invent task history. Error details may contain private paths, URLs or
+account information: keep reports private and redact before sharing. The UI
+renders them with `textContent`, never as HTML; retrieval requires an explicit
+click. Status is read on view-open/manual update, without background polling.
+Verify anonymous/non-admin rejection and browser behavior on a real Emby server.
+
+A one-time startup migration undoes only recorded legacy plugin suppression of
+the exact `RefreshInternetChannels` task. It restores saved triggers (or native
+defaults when suppression exists without a backup) only if the task still has no
+triggers. A nonempty administrator schedule is preserved; never-managed schedules
+are untouched. Legacy suppression state is cleared after successful persistence.
+Trigger/persistence failures attempt rollback, log the failure and retain state
+for retry; rollback errors are not hidden. Ordinary Save never changes schedules.
+This intentionally restores the built-in all-provider scheduler's independence,
+but does not explicitly queue a refresh. Verify task registration order and trigger
+persistence manually. Legacy history/backups remain in the private separate state
+file; bounded XML loading prohibits DTD/entities. Protect and back up that file.
 
 Navigation identifiers are bounded, signed payloads: HMAC-SHA256 binds category,
 selection ancestry/navigation parameters and the entire configuration fingerprint.
@@ -73,12 +69,9 @@ Missing/rejected logo metadata uses bundled group artwork, with rejected
 destinations logged without URLs. Image retrieval is lazy and does not query the
 station catalogue or resolve/play a stream; explicit refresh populates image URLs
 for existing items. Emby's image cache/rendering still needs real-server verification.
-Group refresh also migrates obsolete stored primary image references on the chosen
-section's folders. Every folder must resolve through current signed navigation and
-belong to that group; stations and other groups are not modified. Only the same
-loopback artwork URLs are written. No provider URLs are downloaded by this
-migration, no arbitrary image files are deleted, and the per-folder revision marker
-avoids overwriting subsequent custom images on every refresh.
+Existing custom images and artwork already migrated by earlier group tasks remain
+unchanged. Removing those workers introduces no replacement filesystem/image
+migration; ordinary host channel import/image handling applies.
 
 The relay's HTTP result factory is constructor-injected, not assumed to be populated
 through a service property. A response-construction failure releases the opened
@@ -92,9 +85,25 @@ re-resolution at connection time. Loopback, private, link-local, multicast,
 carrier-grade NAT, mapped IPv6, documentation and transition ranges are rejected.
 Redirects are bounded and HTTPS downgrades are rejected. HTTP headers, metadata,
 playlist sizes and nesting are bounded; API faults inside HTTP 200 are errors.
+Radio response status/header lines may end in LF instead of CRLF for legacy
+provider compatibility. Repeated advisory ICY/CORS/cache headers are merged, but
+duplicate Content-Length, Transfer-Encoding, Content-Encoding, Content-Type and
+Location fields are rejected, as are invalid header names/control characters.
+Legacy radio `Transfer-Encoding: identity` is close-delimited; any transfer
+encoding combined with Content-Length is rejected. Catalogue parsing and chunk
+framing remain strict.
 No unrestricted stream URLs reach Emby's HTTP client/transcoder. Relay access
 requires a server-local socket, with Emby's local-only authentication attribute as
 an additional host control. In-flight requests are cancelled after settings changes.
+
+Recognized provider pre-roll sequences are normalized with the host's configured
+FFmpeg executable. FFmpeg receives only piped bytes from the same validated
+transport, with its input protocol whitelist restricted to `pipe`; remote URLs
+are never passed to it. Only the exact known HTTPS pre-roll host/path has sequential
+semantics; all live URLs retain bounded fallback resolution. Decoder diagnostics
+are drained without retaining provider metadata. Decode/transport failures are
+errors, not permission to skip required pre-roll. Probe disposal and cancellation
+terminate the decoder and close its upstream response.
 
 TLS 1.2 is required. Online CRL/OCSP revocation is not mandatory, matching ordinary
 .NET client behavior. The local network could not reach those services; their
