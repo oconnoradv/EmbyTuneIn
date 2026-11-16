@@ -59,6 +59,20 @@ Do not depend on `IHasResultFactory` property population: an unset factory cause
 relay HTTP 500 responses. Transfer audio-stream ownership to the host response
 only on success; release it if response construction fails.
 
+Pre-roll sessions use the host's `IFfmpegManager` encoder path and pipe-only audio
+decoding. Keep the single fixed PCM/WAV output format for both probing and playback;
+do not concatenate MP3/AAC or turn live alternatives into a sequential queue.
+The optional real-codec/process regression tests require
+`TUNEIN_TEST_FFMPEG` to point to a local FFmpeg executable (including MP3/AAC and
+the test tone generator). Run them alongside the deterministic handoff tests:
+
+```powershell
+dotnet test .\MediaBrowser.Plugins.TuneIn.Tests --filter "(FullyQualifiedName~PlaybackTests|FullyQualifiedName~TransportTests)&Category!=Live"
+```
+
+Without that variable the real-codec tests are explicitly skipped, not counted
+as codec validation. Passing them does not establish real Emby runtime behavior.
+
 Item artwork URLs must stay on the server's loopback endpoint. Keep station logo
 references separately signed so artwork updates cannot change playback/item IDs.
 Never hand raw provider image URLs to Emby's downloader or the client.

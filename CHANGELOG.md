@@ -7,6 +7,17 @@ features explicitly removed below are not promises of current functionality.
 Superseded prerelease download records/assets are retired after the replacement
 release is verified; original source tags remain unchanged for provenance.
 
+## Unreleased
+
+- Preserve TuneIn's recognized required pre-roll, then hand off to one working
+  live-stream alternative instead of ending at the ad's EOF. Keep stations without
+  pre-roll on their existing compressed passthrough path.
+- Use the host-configured, pipe-only FFmpeg decoder for pre-roll sessions and
+  serve one fixed PCM/WAV format across differing ad/live codecs. Retain protected
+  network resolution, bounded opening, cancellation and scoped configuration.
+- Add deterministic handoff/fallback/error/cleanup coverage and opt-in actual
+  MP3-to-AAC decoder/process regressions. Real Emby runtime verification is pending.
+
 ## 1.3.0-fork.9 - consolidated release
 
 - Original futuristic 544x306 library Primary/Thumb/Backdrop artwork, without a

@@ -413,7 +413,8 @@ namespace MediaBrowser.Plugins.TuneIn
             logger.Debug("Preparing protected TuneIn radio relay.");
             token.ThrowIfCancellationRequested();
             var local = host.GetLocalApiUrl(System.Net.IPAddress.Loopback);
-            var path = local.TrimEnd('/') + "/TuneInFork/Relay/" + id;
+            // Change the source identity so an earlier ad-only MP3 probe is not reused for PCM playback.
+            var path = local.TrimEnd('/') + "/TuneInFork/Relay/" + id + "?playback=2";
             var source = new ChannelMediaInfo { Path = path, SupportsDirectPlay = false }.ToMediaSource();
             source.SupportsDirectStream = false;
             source.SupportsTranscoding = true;

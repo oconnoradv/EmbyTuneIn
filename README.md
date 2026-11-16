@@ -262,7 +262,28 @@ use more CPU and requires the server's normal transcoding capability.
 MP3/AAC and bounded M3U/PLS playlist resolution are supported, including advertised
 alternatives (at most 8 entries per playlist, 16 URL openings and 4 playlist levels,
 within a 30-second opening budget). Alternative failures are logged without URLs;
-security-policy rejections fail closed. **HLS, HTTPS-to-HTTP
+security-policy rejections fail closed.
+
+TuneIn's recognized leading `multi_bump_sonic_pre_pre.mp3` asset on its HTTPS
+`tunein-ondemand.cdnstream1.com` host is **required pre-roll**, not a live-stream
+alternative. The relay plays it through, then opens one working live alternative.
+It never skips the ad, repeats it on a live opening failure, or plays all station
+alternatives in sequence. For these sessions only, the host-configured FFmpeg
+decodes each input separately to 48 kHz stereo 16-bit PCM behind one streaming
+WAV header. This keeps probing and playback consistent across MP3-to-AAC (or other
+sample-rate/channel) transitions without concatenating incompatible compressed
+bytes. It adds a decoder process and loopback PCM traffic; stations without this
+pre-roll, such as KEXP, keep the existing compressed passthrough relay.
+The relay source URL is revisioned to invalidate old ad-only probe identities;
+signed station/item IDs and saved selections are unchanged.
+Each deferred opening has the same 30-second/playlist limits. Ad errors fail
+explicitly rather than bypassing required playback; live EOF ends the stream
+rather than starting another alternative. Cancellation, configuration changes and
+abandoned probes release the upstream connection and decoder. Unknown provider
+ad formats are not guessed from arbitrary filenames. Real Emby probe-to-playback
+handoff and sustained playback still require the manual checks below.
+
+**HLS, HTTPS-to-HTTP
 redirect downgrades, private-network radio services, proxy-only networks and malformed
 or incompatible streams are rejected**. The initial public radio URL can be HTTP
 when supplied by the trusted HTTPS TuneIn catalogue, because many stations still
@@ -312,6 +333,7 @@ regression, dependency/advisory, SBOM and checksum evidence instead. Please veri
 | Coordinates and multiple saved local areas | Correct local stations, duplicate station IDs collapsed; invalid/NaN/out-of-range coordinates rejected. |
 | Navigate another category | No local coordinates/account information sent to unrelated requests. |
 | Playback MP3/AAC and PLS/M3U | Emby plays via its local relay/transcoder; case-sensitive paths work. HLS/private/downgrade targets fail explicitly. |
+| Required pre-roll to live music | Test asia DREAM radio / Big B Radio past the complete ad and into sustained music, plus KEXP without pre-roll. MP3-to-AAC transitions must retain one PCM/WAV probe format. Stop during the ad and music; no plugin decoder/upstream connection should remain. Failed ads must not silently skip to music; live alternatives remain fallbacks, not a queue. |
 | Save during browsing/playback | Old scoped IDs and applicable in-flight operations are invalidated; reopen from root. |
 | Restart with unchanged configuration | Signed IDs remain valid; channel refresh/reopening works without manually editing URLs. |
 

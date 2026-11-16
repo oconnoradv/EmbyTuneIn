@@ -691,7 +691,8 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         public async Task<SafeResponse> OpenStreamAsync(ConfigurationSnapshot snapshot, NavigationEntry entry,
-            CancellationToken token, Action<string> warning)
+            CancellationToken token, Action<string> warning,
+            Func<SafeResponse, CancellationToken, Stream> decode = null)
         {
             if (!Allowed(snapshot, entry) || entry.StationId == null
                 || !Regex.IsMatch(entry.StationId, @"^[spt][1-9][0-9]{0,9}$"))
@@ -709,52 +710,87 @@ namespace MediaBrowser.Plugins.TuneIn
                     var text = Encoding.UTF8.GetString(await ReadBoundedAsync(response.Body, 256 * 1024, timeout.Token).ConfigureAwait(false));
                     var urls = PlaylistUrls(text).Take(8).ToList();
                     if (urls.Count == 0) throw new InvalidDataException("TuneIn returned no playable stream.");
-                    // Resolve playlists through the same pinned-address transport, never hand remote URLs to Emby.
-                    var pending = new Queue<KeyValuePair<string, int>>(urls.Select(url => new KeyValuePair<string, int>(url, 0)));
-                    Exception lastFailure = null;
-                    for (var attempts = 0; attempts < 16 && pending.Count > 0; attempts++)
-                    {
-                        var candidate = pending.Dequeue();
-                        SafeResponse stream = null;
-                        try
-                        {
-                            stream = await transport.OpenAsync(candidate.Key, false, timeout.Token).ConfigureAwait(false);
-                            var extension = Path.GetExtension(new Uri(candidate.Key).AbsolutePath);
-                            if (extension.Equals(".m3u8", StringComparison.OrdinalIgnoreCase)
-                                || stream.ContentType.IndexOf("mpegurl", StringComparison.OrdinalIgnoreCase) >= 0
-                                || extension.Equals(".m3u", StringComparison.OrdinalIgnoreCase)
-                                || extension.Equals(".pls", StringComparison.OrdinalIgnoreCase)
-                                || stream.ContentType.IndexOf("scpls", StringComparison.OrdinalIgnoreCase) >= 0)
-                            {
-                                if (candidate.Value >= 4) throw new InvalidDataException("Radio playlist nesting limit exceeded.");
-                                var playlist = Encoding.UTF8.GetString(await ReadBoundedAsync(stream.Body, 256 * 1024, timeout.Token).ConfigureAwait(false));
-                                if (playlist.Contains("#EXT-X-"))
-                                    throw new InvalidDataException("HLS is not supported by the secure radio relay.");
-                                var children = PlaylistUrls(playlist).Take(8).Select(url =>
-                                    new KeyValuePair<string, int>(url, candidate.Value + 1)).ToList();
-                                if (children.Count == 0) throw new InvalidDataException("Empty radio playlist.");
-                                pending = new Queue<KeyValuePair<string, int>>(children.Concat(pending).Take(16));
-                            }
-                            else
-                            {
-                                if (stream.ContentType != "audio/mpeg" && stream.ContentType != "audio/mp3" && stream.ContentType != "audio/aac"
-                                    && stream.ContentType != "audio/aacp" && stream.ContentType != "application/octet-stream")
-                                    throw new InvalidDataException("Unsupported radio stream content type.");
-                                var playable = stream;
-                                stream = null;
-                                return playable;
-                            }
-                        }
-                        catch (Exception error) when (error is IOException || error is InvalidDataException || error is SocketException
-                            || error is AuthenticationException || error is TimeoutException)
-                        {
-                            lastFailure = error;
-                            warning("Advertised radio stream alternative failed; trying the next available alternative.");
-                        }
-                        finally { stream?.Dispose(); }
-                    }
-                    throw new InvalidDataException("No advertised radio stream could be opened within the relay limits.", lastFailure);
+                    var preRolls = urls.TakeWhile(IsProviderPreRoll).ToList();
+                    if (urls.Skip(preRolls.Count).Any(IsProviderPreRoll))
+                        throw new InvalidDataException("TuneIn returned an invalid pre-roll/live stream order.");
+                    if (preRolls.Count == 0)
+                        return await OpenAlternativesAsync(urls, timeout.Token, warning).ConfigureAwait(false);
+                    if (preRolls.Count == urls.Count)
+                        throw new InvalidDataException("TuneIn returned an invalid pre-roll/live stream order.");
+                    if (decode == null)
+                        throw new InvalidOperationException("TuneIn pre-roll playback requires the host audio decoder.");
+
+                    // Only the provider's recognized leading pre-roll assets are sequential.
+                    // The remaining URLs are still alternatives for ONE live stream.
+                    var stages = new Queue<Func<CancellationToken, Task<SafeResponse>>>();
+                    foreach (var url in preRolls)
+                        stages.Enqueue(ct => OpenAlternativesAsync(new[] { url }, ct, warning));
+                    stages.Enqueue(ct => OpenAlternativesAsync(urls.Skip(preRolls.Count), ct, warning));
+                    var first = await stages.Dequeue()(timeout.Token).ConfigureAwait(false);
+                    return new SafeResponse(new PcmSequenceStream(first, stages, decode, token), "audio/wav");
                 }
+            }
+        }
+
+        internal static bool IsProviderPreRoll(string value)
+        {
+            var uri = new Uri(value);
+            return uri.Scheme == "https" && uri.IsDefaultPort && uri.UserInfo.Length == 0
+                && uri.Host.Equals("tunein-ondemand.cdnstream1.com", StringComparison.OrdinalIgnoreCase)
+                && uri.AbsolutePath == "/multi_bump_sonic_pre_pre.mp3";
+        }
+
+        private async Task<SafeResponse> OpenAlternativesAsync(IEnumerable<string> urls,
+            CancellationToken token, Action<string> warning)
+        {
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                timeout.CancelAfter(TimeSpan.FromSeconds(30));
+                // Resolve playlists through the same pinned-address transport, never hand remote URLs to Emby.
+                var pending = new Queue<KeyValuePair<string, int>>(urls.Select(url => new KeyValuePair<string, int>(url, 0)));
+                Exception lastFailure = null;
+                for (var attempts = 0; attempts < 16 && pending.Count > 0; attempts++)
+                {
+                    var candidate = pending.Dequeue();
+                    SafeResponse stream = null;
+                    try
+                    {
+                        stream = await transport.OpenAsync(candidate.Key, false, timeout.Token).ConfigureAwait(false);
+                        var extension = Path.GetExtension(new Uri(candidate.Key).AbsolutePath);
+                        if (extension.Equals(".m3u8", StringComparison.OrdinalIgnoreCase)
+                            || stream.ContentType.IndexOf("mpegurl", StringComparison.OrdinalIgnoreCase) >= 0
+                            || extension.Equals(".m3u", StringComparison.OrdinalIgnoreCase)
+                            || extension.Equals(".pls", StringComparison.OrdinalIgnoreCase)
+                            || stream.ContentType.IndexOf("scpls", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            if (candidate.Value >= 4) throw new InvalidDataException("Radio playlist nesting limit exceeded.");
+                            var playlist = Encoding.UTF8.GetString(await ReadBoundedAsync(stream.Body, 256 * 1024, timeout.Token).ConfigureAwait(false));
+                            if (playlist.Contains("#EXT-X-"))
+                                throw new InvalidDataException("HLS is not supported by the secure radio relay.");
+                            var children = PlaylistUrls(playlist).Take(8).Select(url =>
+                                new KeyValuePair<string, int>(url, candidate.Value + 1)).ToList();
+                            if (children.Count == 0) throw new InvalidDataException("Empty radio playlist.");
+                            pending = new Queue<KeyValuePair<string, int>>(children.Concat(pending).Take(16));
+                        }
+                        else
+                        {
+                            if (stream.ContentType != "audio/mpeg" && stream.ContentType != "audio/mp3" && stream.ContentType != "audio/aac"
+                                && stream.ContentType != "audio/aacp" && stream.ContentType != "application/octet-stream")
+                                throw new InvalidDataException("Unsupported radio stream content type.");
+                            var playable = stream;
+                            stream = null;
+                            return playable;
+                        }
+                    }
+                    catch (Exception error) when (error is IOException || error is InvalidDataException || error is SocketException
+                        || error is AuthenticationException || error is TimeoutException)
+                    {
+                        lastFailure = error;
+                        warning("Advertised radio stream alternative failed; trying the next available alternative.");
+                    }
+                    finally { stream?.Dispose(); }
+                }
+                throw new InvalidDataException("No advertised radio stream could be opened within the relay limits.", lastFailure);
             }
         }
 

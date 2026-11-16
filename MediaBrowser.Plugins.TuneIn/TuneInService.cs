@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Controller.Channels;
 using MediaBrowser.Model.Tasks;
+using MediaBrowser.Controller.MediaEncoding;
+using System.Linq;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -72,15 +74,22 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly IHttpResultFactory resultFactory;
         private readonly TuneInDirectory directory;
         private readonly ITaskManager taskManager;
-        public TuneInService(ILogManager logManager, IChannelManager channelManager, IHttpResultFactory resultFactory, ITaskManager taskManager)
-            : this(logManager, channelManager, resultFactory, TuneInDirectory.Instance)
-        { this.taskManager = taskManager ?? throw new ArgumentNullException(nameof(taskManager)); }
-        internal TuneInService(ILogManager logManager, IChannelManager channelManager, IHttpResultFactory resultFactory, TuneInDirectory directory)
+        private readonly IFfmpegManager ffmpegManager;
+        public TuneInService(ILogManager logManager, IChannelManager channelManager, IHttpResultFactory resultFactory,
+            ITaskManager taskManager, IFfmpegManager ffmpegManager)
+            : this(logManager, channelManager, resultFactory, TuneInDirectory.Instance,
+                ffmpegManager ?? throw new ArgumentNullException(nameof(ffmpegManager)))
+        {
+            this.taskManager = taskManager ?? throw new ArgumentNullException(nameof(taskManager));
+        }
+        internal TuneInService(ILogManager logManager, IChannelManager channelManager, IHttpResultFactory resultFactory,
+            TuneInDirectory directory, IFfmpegManager ffmpegManager = null)
         {
             logger = logManager.GetLogger(GetType().Name);
             this.channelManager = channelManager;
             this.resultFactory = resultFactory ?? throw new ArgumentNullException(nameof(resultFactory));
             this.directory = directory;
+            this.ffmpegManager = ffmpegManager;
         }
         internal TuneInService() { directory = TuneInDirectory.Instance; }
         public IRequest Request { get; set; }
@@ -110,7 +119,8 @@ namespace MediaBrowser.Plugins.TuneIn
             try
             {
                 var response = await directory.OpenStreamAsync(snapshot, entry, operation.Token,
-                    message => logger.Warn(message)).ConfigureAwait(false);
+                    message => logger?.Warn(message),
+                    DecodeAudio).ConfigureAwait(false);
                 relay = new RelayStream(response, operation);
                 return resultFactory.GetResult(Request, relay, response.ContentType, null);
             }
@@ -120,6 +130,13 @@ namespace MediaBrowser.Plugins.TuneIn
                 else operation.Dispose();
                 throw;
             }
+        }
+
+        private System.IO.Stream DecodeAudio(SafeResponse source, CancellationToken token)
+        {
+            var configuration = ffmpegManager?.FfmpegConfiguration;
+            return new PcmDecoderStream(configuration?.EncoderPath, source, token,
+                configuration?.EnvironmentVariables?.ToDictionary(setting => setting.VariableName, setting => setting.Value));
         }
 
         public async Task<object> Get(GetTuneInArtwork request)
@@ -155,15 +172,28 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             private readonly SafeResponse response;
             private readonly CancellationTokenSource operation;
+            private bool disposed;
             public RelayStream(SafeResponse response, CancellationTokenSource operation)
             { this.response = response; this.operation = operation; }
-            public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken token) =>
-                response.Body.ReadAsync(buffer, offset, count, operation.Token);
+            public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken token)
+            {
+                using (var read = CancellationTokenSource.CreateLinkedTokenSource(token, operation.Token))
+                {
+                    read.Token.ThrowIfCancellationRequested();
+                    return await response.Body.ReadAsync(buffer, offset, count, read.Token).ConfigureAwait(false);
+                }
+            }
             public override int Read(byte[] buffer, int offset, int count) =>
                 ReadAsync(buffer, offset, count, operation.Token).GetAwaiter().GetResult();
             protected override void Dispose(bool disposing)
             {
-                if (disposing) { response.Dispose(); operation.Dispose(); }
+                if (disposing && !disposed)
+                {
+                    disposed = true;
+                    operation.Cancel();
+                    response.Dispose();
+                    operation.Dispose();
+                }
                 base.Dispose(disposing);
             }
             public override bool CanRead => true;

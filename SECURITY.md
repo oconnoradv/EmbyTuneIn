@@ -96,6 +96,15 @@ No unrestricted stream URLs reach Emby's HTTP client/transcoder. Relay access
 requires a server-local socket, with Emby's local-only authentication attribute as
 an additional host control. In-flight requests are cancelled after settings changes.
 
+Recognized provider pre-roll sequences are normalized with the host's configured
+FFmpeg executable. FFmpeg receives only piped bytes from the same validated
+transport, with its input protocol whitelist restricted to `pipe`; remote URLs
+are never passed to it. Only the exact known HTTPS pre-roll host/path has sequential
+semantics; all live URLs retain bounded fallback resolution. Decoder diagnostics
+are drained without retaining provider metadata. Decode/transport failures are
+errors, not permission to skip required pre-roll. Probe disposal and cancellation
+terminate the decoder and close its upstream response.
+
 TLS 1.2 is required. Online CRL/OCSP revocation is not mandatory, matching ordinary
 .NET client behavior. The local network could not reach those services; their
 availability is not silently counted as a passed check. Certificate trust/name/expiry
