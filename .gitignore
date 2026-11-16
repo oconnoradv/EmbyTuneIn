@@ -3,6 +3,8 @@
 #################
 
 *.pydevproject
+.tools/
+artifacts/
 .project
 .metadata
 bin/

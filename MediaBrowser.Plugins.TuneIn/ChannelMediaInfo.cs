@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using MediaBrowser.Model.Dto;
@@ -6,6 +6,7 @@ using MediaBrowser.Model.MediaInfo;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Common.Extensions;
 using System.Linq;
+using System.Security.Cryptography;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -52,7 +53,10 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public MediaSourceInfo ToMediaSource()
         {
-            var id = Path.GetMD5().ToString("N");
+            string id;
+            using (var hash = SHA256.Create())
+                id = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(Path)), 0, 16)
+                    .Replace("-", "").ToLowerInvariant();
 
             var source = new MediaSourceInfo
             {
@@ -65,7 +69,6 @@ namespace MediaBrowser.Plugins.TuneIn
                 RunTimeTicks = RunTimeTicks,
                 Name = id,
                 Id = id,
-                ReadAtNativeFramerate = ReadAtNativeFramerate,
                 SupportsDirectStream = Protocol == MediaProtocol.Http && !string.IsNullOrWhiteSpace(Container) && !string.Equals(Container, "hls", StringComparison.OrdinalIgnoreCase),
                 SupportsDirectPlay = SupportsDirectPlay,
                 IsRemote = true

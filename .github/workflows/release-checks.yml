@@ -1,0 +1,76 @@
+name: Release checks
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.x
+      - name: Build, tests, quality, transitive advisory checks and SBOM
+        run: node scripts\verify-release.cjs --online
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Upload verification evidence (not a published release)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-check-evidence
+          path: artifacts\
+  codeql:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: csharp
+            build-mode: manual
+          - language: javascript-typescript
+            build-mode: none
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: github/codeql-action/init@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+          build-mode: ${{ matrix.build-mode }}
+      - name: Build application for analysis
+        if: matrix.language == 'csharp'
+        run: dotnet build MediaBrowser.Plugins.TuneIn.sln -c Release --nologo
+      - uses: github/codeql-action/analyze@5895b2c9be147bc7f1c75ce72c5cb577febb1907 # v4
+        with:
+          wait-for-processing: true
+  codeql-gate:
+    needs: codeql
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: read
+    steps:
+      - name: Reject open CodeQL findings on this revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ANALYSIS_REF: ${{ github.ref }}
+        run: |
+          count=$(gh api -X GET "repos/$REPOSITORY/code-scanning/alerts" -f state=open -f ref="$ANALYSIS_REF" -f per_page=100 --jq 'length')
+          test "$count" -eq 0

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
@@ -7,6 +7,8 @@ using MediaBrowser.Model.Serialization;
 using MediaBrowser.Plugins.TuneIn.Configuration;
 using System.IO;
 using MediaBrowser.Model.Drawing;
+using MediaBrowser.Controller;
+using System.Reflection;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -15,11 +17,27 @@ namespace MediaBrowser.Plugins.TuneIn
     /// </summary>
     public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IHasThumbImage
     {
-        
-        public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
+        internal static string ReleaseVersion =>
+            typeof(Plugin).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>().InformationalVersion.Split('+')[0];
+        internal static string ConfigurationControllerName => "tuneinforkjs" + ReleaseVersion.Replace(".", "").Replace("-", "");
+
+        public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer, IServerApplicationHost applicationHost)
             : base(applicationPaths, xmlSerializer)
         {
+            if (!SupportsServerVersion(applicationHost.ApplicationVersion))
+                throw new NotSupportedException("TuneIn requires Emby Server 4.9.1.90+ or patched beta 4.9.2.7+.");
             Instance = this;
+        }
+
+        internal static bool SupportsServerVersion(Version version) =>
+            version != null && version >= new Version(4, 9, 1, 90)
+                && (version < new Version(4, 9, 2, 0) || version >= new Version(4, 9, 2, 7));
+
+        public override void UpdateConfiguration(BasePluginConfiguration configuration)
+        {
+            ConfigurationSnapshot.Validate((PluginConfiguration)configuration);
+            base.UpdateConfiguration(configuration);
+            TuneInDirectory.Instance.Reset();
         }
 
         public IEnumerable<PluginPageInfo> GetPages()
@@ -28,18 +46,26 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 new PluginPageInfo
                 {
-                    Name = "tunein",
-                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html"
+                    Name = "tuneinfork",
+                    DisplayName = "TuneIn",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html",
+                    IsMainConfigPage = true,
+                    EnableInMainMenu = true,
+                    EnableInUserMenu = false,
+                    MenuSection = "advanced",
+                    MenuIcon = "radio"
                 },
                 new PluginPageInfo
                 {
-                    Name = "tuneinjs",
-                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.js"
+                    Name = ConfigurationControllerName,
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.js",
+                    IsMainConfigPage = false
                 }
             };
         }
 
-        private Guid _id = new Guid("10b82431-f939-4507-a8e2-9509dd3fd6ae");
+        private readonly Guid _id = new Guid("d9314bc3-33e0-4080-88ef-8e7e718524f2");
+        public override string ConfigurationFileName => "MediaBrowser.Plugins.TuneIn.Fork.xml";
         public override Guid Id
         {
             get { return _id; }
@@ -51,7 +77,7 @@ namespace MediaBrowser.Plugins.TuneIn
         /// <value>The name.</value>
         public override string Name
         {
-            get { return "TuneIn"; }
+            get { return "TuneIn (oconnoradv fork)"; }
         }
 
         /// <summary>
