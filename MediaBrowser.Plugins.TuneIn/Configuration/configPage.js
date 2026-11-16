@@ -11,6 +11,14 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         ['language', 'Languages', 'By Language'], ['location', 'Locations', 'By Location'],
         ['local', 'LocalCities', 'Local Radio cities/regions'], ['music', 'Music', 'Music genres']
     ];
+    var groupNames = {
+        local: 'Local Radio', music: 'Music', language: 'By Language', location: 'By Location',
+        talk: 'Talk', sports: 'Sports', podcast: 'Podcasts', presets: 'My Favorites'
+    };
+
+    function nonnegativeInteger(value) {
+        return typeof value === 'number' && isFinite(value) && value >= 0 && Math.floor(value) === value;
+    }
 
     function message(instance, text) {
         instance.view.querySelector('.status').textContent = text;
@@ -47,12 +55,32 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
                 || ['NeverRun', 'Completed', 'Failed', 'Cancelled', 'Aborted'].indexOf(status.LastResult) === -1
                 || status.LastResult === 'Failed' && (typeof status.FailedAttempt !== 'string' || !status.FailedAttempt))
                 throw new Error('Invalid task status.');
-            instance.failedAttempt = status.FailedAttempt || null;
             var text = 'Refresh TuneIn task: ' + status.State + '. Last result: '
                 + (status.LastResult === 'NeverRun' ? 'Never run' : status.LastResult) + '.';
             if (status.State === 'Running' && typeof status.Progress === 'number' && isFinite(status.Progress))
                 text += ' Progress: ' + Math.round(Math.max(0, Math.min(100, status.Progress))) + '%.';
+            if (status.State === 'Running' || status.State === 'Cancelling') {
+                var current = status.Current;
+                if (current) {
+                    if (typeof current.Phase !== 'string' || !current.Phase || current.Phase.length > 200
+                        || !nonnegativeInteger(current.CategoryIndex) || !nonnegativeInteger(current.CategoryCount)
+                        || current.CategoryIndex > current.CategoryCount
+                        || !nonnegativeInteger(current.CompletedRequests) || !nonnegativeInteger(current.StartedRequests)
+                        || current.CompletedRequests > current.StartedRequests || !nonnegativeInteger(current.CacheHits)
+                        || current.Category != null && !Object.prototype.hasOwnProperty.call(groupNames, current.Category))
+                        throw new Error('Invalid refresh stage.');
+                    if (current.Category != null)
+                        text += ' Category: ' + groupNames[current.Category] + ' (' + current.CategoryIndex + ' of ' + current.CategoryCount + ').';
+                    text += ' Stage: ' + current.Phase + '.';
+                    if (current.StartedRequests || current.CacheHits)
+                        text += ' Catalogue requests completed/started: ' + current.CompletedRequests + '/' + current.StartedRequests
+                            + '; cached pages reused: ' + current.CacheHits + '.';
+                } else {
+                    text += ' Current stage unavailable; choose Update status to check again.';
+                }
+            }
             if (status.FinishedUtc) text += ' Last finished: ' + status.FinishedUtc + '.';
+            instance.failedAttempt = status.FailedAttempt || null;
             view.querySelector('.channelRefreshStatus').textContent = text;
         }).catch(function () {
             if (instance.viewActive && epoch === instance.viewEpoch)
@@ -207,6 +235,12 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         }
         var coordinates = instance.view.querySelector('.txtLatLon').value.trim();
         var useCoordinates = instance.view.querySelector('.useCoordinates').checked;
+        var intervalText = instance.view.querySelector('.apiRequestInterval').value.trim();
+        var interval = Number(intervalText);
+        if (!/^\d+$/.test(intervalText) || interval < 1 || interval > 30) {
+            message(instance, 'Enter a whole-number catalogue request interval between 1 and 30 seconds.');
+            return;
+        }
         var parts = coordinates.split(',');
         if (useCoordinates && (parts.length !== 2 || parts.some(function (part) {
             return !part.trim() || !isFinite(Number(part));
@@ -219,6 +253,7 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         config.Username = instance.view.querySelector('.txtUsername').value.trim() || null;
         config.LatLon = coordinates || null;
         config.UseCoordinates = useCoordinates;
+        config.ApiRequestIntervalSeconds = interval;
         categories.forEach(function (spec) {
             config[spec[0]] = instance.view.querySelector('[data-category="' + spec[0] + '"]').checked;
         });
@@ -258,6 +293,7 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
             instance.config = config;
             var view = instance.view;
             view.querySelector('.txtUsername').value = config.Username || '';
+            view.querySelector('.apiRequestInterval').value = config.ApiRequestIntervalSeconds == null ? '3' : String(config.ApiRequestIntervalSeconds);
             view.querySelector('.txtLatLon').value = config.LatLon || '';
             view.querySelector('.useCoordinates').checked = !!config.UseCoordinates;
             view.querySelector('.configurationCompleted').checked = config.SchemaVersion === 1 && !!config.ConfigurationCompleted;

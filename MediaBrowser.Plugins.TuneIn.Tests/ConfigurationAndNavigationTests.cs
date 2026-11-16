@@ -129,6 +129,31 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public void CoordinatesAreFiniteRangeCheckedInvariantPairs(string value, bool valid) =>
             Assert.Equal(valid, ConfigurationSnapshot.TryCoordinates(value, out _));
 
+        [Theory]
+        [InlineData(0, false)]
+        [InlineData(1, true)]
+        [InlineData(3, true)]
+        [InlineData(30, true)]
+        [InlineData(31, false)]
+        public void ApiIntervalIsValidatedOnConfigurationSave(int seconds, bool valid)
+        {
+            var config = Ready();
+            config.ApiRequestIntervalSeconds = seconds;
+            if (valid) ConfigurationSnapshot.Validate(config);
+            else Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+        }
+
+        [Fact]
+        public void LegacyConfigurationDefaultsToThreeSecondInterval()
+        {
+            var serializer = new System.Xml.Serialization.XmlSerializer(typeof(PluginConfiguration));
+            using (var reader = new System.IO.StringReader("<PluginConfiguration><Username>legacy</Username></PluginConfiguration>"))
+            {
+                var config = (PluginConfiguration)serializer.Deserialize(reader);
+                Assert.Equal(3, config.ApiRequestIntervalSeconds);
+            }
+        }
+
         [Fact]
         public async Task LocalCoordinatesPersistOnEveryDescendantAndUnrelatedLinksAreRemoved()
         {

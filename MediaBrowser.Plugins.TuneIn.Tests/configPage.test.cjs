@@ -31,7 +31,7 @@ class Element {
 
 function harness(config) {
     const view = new Element('view');
-    for (const name of ['form', 'txtUsername', 'txtLatLon', 'useCoordinates', 'configurationCompleted',
+    for (const name of ['form', 'txtUsername', 'txtLatLon', 'apiRequestInterval', 'useCoordinates', 'configurationCompleted',
         'categories', 'selectors', 'status', 'channelRefreshUpdate', 'channelRefreshFailure',
         'channelRefreshStatus', 'channelRefreshMessage', 'channelRefreshLog']) {
         const element = new Element(name === 'form' ? 'form' : 'div');
@@ -136,6 +136,54 @@ test('failed native task status enables explicit report retrieval and renders er
     assert.match(app.view.querySelector('.channelRefreshMessage').textContent, /limited/);
 });
 
+test('running task shows its current category, phase and measured request counts', async () => {
+    const app = harness({});
+    app.ApiClient.ajax = async () => ({
+        State: 'Running', Progress: 35, LastResult: 'NeverRun',
+        Current: { Category: 'music', Phase: 'Discovering selected catalogue pages',
+            CategoryIndex: 2, CategoryCount: 3, StartedRequests: 7, CompletedRequests: 6, CacheHits: 2 }
+    });
+    await app.instance.onResume();
+    const status = app.view.querySelector('.channelRefreshStatus').textContent;
+    assert.match(status, /Category: Music \(2 of 3\)/);
+    assert.match(status, /Stage: Discovering selected catalogue pages/);
+    assert.match(status, /completed\/started: 6\/7; cached pages reused: 2/);
+    app.ApiClient.ajax = async () => ({
+        State: 'Running', LastResult: 'NeverRun',
+        Current: { Category: 'music', Phase: '<script>Importing</script>',
+            CategoryIndex: 2, CategoryCount: 3, StartedRequests: 7, CompletedRequests: 7, CacheHits: 2 }
+    });
+    await app.view.querySelector('.channelRefreshUpdate').listeners.click();
+    assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /<script>Importing<\/script>/);
+    assert.equal(app.view.querySelector('.channelRefreshStatus').children.length, 0);
+});
+
+test('missing or malformed stage is not presented as current progress', async () => {
+    const app = harness({});
+    app.ApiClient.ajax = async () => ({ State: 'Running', LastResult: 'NeverRun' });
+    await app.instance.onResume();
+    assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Current stage unavailable/);
+    app.ApiClient.ajax = async () => ({
+        State: 'Running', LastResult: 'Failed', FailedAttempt: 'old',
+        Current: { Category: 'music', Phase: 'Importing', CategoryIndex: 1, CategoryCount: 1,
+            StartedRequests: 1, CompletedRequests: 2, CacheHits: 0 }
+    });
+    await app.view.querySelector('.channelRefreshUpdate').listeners.click();
+    assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Unable to load/);
+    assert.equal(app.view.querySelector('.channelRefreshFailure').disabled, true);
+});
+
+test('idle task does not display a stale stage', async () => {
+    const app = harness({});
+    app.ApiClient.ajax = async () => ({
+        State: 'Idle', LastResult: 'Completed',
+        Current: { Category: 'music', Phase: 'Old phase', CategoryIndex: 1, CategoryCount: 1,
+            StartedRequests: 1, CompletedRequests: 1, CacheHits: 0 }
+    });
+    await app.instance.onResume();
+    assert.doesNotMatch(app.view.querySelector('.channelRefreshStatus').textContent, /Old phase|Category: Music/);
+});
+
 test('never-run and successful task statuses disable failed-log retrieval', async () => {
     for (const result of ['NeverRun', 'Completed', 'Cancelled', 'Aborted']) {
         const app = harness({});
@@ -199,6 +247,7 @@ test('settings preserve native view hooks and labeled inputs', async () => {
     await app.instance.onResume();
     assert.match(html(), /class="inputContainer"[\s\S]*class="txtUsername"[^>]+label=/);
     assert.match(html(), /class="txtLatLon"[^>]+label=/);
+    assert.match(html(), /class="apiRequestInterval"[^>]+label=/);
 });
 
 test('a late configuration response cannot rebuild or upgrade a hidden settings view', async () => {
@@ -230,6 +279,7 @@ test('resume and save do not crawl; setup preserves legacy account/coordinates a
     await app.instance.onResume();
     assert.equal(app.calls.catalogue.length, 0);
     assert.equal(app.view.querySelector('.txtUsername').value, 'existing-account');
+    assert.equal(app.view.querySelector('.apiRequestInterval').value, '3');
     assert.equal(app.view.querySelector('.configurationCompleted').checked, false);
     app.view.querySelector('.configurationCompleted').checked = true;
     app.view.querySelector('form').listeners.submit({ preventDefault() {} });
@@ -238,9 +288,28 @@ test('resume and save do not crawl; setup preserves legacy account/coordinates a
     assert.equal(app.calls.saves[0].SchemaVersion, 1);
     assert.equal(app.calls.saves[0].ConfigurationCompleted, true);
     assert.equal(app.calls.saves[0].LatLon, '1,2');
+    assert.equal(app.calls.saves[0].ApiRequestIntervalSeconds, 3);
     assert.equal(app.calls.catalogue.length, 0);
     assert.deepEqual(app.calls.configReads, ['d9314bc3-33e0-4080-88ef-8e7e718524f2']);
     assert.deepEqual(app.calls.configWrites, app.calls.configReads);
+});
+
+test('catalogue request interval is saved and rejects invalid values', async () => {
+    const app = harness({ ApiRequestIntervalSeconds: 5 });
+    await app.instance.onResume();
+    const input = app.view.querySelector('.apiRequestInterval');
+    assert.equal(input.value, '5');
+    for (const value of ['', '0', '31', '1.5', '-1', 'abc']) {
+        input.value = value;
+        app.view.querySelector('form').listeners.submit({ preventDefault() {} });
+        await settle();
+        assert.equal(app.calls.saves.length, 0);
+        assert.match(app.view.querySelector('.status').textContent, /between 1 and 30/);
+    }
+    input.value = '1';
+    app.view.querySelector('form').listeners.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.calls.saves[0].ApiRequestIntervalSeconds, 1);
 });
 
 test('catalogue loads explicitly; remote labels are text and selected stable ancestry is persisted', async () => {

@@ -7,7 +7,7 @@ No upstream pull request or merge is created by building or publishing this fork
 ## Versioning and independent identity
 
 Upstream currently declares assembly/file version `1.2.8.0`. The fork's new
-configuration/refresh functionality uses SemVer `1.3.0-fork.15`: the prerelease
+configuration/refresh functionality uses SemVer `1.3.0-fork.16`: the prerelease
 suffix identifies a fork test candidate, not an official upstream release.
 The `.csproj` `<Version>` is the source of truth. The SDK derives assembly/file
 version `1.3.0.0`; informational version includes the exact source commit.
@@ -98,6 +98,10 @@ saved/native triggers only while its schedule is empty and preserving administra
 edits. Failed migration must retain state, attempt rollback and log errors.
 Ordinary configuration Save must never change schedules. The built-in task's
 read-only description and native result must not be modified or fabricated.
+Keep scheduled discovery bounded and complete before Emby imports a section;
+do not infer language/location membership from station identity or music alone.
+Reuse only equivalent scoped catalogue responses, enforce the configured pacing
+and provider retry delays, and treat Emby's import as non-transactional.
 Settings reads the dedicated TuneIn task status only on open/manual update, without
 polling. Retrieving its native failed-task report requires an explicit click and administrator access;
 bound it, reject stale attempts and render private error details as plain text.

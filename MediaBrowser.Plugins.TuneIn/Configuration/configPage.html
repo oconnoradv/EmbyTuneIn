@@ -1,4 +1,4 @@
-<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/tuneinforkjs130fork15" data-title="TuneIn">
+<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/tuneinforkjs130fork16" data-title="TuneIn">
     <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
         <form class="auto-center">
             <style>
@@ -7,7 +7,7 @@
                 .tuneInSettingsSection[open] > summary { margin-bottom: .5em; }
                 .channelRefreshLog { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24em; overflow-y: auto; }
             </style>
-            <h2>TuneIn Fork 1.3.0-fork.15</h2>
+            <h2>TuneIn Fork 1.3.0-fork.16</h2>
             <p>Expand a heading to view its settings. Configure categories and selections, then save and enable browsing. Saving configuration does not start a catalogue crawl.</p>
             <details class="tuneInSettingsSection" data-section="setup" open>
                 <summary>Setup and account</summary>
@@ -18,6 +18,10 @@
                 <p class="fieldDescription checkboxFieldDescription">Check this control and enable at least one category, then save. Categories requiring selections stay unavailable until you add and enable those selections.</p>
                 <div class="inputContainer">
                     <input type="text" is="emby-input" class="txtUsername" maxlength="128" label="TuneIn username (My Favorites only):" />
+                </div>
+                <div class="inputContainer">
+                    <input type="number" is="emby-input" class="apiRequestInterval" min="1" max="30" step="1" label="Catalogue request interval (seconds):" />
+                    <p class="fieldDescription">Whole seconds from 1 to 30. Default: 3. Shorter intervals may trigger TuneIn throttling; provider retry delays still apply.</p>
                 </div>
             </details>
             <details class="tuneInSettingsSection" data-section="categories">
@@ -47,6 +51,7 @@
             <section aria-labelledby="channelRefreshHeading">
                 <h3 id="channelRefreshHeading">Refresh TuneIn</h3>
                 <p>Run or schedule <strong>Refresh TuneIn</strong> under Scheduled Tasks. It refreshes only enabled TuneIn categories and their saved sub-category selections; other channel providers are not refreshed. No automatic schedule is added. Use Emby's built-in Refresh Internet Channels task when you want to refresh all providers.</p>
+                <p>Choose Update status to see the current category and stage; the display does not update automatically.</p>
                 <p class="channelRefreshStatus" role="status" aria-live="polite">Refresh status has not been loaded.</p>
                 <button is="emby-button" type="button" class="raised channelRefreshUpdate"><span>Update status</span></button>
                 <button is="emby-button" type="button" class="raised channelRefreshFailure" disabled><span>Retrieve failed Refresh TuneIn report</span></button>

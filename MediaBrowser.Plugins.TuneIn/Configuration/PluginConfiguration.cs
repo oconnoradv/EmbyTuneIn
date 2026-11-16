@@ -10,8 +10,11 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
     /// </summary>
     public class PluginConfiguration : BasePluginConfiguration
     {
+        internal const int MinApiRequestIntervalSeconds = 1;
+        internal const int MaxApiRequestIntervalSeconds = 30;
         public String Username { get; set; }
         public String LatLon { get; set; }
+        public int ApiRequestIntervalSeconds { get; set; } = 3;
         public string NavigationSecret { get; set; } = CreateSecret();
         public int SchemaVersion { get; set; }
         public bool ConfigurationCompleted { get; set; }

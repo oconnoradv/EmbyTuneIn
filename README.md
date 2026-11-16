@@ -1,8 +1,8 @@
-# TuneIn for Emby - fork v1.3.0-fork.15
+# TuneIn for Emby - fork v1.3.0-fork.16
 
 Configuration-first radio browsing with category switches, language/genre selection,
 geographic pickers, multiple toggleable local cities/regions and optional coordinates.
-Version **1.3.0-fork.15** retains the independent plugin ID, DLL name, configuration file and
+Version **1.3.0-fork.16** retains the independent plugin ID, DLL name, configuration file and
 dashboard/API namespace. This prevents an upstream TuneIn update from replacing
 the fork as happened with v0.0.1. It is intended for manual Emby testing, not a
 claim of production runtime certification.
@@ -10,7 +10,7 @@ claim of production runtime certification.
 This is a feature prerelease based on upstream's **1.2.8.0** assembly line, not
 an official upstream 1.3.0 release. The project declares one SemVer version;
 the SDK derives assembly/file version **1.3.0.0**, and informational version
-includes `1.3.0-fork.15+<tested-commit>`. Future fork candidates increment
+includes `1.3.0-fork.16+<tested-commit>`. Future fork candidates increment
 the suffix; fixes/features increment the appropriate base version.
 This document consolidates the currently supported enhancements from every fork
 release, rather than requiring earlier downloads. [CHANGELOG.md](CHANGELOG.md)
@@ -66,7 +66,7 @@ install host SDK DLLs from the build directory. See [SECURITY.md](SECURITY.md)
 for the underlying server CVE and the withdrawn NuGet attribution.
 
 1. Download `MediaBrowser.Plugins.TuneIn.Fork.dll`, `SHA256SUMS.txt` and `INSTALL.md`
-   from this fork's **v1.3.0-fork.15** release package. Keep the accompanying license.
+   from this fork's **v1.3.0-fork.16** release package. Keep the accompanying license.
 2. Compare the DLL's SHA-256 against its entry in `SHA256SUMS.txt`. On Windows:
    `Get-FileHash .\MediaBrowser.Plugins.TuneIn.Fork.dll -Algorithm SHA256`.
    On Linux/macOS: `shasum -a 256 MediaBrowser.Plugins.TuneIn.Fork.dll`.
@@ -79,7 +79,7 @@ for the underlying server CVE and the withdrawn NuGet attribution.
    Emby's dashboard before restarting. Restart Emby.
 4. As an administrator, open **Dashboard > Advanced > TuneIn**, or
    **Dashboard > Plugins > TuneIn (oconnoradv fork) > Settings**. Both open the
-   same configuration page; confirm **TuneIn Fork 1.3.0-fork.15** is displayed. Reopen
+   same configuration page; confirm **TuneIn Fork 1.3.0-fork.16** is displayed. Reopen
    Settings from the plugin or Advanced menu rather than an old bookmarked page.
    Both HTML and controller URLs are now versioned to avoid stale fork.1/fork.7
    markup. Hard-refresh the dashboard after updating. The controller uses Emby's
@@ -142,6 +142,29 @@ restrictions. Use that host task when you intend to refresh all providers. Its
 schedule is managed independently through Emby; this plugin does not suppress it.
 On-demand browsing retains the bounded 128-page/8 MiB cache.
 
+For **Refresh TuneIn**, the plugin first discovers each selected section and
+stages its folder results before asking Emby to import that section. Discovery
+is limited to 1,000 folders and an estimated 32 MiB of staged results per
+section, as well as the existing request and time limits. Failure or
+cancellation during discovery does not start that section's Emby import;
+Emby's import itself is not transactional. Identical catalogue requests can
+reuse validated responses from the same run or from a successful refresh for
+up to ten minutes, but differently filtered requests remain separate. This
+in-memory cache is bounded to 128 pages/8 MiB and is cleared by configuration
+Save or restart. Music listings alone do not establish which stations belong
+to a language or location, so those memberships still require provider data.
+
+Catalogue calls remain serialized. In **Setup and account**, administrators can
+set the interval between starts to 1–30 whole seconds; existing configurations
+default to three seconds. Shorter intervals can trigger TuneIn throttling; no
+published numerical TuneIn catalogue limit has been verified. HTTP 429
+responses receive at most two retries, respecting `Retry-After` when supplied;
+long provider delays stop the current request and continue to block subsequent
+catalogue requests until the delay expires. Per-category refreshes
+write request, response, cache-hit and discovery/import timing summaries to
+the server debug log without URLs or account information. These measurements
+do not establish the impact on a real Emby server.
+
 ### Restoring previously disabled schedules
 
 On startup, a one-time migration checks the private `tunein-fork-refresh.xml` state
@@ -165,9 +188,14 @@ triggers remain independent.
 ### Status and failed refresh log
 
 In plugin Settings, **Refresh TuneIn** shows the actual dedicated task
-state, host-reported progress and last execution result/time. It loads once when
-the view opens; **Update status** reads it again. There is no polling or provider
-request, and status does not start, cancel or reschedule the task.
+state, host-reported progress and last execution result/time. While that task is
+running, it also shows the current category and phase, including discovery,
+Emby import and artwork updates, plus completed/started catalogue requests and
+cache hits. The counts are for the current category, not an estimate of all
+remaining pages. It loads once when the view opens; **Update status** reads it
+again. There is no polling or provider request, and status does not start,
+cancel or reschedule the task. A phase may be temporarily unavailable while
+the task starts or finishes.
 
 **Retrieve failed Refresh TuneIn report** is enabled only when the latest dedicated
 task result failed. It retrieves Emby's stored error message/exception report for
@@ -309,10 +337,10 @@ regression, dependency/advisory, SBOM and checksum evidence instead. Please veri
 | Test | Expected outcome |
 |---|---|
 | Fresh/legacy install, startup and unconfigured root | No automatic TuneIn traffic; empty channel until explicitly configured. |
-| Advanced menu and plugin Settings | Both open TuneIn Fork 1.3.0-fork.15 through versioned page/controller URLs and save the same independent configuration. The previous dashboard does not remain underneath the form. No individual-refresh/interval controls or background polling; native status reads once on open. |
+| Advanced menu and plugin Settings | Both open TuneIn Fork 1.3.0-fork.16 through versioned page/controller URLs and save the same independent configuration. The previous dashboard does not remain underneath the form. No individual-refresh controls or background polling; native status reads once on open. |
 | Collapsible settings sections | Four sections: setup/account starts expanded; radio groups, coordinates and selections expand/collapse independently. Save stays visible; collapsing does not discard edits or request provider data. |
 | Checkbox controls and empty library diagnostic | Visible checkboxes; disabled/no-category status is explicit. Enabling browsing and Talk produces a local Talk root folder. |
-| Save, restart and plugin update check | Installed fork remains 1.3.0-fork.15 (assembly 1.3.0.0); settings/selection state persists and upstream does not replace the DLL. No plugin-requested global refresh is queued; distinguish existing/restored host triggers. Channel/station retention across DLL replacement is a reported issue still requiring an upgrade retest/startup log. |
+| Save, restart and plugin update check | Installed fork remains 1.3.0-fork.16 (assembly 1.3.0.0); settings/selection state persists and upstream does not replace the DLL. No plugin-requested global refresh is queued; distinguish existing/restored host triggers. Channel/station retention across DLL replacement is a reported issue still requiring an upgrade retest/startup log. |
 | Administrator versus ordinary/anonymous user | Only the administrator can load selectors/save configuration/read native refresh status or failure reports; remote relay calls are rejected. |
 | Refresh Music/Language/Location and Local Radio | Saved selections and descendants remain scoped; Language includes its counted validation request; local coordinates/account do not leak to unrelated groups. Repeated pages reuse the bounded cache. |
 | Scheduled tasks | One **Refresh TuneIn** task appears without default triggers; its description says it refreshes enabled TuneIn categories/selections only. The built-in Refresh Internet Channels task remains separate and server-wide. Former per-group tasks and mutation routes remain absent. |

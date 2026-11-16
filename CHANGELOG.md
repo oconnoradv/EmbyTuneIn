@@ -7,6 +7,18 @@ features explicitly removed below are not promises of current functionality.
 Superseded prereleases are marked deprecated after the replacement is verified.
 Published assets and original source tags remain unchanged for provenance.
 
+## 1.3.0-fork.16 - refresh performance and status
+
+- Discover and stage bounded selected-category results before starting Emby's
+  category import, share identical validated catalogue requests within a task
+  run and briefly after successful refreshes, and record safe discovery/import
+  timing and cache-hit diagnostics. Add an administrator-configurable catalogue
+  request interval, defaulting to three seconds. Respect provider rate-limit
+  responses without assuming that music results establish language or location
+  membership.
+- Show the current category and discovery, import or artwork phase in the
+  dedicated refresh task status without background polling.
+
 ## 1.3.0-fork.15 - alphabetic browse refresh fix
 
 - Accept TuneIn's bounded alphabetic station/show filters for **Find by Name**,

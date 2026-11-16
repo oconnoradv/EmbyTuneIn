@@ -16,6 +16,9 @@ using System.Reflection;
 using System.Collections.Generic;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Tasks;
+using MediaBrowser.Model.Channels;
+using MediaBrowser.Model.Dto;
+using MediaBrowser.Model.Entities;
 
 namespace MediaBrowser.Plugins.TuneIn.Tests
 {
@@ -198,7 +201,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var config = Ready();
             config.EnableTalk = true;
             var body = fault ? "<opml><head><status>200</status><fault>provider error</fault></head><body/></opml>" : Opml().ToString();
-            var response = "HTTP/1.1 " + code + " Response\r\nContent-Length: " + Encoding.UTF8.GetByteCount(body) + "\r\n\r\n" + body;
+            var response = "HTTP/1.1 " + code + " Response\r\n"
+                + (code == 429 ? "Retry-After: 60\r\n" : "")
+                + "Content-Length: " + Encoding.UTF8.GetByteCount(body) + "\r\n\r\n" + body;
             var transport = new SafeHttpTransport(_ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
                 (_, __, ___) => Task.FromResult<Stream>(new DuplexStream(response)));
             var directory = new TuneInDirectory(() => config, transport: transport);
@@ -211,6 +216,103 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal(code, status.LastHttpStatus);
             Assert.Equal(completed, status.CompletedRequests);
             if (state == "Failed") Assert.NotNull(status.Error);
+        }
+
+        [Fact]
+        public async Task RateLimitRetriesAfterTheProviderDelayAndRetainsMinimumSpacing()
+        {
+            var attempts = 0;
+            var times = new List<DateTime>();
+            var body = Opml().ToString();
+            var transport = new SafeHttpTransport(_ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
+                (_, __, ___) =>
+                {
+                    times.Add(DateTime.UtcNow);
+                    var response = ++attempts == 1
+                        ? "HTTP/1.1 429 Rate Limited\r\nRetry-After: 0\r\nContent-Length: 0\r\n\r\n"
+                        : "HTTP/1.1 200 OK\r\nContent-Length: " + Encoding.UTF8.GetByteCount(body) + "\r\n\r\n" + body;
+                    return Task.FromResult<Stream>(new DuplexStream(response));
+                });
+            var directory = new TuneInDirectory(() => Ready(), transport: transport);
+
+            await directory.FetchAsync(new DirectoryRequest(), CancellationToken.None);
+
+            Assert.Equal(2, attempts);
+            Assert.True((times[1] - times[0]).TotalMilliseconds >= 2800);
+        }
+
+        [Fact]
+        public async Task LongRetryAfterBlocksLaterCatalogueRequestsWithoutRetryingEarly()
+        {
+            var attempts = 0;
+            var transport = new SafeHttpTransport(_ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
+                (_, __, ___) =>
+                {
+                    attempts++;
+                    return Task.FromResult<Stream>(new DuplexStream(
+                        "HTTP/1.1 429 Rate Limited\r\nRetry-After: 60\r\nContent-Length: 0\r\n\r\n"));
+                });
+            var directory = new TuneInDirectory(() => Ready(), transport: transport);
+            await Assert.ThrowsAsync<CatalogueRateLimitException>(() =>
+                directory.FetchAsync(new DirectoryRequest(), CancellationToken.None));
+            using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                    directory.FetchAsync(new DirectoryRequest(), cancellation.Token));
+            Assert.Equal(1, attempts);
+        }
+
+        [Theory]
+        [InlineData(1)]
+        [InlineData(7)]
+        public async Task ConfiguredIntervalControlsCatalogueRequestSpacing(int interval)
+        {
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var delays = new List<TimeSpan>();
+            var config = Ready();
+            config.ApiRequestIntervalSeconds = interval;
+            var body = Opml().ToString();
+            var transport = new SafeHttpTransport(_ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
+                (_, __, ___) => Task.FromResult<Stream>(new DuplexStream(
+                    "HTTP/1.1 200 OK\r\nContent-Length: " + Encoding.UTF8.GetByteCount(body) + "\r\n\r\n" + body)));
+            var directory = new TuneInDirectory(() => config, transport: transport, utcNow: () => now,
+                wait: (duration, token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    delays.Add(duration);
+                    now = now.Add(duration);
+                    return Task.CompletedTask;
+                });
+
+            await directory.FetchAsync(new DirectoryRequest(), CancellationToken.None);
+            await directory.FetchAsync(new DirectoryRequest(), CancellationToken.None);
+            Assert.Equal(TimeSpan.FromSeconds(interval), Assert.Single(delays));
+        }
+
+        [Fact]
+        public async Task ProviderRetryAfterOverridesShorterConfiguredInterval()
+        {
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var delays = new List<TimeSpan>();
+            var config = Ready();
+            config.ApiRequestIntervalSeconds = 1;
+            var attempts = 0;
+            var body = Opml().ToString();
+            var transport = new SafeHttpTransport(_ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
+                (_, __, ___) => Task.FromResult<Stream>(new DuplexStream(++attempts == 1
+                    ? "HTTP/1.1 429 Rate Limited\r\nRetry-After: 5\r\nContent-Length: 0\r\n\r\n"
+                    : "HTTP/1.1 200 OK\r\nContent-Length: " + Encoding.UTF8.GetByteCount(body) + "\r\n\r\n" + body)));
+            var directory = new TuneInDirectory(() => config, transport: transport, utcNow: () => now,
+                wait: (duration, token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    delays.Add(duration);
+                    now = now.Add(duration);
+                    return Task.CompletedTask;
+                });
+
+            await directory.FetchAsync(new DirectoryRequest(), CancellationToken.None);
+            Assert.Equal(2, attempts);
+            Assert.Equal(TimeSpan.FromSeconds(5), Assert.Single(delays));
         }
 
         [Fact]
@@ -445,6 +547,348 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal(new[] { "music", "talk", "sports" }, categories);
             Assert.Equal(100d, progress.Values.Last());
             Assert.DoesNotContain("local", categories);
+        }
+
+        [Fact]
+        public async Task ScheduledRefreshDiscoversBeforeImportAndDoesNotRefetchDuringImport()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var calls = 0;
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                calls++;
+                return Task.FromResult(request.Parameters.ContainsKey("offset")
+                    ? Opml("<outline type='audio' guide_id='s1' text='Station'/>")
+                    : Opml("<outline type='link' text='More' URL='https://opml.radiotime.com/Browse.ashx?c=talk&amp;offset=25'/>"));
+            });
+            var library = DispatchProxy.Create<MediaBrowser.Controller.Library.ILibraryManager, RefreshTaskLibraryProxy>();
+            var libraryProxy = (RefreshTaskLibraryProxy)(object)library;
+            libraryProxy.Parent = new MediaBrowser.Controller.Channels.Channel { InternalId = 100 };
+            libraryProxy.Roots.Add(new MediaBrowser.Controller.Entities.Folder
+            {
+                InternalId = 1,
+                ParentId = 100,
+                ExternalId = directory.Register(directory.Snapshot(), TuneInChannel.CategoryEntry("talk"))
+            });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory, library);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var proxy = (TaskManagerProxy)(object)manager;
+            proxy.Channel = channel;
+            proxy.TraverseFolders = true;
+            proxy.OnRefresh = () => Assert.Equal(2, calls);
+            var refresh = new TuneInRefresh(directory);
+
+            await refresh.ExecuteConfiguredAsync(manager, null, CancellationToken.None, new InlineProgress());
+
+            Assert.Equal(2, calls);
+            Assert.Single(proxy.RefreshedFolders);
+            var status = refresh.Status().Single(item => item.Category == "talk");
+            Assert.Equal("Completed", status.State);
+            Assert.NotNull(status.DiscoveryMilliseconds);
+            Assert.NotNull(status.ImportMilliseconds);
+        }
+
+        [Fact]
+        public async Task NativeStatusReportsOnlyTheActiveTaskCategoryAndStage()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var discovered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseDiscovery = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var importing = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseImport = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var directory = new TuneInDirectory(() => config, async (_, token) =>
+            {
+                discovered.TrySetResult(true);
+                await releaseDiscovery.Task;
+                token.ThrowIfCancellationRequested();
+                return Opml();
+            });
+            var library = DispatchProxy.Create<MediaBrowser.Controller.Library.ILibraryManager, RefreshTaskLibraryProxy>();
+            var libraryProxy = (RefreshTaskLibraryProxy)(object)library;
+            libraryProxy.Parent = new MediaBrowser.Controller.Channels.Channel { InternalId = 100 };
+            libraryProxy.Roots.Add(new MediaBrowser.Controller.Entities.Folder
+            {
+                InternalId = 1,
+                ParentId = 100,
+                ExternalId = directory.Register(directory.Snapshot(), TuneInChannel.CategoryEntry("talk"))
+            });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory, library);
+            var channelManager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var channelProxy = (TaskManagerProxy)(object)channelManager;
+            channelProxy.Channel = channel;
+            channelProxy.BeforeImport = async () => { importing.TrySetResult(true); await releaseImport.Task; };
+            var refresh = new TuneInRefresh(directory);
+            var task = new RefreshTuneInTask(channelManager, null, refresh);
+            var worker = DispatchProxy.Create<IScheduledTaskWorker, ScheduleTests.WorkerProxy>();
+            var workerProxy = (ScheduleTests.WorkerProxy)worker;
+            workerProxy.Task = task;
+            workerProxy.State = TaskState.Running;
+            var taskManager = DispatchProxy.Create<ITaskManager, ScheduleTests.ManagerProxy>();
+            ((ScheduleTests.ManagerProxy)taskManager).Workers = new[] { worker };
+            var diagnostics = new TuneInChannelRefresh(taskManager, refresh);
+
+            var running = task.Execute(CancellationToken.None, new InlineProgress());
+            try
+            {
+                await discovered.Task;
+                var discovery = diagnostics.Status().Current;
+                Assert.Equal("talk", discovery.Category);
+                Assert.Contains("Discovering", discovery.Phase);
+                Assert.Equal(1, discovery.CategoryIndex);
+                Assert.Equal(1, discovery.CategoryCount);
+                Assert.Equal(1, discovery.StartedRequests);
+                Assert.Equal(0, discovery.CompletedRequests);
+                workerProxy.State = TaskState.Idle;
+                Assert.Null(diagnostics.Status().Current);
+                workerProxy.State = TaskState.Running;
+                releaseDiscovery.TrySetResult(true);
+                await importing.Task;
+                var import = diagnostics.Status().Current;
+                Assert.Contains("Importing", import.Phase);
+                Assert.Equal(1, import.CompletedRequests);
+                releaseImport.TrySetResult(true);
+                await running;
+                Assert.Null(diagnostics.Status().Current);
+            }
+            finally
+            {
+                releaseDiscovery.TrySetResult(true);
+                releaseImport.TrySetResult(true);
+                await running;
+            }
+        }
+
+        [Fact]
+        public async Task DiscoveryFailureDoesNotStartEmbyImport()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var directory = new TuneInDirectory(() => config, (_, __) => throw new IOException("Provider unavailable"));
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var proxy = (TaskManagerProxy)(object)manager;
+            proxy.Channel = channel;
+            var refresh = new TuneInRefresh(directory);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                refresh.ExecuteConfiguredAsync(manager, null, CancellationToken.None, new InlineProgress()));
+
+            Assert.Empty(proxy.RefreshedFolders);
+            Assert.Null(refresh.CurrentConfiguredStatus());
+        }
+
+        [Fact]
+        public async Task CancellingDiscoveryDoesNotStartEmbyImport()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var directory = new TuneInDirectory(() => config, async (_, token) =>
+            {
+                started.TrySetResult(true);
+                await Task.Delay(Timeout.Infinite, token);
+                return Opml();
+            });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var proxy = (TaskManagerProxy)(object)manager;
+            proxy.Channel = channel;
+            var refresh = new TuneInRefresh(directory);
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var running = refresh.ExecuteConfiguredAsync(manager, null, cancellation.Token, new InlineProgress());
+                await started.Task;
+                Assert.NotNull(refresh.CurrentConfiguredStatus());
+                cancellation.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+            }
+            Assert.Empty(proxy.RefreshedFolders);
+            Assert.Null(refresh.CurrentConfiguredStatus());
+        }
+
+        [Fact]
+        public async Task ImportCannotFetchAnUnstagedFolderEvenIfHostSwallowsFailure()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var calls = 0;
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                calls++;
+                return Task.FromResult(Opml());
+            });
+            var snapshot = directory.Snapshot();
+            var request = new DirectoryRequest();
+            request.Parameters["c"] = "talk";
+            request.Parameters["offset"] = "25";
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var proxy = (TaskManagerProxy)(object)manager;
+            proxy.Channel = channel;
+            proxy.SwallowFailure = true;
+            proxy.AdditionalFolder = directory.Register(snapshot, new NavigationEntry
+            { Category = "talk", Request = request, Name = "Unstaged" });
+            var refresh = new TuneInRefresh(directory);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                refresh.ExecuteConfiguredAsync(manager, null, CancellationToken.None, new InlineProgress()));
+            Assert.Equal(1, calls);
+        }
+
+        [Fact]
+        public async Task RefreshRunSharesOnlyIdenticalScopedRequestsAndRevalidatesOnNextRun()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            config.EnableSports = true;
+            var calls = 0;
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                calls++;
+                return Task.FromResult(Opml("<outline type='audio' guide_id='s1' text='Station'/>"));
+            });
+            var snapshot = directory.Snapshot();
+            var request = new DirectoryRequest();
+            request.Parameters["id"] = "g1";
+            var other = request.Copy();
+            other.Parameters["filter"] = "l1";
+            async Task Fetch(string category, DirectoryRequest value)
+            {
+                await directory.SynchronizeCategoryAsync(category, 1,
+                    () => directory.FetchCategoryAsync(snapshot, category, value, CancellationToken.None),
+                    _ => { });
+            }
+
+            await directory.WithRefreshRunAsync(async () =>
+            {
+                await Fetch("talk", request);
+                await Fetch("sports", request);
+                await Fetch("sports", other);
+            });
+            Assert.Equal(2, calls);
+            directory.InvalidateCategory("talk");
+            directory.InvalidateCategory("sports");
+            await directory.WithRefreshRunAsync(() => Fetch("sports", request));
+            Assert.Equal(3, calls);
+        }
+
+        [Fact]
+        public async Task ScheduledRefreshSharesIdenticalLocalAndLocationPagesWithoutLosingScope()
+        {
+            var config = Ready();
+            config.EnableLocalRadio = true;
+            config.EnableLocation = true;
+            config.LocalCities.Add(new CatalogSelection { Id = "r1" });
+            config.Locations.Add(new CatalogSelection { Id = "r1" });
+            var calls = 0;
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                calls++;
+                return Task.FromResult(Opml("<outline type='audio' guide_id='s1' text='Station'/>"));
+            });
+            var snapshot = directory.Snapshot();
+            var library = DispatchProxy.Create<MediaBrowser.Controller.Library.ILibraryManager, RefreshTaskLibraryProxy>();
+            var libraryProxy = (RefreshTaskLibraryProxy)(object)library;
+            libraryProxy.Parent = new MediaBrowser.Controller.Channels.Channel { InternalId = 100 };
+            foreach (var category in snapshot.Categories)
+                libraryProxy.Roots.Add(new MediaBrowser.Controller.Entities.Folder
+                {
+                    InternalId = libraryProxy.Roots.Count + 1,
+                    ParentId = 100,
+                    ExternalId = directory.Register(snapshot, TuneInChannel.CategoryEntry(category))
+                });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory, library);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var proxy = (TaskManagerProxy)(object)manager;
+            proxy.Channel = channel;
+            proxy.TraverseFolders = true;
+            var refresh = new TuneInRefresh(directory);
+
+            await refresh.ExecuteConfiguredAsync(manager, null, CancellationToken.None, new InlineProgress());
+
+            Assert.Equal(1, calls);
+            var stations = proxy.ImportedStationIds.Select(id => directory.Resolve(snapshot, id)).ToArray();
+            Assert.Equal(new[] { "local", "location" }, stations.Select(item => item.Category));
+            Assert.All(stations, entry => Assert.Equal("s1", entry.StationId));
+            Assert.Equal(1, refresh.Status().Single(item => item.Category == "location").CacheHits);
+        }
+
+        [Fact]
+        public async Task SuccessfulRefreshReusesRecentPagesButRevalidatesAfterExpiryOrReset()
+        {
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var config = Ready();
+            config.EnableTalk = true;
+            var calls = 0;
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                calls++;
+                return Task.FromResult(Opml("<outline type='audio' guide_id='s1' text='Station " + calls + "'/>"));
+            }, utcNow: () => now);
+            var snapshot = directory.Snapshot();
+            var library = DispatchProxy.Create<MediaBrowser.Controller.Library.ILibraryManager, RefreshTaskLibraryProxy>();
+            var libraryProxy = (RefreshTaskLibraryProxy)(object)library;
+            libraryProxy.Parent = new MediaBrowser.Controller.Channels.Channel { InternalId = 100 };
+            libraryProxy.Roots.Add(new MediaBrowser.Controller.Entities.Folder
+            {
+                InternalId = 1,
+                ParentId = 100,
+                ExternalId = directory.Register(snapshot, TuneInChannel.CategoryEntry("talk"))
+            });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory, library);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var proxy = (TaskManagerProxy)(object)manager;
+            proxy.Channel = channel;
+            proxy.TraverseFolders = true;
+            var refresh = new TuneInRefresh(directory);
+            async Task Run() => await refresh.ExecuteConfiguredAsync(manager, null, CancellationToken.None, new InlineProgress());
+
+            await Run();
+            await Run();
+            Assert.Equal(1, calls);
+            Assert.Equal(1, refresh.Status().Single(item => item.Category == "talk").CacheHits);
+            now = now.AddMinutes(11);
+            await Run();
+            Assert.Equal(2, calls);
+            Assert.Equal("Station 2", directory.Resolve(directory.Snapshot(), proxy.ImportedStationIds.Last()).Name);
+            directory.Reset();
+            await Run();
+            Assert.Equal(3, calls);
+        }
+
+        [Fact]
+        public async Task FailedImportDoesNotCommitDiscoveryForTheNextRun()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var calls = 0;
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                calls++;
+                return Task.FromResult(Opml());
+            });
+            var library = DispatchProxy.Create<MediaBrowser.Controller.Library.ILibraryManager, RefreshTaskLibraryProxy>();
+            var libraryProxy = (RefreshTaskLibraryProxy)(object)library;
+            libraryProxy.Parent = new MediaBrowser.Controller.Channels.Channel { InternalId = 100 };
+            libraryProxy.Roots.Add(new MediaBrowser.Controller.Entities.Folder
+            {
+                InternalId = 1,
+                ParentId = 100,
+                ExternalId = directory.Register(directory.Snapshot(), TuneInChannel.CategoryEntry("talk"))
+            });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory, library);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var proxy = (TaskManagerProxy)(object)manager;
+            proxy.Channel = channel;
+            proxy.OnRefresh = () => throw new IOException("Import failed");
+            var refresh = new TuneInRefresh(directory);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                refresh.ExecuteConfiguredAsync(manager, null, CancellationToken.None, new InlineProgress()));
+            proxy.OnRefresh = null;
+            await refresh.ExecuteConfiguredAsync(manager, null, CancellationToken.None, new InlineProgress());
+            Assert.Equal(2, calls);
         }
 
         [Fact]
@@ -733,13 +1177,18 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             public bool SwallowCancellation { get; set; }
             public bool SwallowFailure { get; set; }
             public bool TraverseFolders { get; set; }
+            public Action OnRefresh { get; set; }
+            public Func<Task> BeforeImport { get; set; }
+            public string AdditionalFolder { get; set; }
             public List<string> RefreshedFolders { get; } = new List<string>();
+            public List<string> ImportedStationIds { get; } = new List<string>();
             protected override object Invoke(MethodInfo method, object[] args)
             {
                 if (method.Name == "GetLogger") return null;
                 if (method.Name == "GetChannel") return Channel;
                 if (method.Name == "RefreshChannelContent")
                 {
+                    OnRefresh?.Invoke();
                     RefreshedFolders.Add((string)args[2]);
                     return Refresh((string)args[2], (CancellationToken)args[3]);
                 }
@@ -749,6 +1198,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             {
                 try
                 {
+                    if (BeforeImport != null) await BeforeImport();
                     var pending = new Queue<(string Folder, int Depth)>();
                     pending.Enqueue((folder, 0));
                     while (pending.Count != 0)
@@ -756,14 +1206,18 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         var current = pending.Dequeue();
                         var result = await Channel.GetChannelItems(
                             new InternalChannelItemQuery { FolderId = current.Folder }, token);
+                        ImportedStationIds.AddRange(result.Items.Where(item => item.Type == ChannelItemType.Media).Select(item => item.Id));
                         if (TraverseFolders && current.Depth < 8)
                             foreach (var item in result.Items.Where(item => item.Type == ChannelItemType.Folder))
                                 pending.Enqueue((item.Id, current.Depth + 1));
                     }
+                    if (AdditionalFolder != null)
+                        await Channel.GetChannelItems(new InternalChannelItemQuery { FolderId = AdditionalFolder }, token);
                 }
                 catch (OperationCanceledException) when (SwallowCancellation) { }
                 catch (IOException) when (SwallowFailure) { }
                 catch (InvalidDataException) when (SwallowFailure) { }
+                catch (InvalidOperationException) when (SwallowFailure) { }
             }
         }
 

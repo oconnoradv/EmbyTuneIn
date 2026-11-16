@@ -14,6 +14,15 @@ using System.Threading.Tasks;
 
 namespace MediaBrowser.Plugins.TuneIn.Security
 {
+    internal sealed class CatalogueRateLimitException : IOException
+    {
+        internal CatalogueRateLimitException(TimeSpan? retryAfter)
+            : base("TuneIn catalogue request was rate limited.")
+        { RetryAfter = retryAfter; }
+
+        internal TimeSpan? RetryAfter { get; }
+    }
+
     internal sealed class SafeHttpTransport
     {
         private readonly Func<string, Task<IPAddress[]>> resolve;
@@ -121,6 +130,22 @@ namespace MediaBrowser.Plugins.TuneIn.Security
                             registration.Dispose();
                             client.Dispose();
                             continue;
+                        }
+                        if (catalogue && uri.AbsolutePath == "/Browse.ashx" && status == 429)
+                        {
+                            TimeSpan? retryAfter = null;
+                            if (headers.TryGetValue("Retry-After", out var retry))
+                            {
+                                if (long.TryParse(retry, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds)
+                                    && seconds <= int.MaxValue)
+                                    retryAfter = TimeSpan.FromSeconds(seconds);
+                                else if (DateTimeOffset.TryParseExact(retry, "r", CultureInfo.InvariantCulture,
+                                    DateTimeStyles.AssumeUniversal, out var date))
+                                    retryAfter = date <= DateTimeOffset.UtcNow ? TimeSpan.Zero : date - DateTimeOffset.UtcNow;
+                                else
+                                    throw new InvalidDataException("Invalid catalogue Retry-After header.");
+                            }
+                            throw new CatalogueRateLimitException(retryAfter);
                         }
                         if (status != 200)
                             throw new InvalidDataException("Radio provider returned HTTP " + status + ".");

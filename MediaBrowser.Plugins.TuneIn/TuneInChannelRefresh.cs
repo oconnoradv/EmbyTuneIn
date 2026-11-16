@@ -13,6 +13,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public DateTimeOffset? StartedUtc { get; set; }
         public DateTimeOffset? FinishedUtc { get; set; }
         public string FailedAttempt { get; set; }
+        public ConfiguredRefreshStatus Current { get; set; }
     }
 
     public sealed class ChannelRefreshFailure
@@ -26,8 +27,12 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         private const int ReportLimit = 64 * 1024;
         private readonly ITaskManager manager;
-        internal TuneInChannelRefresh(ITaskManager manager)
-        { this.manager = manager ?? throw new ArgumentNullException(nameof(manager)); }
+        private readonly TuneInRefresh refresh;
+        internal TuneInChannelRefresh(ITaskManager manager, TuneInRefresh refresh = null)
+        {
+            this.manager = manager ?? throw new ArgumentNullException(nameof(manager));
+            this.refresh = refresh ?? TuneInRefresh.Instance;
+        }
 
         private IScheduledTaskWorker Worker()
         {
@@ -41,14 +46,16 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             var worker = Worker();
             var result = worker.LastExecutionResult;
+            var state = worker.State.ToString();
             return new ChannelRefreshStatus
             {
-                State = worker.State.ToString(),
+                State = state,
                 Progress = worker.CurrentProgress,
                 LastResult = result?.Status.ToString() ?? "NeverRun",
                 StartedUtc = result?.StartTimeUtc,
                 FinishedUtc = result?.EndTimeUtc,
-                FailedAttempt = result?.Status == TaskCompletionStatus.Failed ? Attempt(result) : null
+                FailedAttempt = result?.Status == TaskCompletionStatus.Failed ? Attempt(result) : null,
+                Current = state == "Running" || state == "Cancelling" ? refresh.CurrentConfiguredStatus() : null
             };
         }
 

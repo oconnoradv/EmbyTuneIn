@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -7,6 +8,7 @@ using System.Threading.Tasks;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Controller.Channels;
 using MediaBrowser.Model.Tasks;
+using MediaBrowser.Plugins.TuneIn.Security;
 using System.Xml.Linq;
 
 namespace MediaBrowser.Plugins.TuneIn
@@ -20,6 +22,10 @@ namespace MediaBrowser.Plugins.TuneIn
         public string Phase { get; set; }
         public int TotalRequests { get; set; }
         public int CompletedRequests { get; set; }
+        public int CacheHits { get; set; }
+        public int HttpResponses { get; set; }
+        public long? DiscoveryMilliseconds { get; set; }
+        public long? ImportMilliseconds { get; set; }
         public int ApiPercent => TotalRequests == 0 ? 0 : 100 * CompletedRequests / TotalRequests;
         public int StationRows { get; set; }
         public int FolderRows { get; set; }
@@ -37,6 +43,17 @@ namespace MediaBrowser.Plugins.TuneIn
         internal RadioGroupRefreshStatus Copy() => (RadioGroupRefreshStatus)MemberwiseClone();
     }
 
+    public sealed class ConfiguredRefreshStatus
+    {
+        public string Category { get; set; }
+        public string Phase { get; set; }
+        public int CategoryIndex { get; set; }
+        public int CategoryCount { get; set; }
+        public int StartedRequests { get; set; }
+        public int CompletedRequests { get; set; }
+        public int CacheHits { get; set; }
+    }
+
     internal sealed class TuneInRefresh
     {
         internal static readonly string[] Categories = { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
@@ -45,6 +62,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly TuneInDirectory directory;
         private readonly Dictionary<string, Job> jobs = new Dictionary<string, Job>();
         private TuneInRefreshStateStore history;
+        private ConfiguredRun configuredRun;
 
         internal TuneInRefresh(TuneInDirectory directory, TuneInRefreshStateStore history = null)
         { this.directory = directory; this.history = history ?? new TuneInRefreshStateStore(); }
@@ -82,6 +100,26 @@ namespace MediaBrowser.Plugins.TuneIn
                     status.LastAttemptState = previous.LastAttemptState;
                     return status;
                 }).ToArray();
+        }
+
+        internal ConfiguredRefreshStatus CurrentConfiguredStatus()
+        {
+            lock (gate)
+            {
+                var run = configuredRun;
+                if (run == null) return null;
+                var job = run.Job?.Status;
+                return new ConfiguredRefreshStatus
+                {
+                    Category = run.Category,
+                    Phase = job?.Phase ?? run.Phase,
+                    CategoryIndex = run.Index,
+                    CategoryCount = run.Count,
+                    StartedRequests = job?.TotalRequests ?? 0,
+                    CompletedRequests = job?.CompletedRequests ?? 0,
+                    CacheHits = job?.CacheHits ?? 0
+                };
+            }
         }
 
         public RadioGroupRefreshStatus Start(string category,
@@ -140,23 +178,30 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
-        private static Func<string, int, CancellationToken, Task> Synchronizer(IChannelManager manager) =>
+        private Func<string, int, CancellationToken, Task> Synchronizer(IChannelManager manager) =>
             async (folder, depth, token) =>
             {
                 var channel = manager.GetChannel<TuneInChannel>();
                 if (channel == null) throw new InvalidOperationException("TuneIn channel is not registered.");
-                await manager.RefreshChannelContent(channel, depth, folder, token).ConfigureAwait(false);
+                await channel.SynchronizeStagedAsync(folder, depth,
+                    () => manager.RefreshChannelContent(channel, depth, folder, token), token).ConfigureAwait(false);
                 token.ThrowIfCancellationRequested();
+                directory.ReportRefreshPhase("Updating category artwork");
                 channel.ReplaceFolderArtwork(folder, token);
             };
 
         public async Task ExecuteScheduledAsync(string category, IChannelManager manager, ILogger logger,
-            CancellationToken token, IProgress<double> progress)
+            CancellationToken token, IProgress<double> progress) =>
+            await ExecuteScheduledCoreAsync(category, manager, logger, token, progress, null).ConfigureAwait(false);
+
+        private async Task ExecuteScheduledCoreAsync(string category, IChannelManager manager, ILogger logger,
+            CancellationToken token, IProgress<double> progress, ConfiguredRun run)
         {
             token.ThrowIfCancellationRequested();
             var job = StartJob(category, Synchronizer(manager), logger);
             lock (gate)
             {
+                if (run != null) run.Job = job;
                 job.AwaitingNativeExecution = false;
                 job.NativeStart.TrySetResult(true);
             }
@@ -201,15 +246,38 @@ namespace MediaBrowser.Plugins.TuneIn
                 return;
             }
 
-            progress.Report(0);
-            for (var index = 0; index < categories.Length; index++)
+            var run = new ConfiguredRun { Count = categories.Length, Phase = "Preparing selected categories" };
+            lock (gate)
             {
-                token.ThrowIfCancellationRequested();
-                await ExecuteScheduledAsync(categories[index], manager, logger, token,
-                    new CategoryProgress(progress, index, categories.Length)).ConfigureAwait(false);
+                if (configuredRun != null) throw new InvalidOperationException("A TuneIn refresh task is already running.");
+                configuredRun = run;
             }
-            token.ThrowIfCancellationRequested();
-            progress.Report(100);
+            try
+            {
+                await directory.WithRefreshRunAsync(async () =>
+                {
+                    progress.Report(0);
+                    for (var index = 0; index < categories.Length; index++)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        lock (gate)
+                        {
+                            run.Category = categories[index];
+                            run.Index = index + 1;
+                            run.Job = null;
+                            run.Phase = "Preparing category";
+                        }
+                        await ExecuteScheduledCoreAsync(categories[index], manager, logger, token,
+                            new CategoryProgress(progress, index, categories.Length), run).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
+                        lock (gate) { run.Job = null; run.Phase = "Finishing category"; }
+                        directory.CommitRefreshRun();
+                    }
+                }).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                progress.Report(100);
+            }
+            finally { lock (gate) { if (configuredRun == run) configuredRun = null; } }
         }
 
         private Job StartJob(string category, Func<string, int, CancellationToken, Task> synchronize, ILogger logger,
@@ -271,16 +339,20 @@ namespace MediaBrowser.Plugins.TuneIn
             Func<string, int, CancellationToken, Task> synchronize, ILogger logger)
         {
             var terminalState = "Completed";
+            var elapsed = Stopwatch.StartNew();
+            var beganDiscovery = false;
             try
             {
                 job.Cancellation.CancelAfter(TimeSpan.FromMinutes(20));
                 using (job.Cancellation.Token.Register(() => job.NativeStart.TrySetCanceled()))
                     await job.NativeStart.Task.ConfigureAwait(false);
+                elapsed.Restart();
+                beganDiscovery = true;
                 using (var operation = directory.Operation(snapshot, job.Cancellation.Token))
                 {
                     var category = job.Status.Category;
                     directory.InvalidateCategory(category);
-                    Action<int> received = status => Update(job, value => value.LastHttpStatus = status);
+                    Action<int> received = status => Update(job, value => { value.LastHttpStatus = status; value.HttpResponses++; });
                     if (category == "language")
                     {
                         BeginRequest(job, "Validating selected languages");
@@ -293,7 +365,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     {
                         status.TotalRequests++;
                         status.State = "Running";
-                        status.Phase = "Populating section; discovering nested pages";
+                        status.Phase = "Discovering selected catalogue pages";
                         status.LastHttpStatus = null;
                         status.LastApiResult = "Waiting for API response";
                     });
@@ -305,13 +377,22 @@ namespace MediaBrowser.Plugins.TuneIn
                         status.FolderRows += document.Descendants("outline").Count(row => TuneInDirectory.Attribute(row, "type") == "link");
                     });
                     operation.Token.ThrowIfCancellationRequested();
-                    Update(job, status => { status.State = "Synchronizing"; status.Phase = "Populating the configured section in Emby; page total is discovered during traversal"; });
+                    Update(job, status => { status.State = "Running"; status.Phase = "Discovering selected catalogue pages"; });
                     var folderId = directory.Register(snapshot, TuneInChannel.CategoryEntry(category));
                     // Emby 4.9.1.90's Refresh Internet Channels uses eight refresh levels.
                     const int depth = 8;
                     await directory.SynchronizeCategoryAsync(category, entries.Count,
                         () => synchronize(folderId, depth, operation.Token), started, received, completed,
-                        entries.Select(entry => TuneInDirectory.RequestKey(snapshot, category, TuneInChannel.CatalogueRequest(snapshot, entry)))).ConfigureAwait(false);
+                        entries.Select(entry => TuneInDirectory.RequestKey(snapshot, category, TuneInChannel.CatalogueRequest(snapshot, entry))),
+                        () => Update(job, status => status.CacheHits++),
+                        () => Update(job, status =>
+                        {
+                            status.DiscoveryComplete = true;
+                            status.DiscoveryMilliseconds = elapsed.ElapsedMilliseconds;
+                            status.State = "Synchronizing";
+                            status.Phase = "Importing staged section into Emby";
+                        }),
+                        phase => Update(job, status => { status.State = "Synchronizing"; status.Phase = phase; })).ConfigureAwait(false);
                     operation.Token.ThrowIfCancellationRequested();
                     Update(job, status =>
                     {
@@ -336,7 +417,9 @@ namespace MediaBrowser.Plugins.TuneIn
                 lock (gate) job.Failure = error;
                 Update(job, status =>
                 {
-                    status.Error = error is InvalidDataException || error is System.Xml.XmlException
+                    status.Error = error is CatalogueRateLimitException
+                            ? "TuneIn rate limited catalogue requests; retry after the provider's requested delay."
+                        : error is InvalidDataException || error is System.Xml.XmlException
                             ? "Provider response was rejected: HTTP failure, API fault, or malformed/unsafe catalogue."
                             : "Section refresh did not complete. Check saved selections, connectivity, request/time limits and Emby server logs.";
                     status.LastApiResult = status.LastApiResult == "Waiting for API response" ? "Request failed" : status.LastApiResult;
@@ -345,8 +428,16 @@ namespace MediaBrowser.Plugins.TuneIn
             }
             finally
             {
+                RadioGroupRefreshStatus result;
                 lock (gate)
                 {
+                    if (beganDiscovery)
+                    {
+                        if (job.Status.DiscoveryMilliseconds.HasValue)
+                            job.Status.ImportMilliseconds = elapsed.ElapsedMilliseconds - job.Status.DiscoveryMilliseconds.Value;
+                        else
+                            job.Status.DiscoveryMilliseconds = elapsed.ElapsedMilliseconds;
+                    }
                     job.Status.State = terminalState;
                     job.Status.FinishedUtc = DateTime.UtcNow;
                     job.Status.UpdatedUtc = job.Status.FinishedUtc;
@@ -356,8 +447,12 @@ namespace MediaBrowser.Plugins.TuneIn
                         job.Status.HistoryError = "Refresh history could not be saved; timestamps may not survive a restart. Check server logs and data-directory permissions.";
                         logger?.Error("TuneIn refresh history persistence failed ({0}).", error.GetType().Name);
                     }
+                    result = job.Status.Copy();
                     job.Cancellation.Dispose();
                 }
+                logger?.Debug("TuneIn refresh {0} ({1}): {2}/{3} catalogue pages completed, {4} HTTP responses, {5} cache hits, discovery {6} ms, Emby import {7} ms.",
+                    result.Category, result.State, result.CompletedRequests, result.TotalRequests, result.HttpResponses,
+                    result.CacheHits, result.DiscoveryMilliseconds, result.ImportMilliseconds);
             }
         }
 
@@ -380,6 +475,15 @@ namespace MediaBrowser.Plugins.TuneIn
             public bool CancelledByAdmin { get; set; }
             public Task Completion { get; set; }
             public Exception Failure { get; set; }
+        }
+
+        private sealed class ConfiguredRun
+        {
+            public string Category { get; set; }
+            public string Phase { get; set; }
+            public int Index { get; set; }
+            public int Count { get; set; }
+            public Job Job { get; set; }
         }
 
         private sealed class CategoryProgress : IProgress<double>
