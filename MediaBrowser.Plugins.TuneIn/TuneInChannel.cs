@@ -227,7 +227,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 var filter = request.Parameters.GetValueOrDefault("filter") ?? "";
                 var tokens = filter.Split(':').Where(s => s.Length > 0 && !Regex.IsMatch(s, @"^l[0-9]+$")).ToList();
                 if (tokens.Any(s => !Regex.IsMatch(s,
-                    @"^(s|p|topic|show|station|popular|topvoted|topclick|random|bit(32|64|128)[*-]?|up-(low|med|hi))$")))
+                    @"\A(s|p|topic|show|station|popular|topvoted|topclick|random|bit(32|64|128)[*-]?|up-(low|med|hi)|~[\p{L}\p{Nd}#])\z")))
                     throw new InvalidDataException("TuneIn returned an unsupported language filter.");
                 request.Parameters["filter"] = string.Join(":", tokens.Concat(new[] { entry.SelectionId }));
             }

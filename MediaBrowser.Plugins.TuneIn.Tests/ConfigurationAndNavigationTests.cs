@@ -193,6 +193,31 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
+        [InlineData("s:~A", "s%3A~A")]
+        [InlineData("s:~#", "s%3A~%23")]
+        [InlineData("s:~É", "s%3A~%C3%89")]
+        [InlineData("p:~湘", "p%3A~%E6%B9%98")]
+        public void AlphabeticCatalogueFiltersAreEncodedAndPreserveLanguageScope(string filter, string encoded)
+        {
+            var link = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=c57941&filter=" + encoded);
+            Assert.Equal(filter, link.Parameters["filter"]);
+            Assert.Contains("filter=" + encoded, link.Url);
+            var scoped = TuneInChannel.ScopedRequest(new ConfigurationSnapshot(Ready()),
+                new NavigationEntry { Category = "language", SelectionId = "l122" }, link);
+            Assert.Equal(filter + ":l122", scoped.Parameters["filter"]);
+        }
+
+        [Theory]
+        [InlineData("filter=s%3A~%26username%3Dsecret")]
+        [InlineData("filter=s%3A~%0A")]
+        [InlineData("filter=s%3A~%2F")]
+        [InlineData("filter=s%3A~AB")]
+        [InlineData("id=s%3A~A")]
+        public void AlphabeticFilterSupportRejectsUnsafeOrUnexpectedParameters(string query) =>
+            Assert.Throws<System.IO.InvalidDataException>(() =>
+                DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=c57941&" + query));
+
+        [Theory]
         [InlineData("music", "c424724")]
         [InlineData("talk", "c424725")]
         [InlineData("sports", "c424726")]

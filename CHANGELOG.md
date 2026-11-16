@@ -7,7 +7,15 @@ features explicitly removed below are not promises of current functionality.
 Superseded prereleases are marked deprecated after the replacement is verified.
 Published assets and original source tags remain unchanged for provenance.
 
-## 1.3.0-fork.14 - refresh diagnostics
+## 1.3.0-fork.15 - alphabetic browse refresh fix
+
+- Accept TuneIn's bounded alphabetic station/show filters for **Find by Name**,
+  including encoded `#` and international letters, without relaxing destination
+  or selected-category restrictions. These provider links previously failed Music
+  refreshes. Include safe rejected-parameter details in the task's main error
+  message when Emby omits inner exceptions from its stored report.
+
+## 1.3.0-fork.14 - refresh diagnostics (deprecated)
 
 - Preserve the original refresh exception chain in the native failed-task report,
   including failures swallowed by host traversal. Identify the category, phase,

@@ -113,6 +113,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
     internal sealed class DirectoryRequest
     {
+        private static readonly object ParameterDiagnosticKey = new object();
         public string Method { get; set; } = "Browse.ashx";
         public Dictionary<string, string> Parameters { get; } = new Dictionary<string, string>();
         public string Url => "https://opml.radiotime.com/" + Method + "?"
@@ -141,7 +142,9 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 var item = query[key];
                 if (item == null) continue;
-                if (!Regex.IsMatch(item, @"^[A-Za-z0-9:,*-]{1,80}$"))
+                if (!Regex.IsMatch(item, @"\A[A-Za-z0-9:,*-]{1,80}\z")
+                    && !(key == "filter" && Regex.IsMatch(item,
+                        @"\A[sp]:~[\p{L}\p{Nd}#](?::l[1-9][0-9]{0,9})?\z")))
                 {
                     var reason = item.Length == 0 ? "empty"
                         : item.Length > 80 ? "longer than 80 characters"
@@ -149,14 +152,24 @@ namespace MediaBrowser.Plugins.TuneIn
                         : item.Any(char.IsWhiteSpace) ? "contains whitespace"
                         : item.Any(character => character > 127) ? "contains non-ASCII characters"
                         : "contains unsupported punctuation";
-                    throw new InvalidDataException("Invalid catalogue link parameter '" + key + "' (" + reason
+                    var message = "Invalid catalogue link parameter '" + key + "' (" + reason
                         + "; length " + item.Length.ToString(CultureInfo.InvariantCulture)
-                        + "; occurrences " + (query.GetValues(key)?.Length ?? 0).ToString(CultureInfo.InvariantCulture) + ").");
+                        + "; occurrences " + (query.GetValues(key)?.Length ?? 0).ToString(CultureInfo.InvariantCulture) + ").";
+                    var error = new InvalidDataException(message);
+                    error.Data[ParameterDiagnosticKey] = message;
+                    throw error;
                 }
                 request.Parameters[key] = item;
             }
             if (request.Parameters.Count == 0) throw new InvalidDataException("Empty catalogue link rejected.");
             return request;
+        }
+
+        internal static string ParameterDiagnostic(Exception error)
+        {
+            for (; error != null; error = error.InnerException)
+                if (error.Data[ParameterDiagnosticKey] is string message) return message;
+            return null;
         }
     }
 

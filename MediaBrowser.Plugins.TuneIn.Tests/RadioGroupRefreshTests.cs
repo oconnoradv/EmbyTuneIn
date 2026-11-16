@@ -448,6 +448,48 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public async Task RefreshTraversesProviderAlphabeticFoldersWithoutEscapingSelectedMusic()
+        {
+            var config = Ready();
+            config.EnableMusic = true;
+            config.Music.Add(new CatalogSelection { Id = "g1" });
+            var filters = new List<string>();
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                Assert.Equal("g1", request.Parameters["id"]);
+                var filter = request.Parameters.GetValueOrDefault("filter");
+                filters.Add(filter);
+                if (request.Parameters.ContainsKey("pivot"))
+                    return Task.FromResult(Opml("<outline type='link' text='#' URL='http://opml.radiotime.com/Browse.ashx?id=g1&amp;filter=s:~%23'/>"
+                        + "<outline type='link' text='E' URL='http://opml.radiotime.com/Browse.ashx?id=g1&amp;filter=s:~%C3%89'/>"));
+                if (filter != null)
+                    return Task.FromResult(Opml("<outline type='audio' text='Station' guide_id='s1'/>"));
+                return Task.FromResult(Opml("<outline type='link' text='Find by Name' key='pivotName' URL='http://opml.radiotime.com/Browse.ashx?pivot=name&amp;id=g1&amp;filter=s'/>"));
+            });
+            var library = DispatchProxy.Create<MediaBrowser.Controller.Library.ILibraryManager, RefreshTaskLibraryProxy>();
+            var libraryProxy = (RefreshTaskLibraryProxy)(object)library;
+            libraryProxy.Parent = new MediaBrowser.Controller.Channels.Channel { InternalId = 100 };
+            libraryProxy.Roots.Add(new MediaBrowser.Controller.Entities.Folder
+            {
+                InternalId = 1,
+                ParentId = 100,
+                ExternalId = directory.Register(directory.Snapshot(), TuneInChannel.CategoryEntry("music"))
+            });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory, library);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var proxy = (TaskManagerProxy)(object)manager;
+            proxy.Channel = channel;
+            proxy.TraverseFolders = true;
+            var refresh = new TuneInRefresh(directory);
+
+            await refresh.ExecuteConfiguredAsync(manager, null, CancellationToken.None, new InlineProgress());
+
+            Assert.Contains("s:~#", filters);
+            Assert.Contains("s:~É", filters);
+            Assert.Equal("Completed", refresh.Status().Single(item => item.Category == "music").State);
+        }
+
+        [Fact]
         public async Task RefreshTuneInTaskWithNoEnabledCategoriesCompletesWithoutChannelCalls()
         {
             var directory = new TuneInDirectory(() => new PluginConfiguration());
@@ -652,6 +694,39 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.DoesNotContain(cause.Message, refresh.Status().Single(item => item.Category == "talk").Error);
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task NativeTaskMessageContainsSafeRejectedParameterDetailsWhenHostDropsInnerException(bool swallowFailure)
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var directory = new TuneInDirectory(() => config, (_, __) => Task.FromResult(Opml(
+                "<outline type='link' text='Bad' URL='http://opml.radiotime.com/Browse.ashx?c=talk&amp;filter=private%2Fvalue'/>")));
+            var library = DispatchProxy.Create<MediaBrowser.Controller.Library.ILibraryManager, RefreshTaskLibraryProxy>();
+            var libraryProxy = (RefreshTaskLibraryProxy)(object)library;
+            libraryProxy.Parent = new MediaBrowser.Controller.Channels.Channel { InternalId = 100 };
+            libraryProxy.Roots.Add(new MediaBrowser.Controller.Entities.Folder
+            {
+                InternalId = 1,
+                ParentId = 100,
+                ExternalId = directory.Register(directory.Snapshot(), TuneInChannel.CategoryEntry("talk"))
+            });
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory, library);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var proxy = (TaskManagerProxy)(object)manager;
+            proxy.Channel = channel;
+            proxy.SwallowFailure = swallowFailure;
+            var refresh = new TuneInRefresh(directory);
+
+            var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                refresh.ExecuteConfiguredAsync(manager, null, CancellationToken.None, new InlineProgress()));
+
+            Assert.Contains("Invalid catalogue link parameter 'filter' (contains unsupported punctuation; length 13; occurrences 1).", failure.Message);
+            Assert.DoesNotContain("private", failure.Message);
+            Assert.DoesNotContain("radiotime.com", failure.Message);
+        }
+
         public class TaskManagerProxy : DispatchProxy
         {
             public TuneInChannel Channel { get; set; }
@@ -688,6 +763,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 }
                 catch (OperationCanceledException) when (SwallowCancellation) { }
                 catch (IOException) when (SwallowFailure) { }
+                catch (InvalidDataException) when (SwallowFailure) { }
             }
         }
 
