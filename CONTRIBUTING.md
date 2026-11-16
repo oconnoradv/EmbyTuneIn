@@ -7,7 +7,7 @@ No upstream pull request or merge is created by building or publishing this fork
 ## Versioning and independent identity
 
 Upstream currently declares assembly/file version `1.2.8.0`. The fork's new
-configuration/refresh functionality uses SemVer `1.3.0-fork.12`: the prerelease
+configuration/refresh functionality uses SemVer `1.3.0-fork.13`: the prerelease
 suffix identifies a fork test candidate, not an official upstream release.
 The `.csproj` `<Version>` is the source of truth. The SDK derives assembly/file
 version `1.3.0.0`; informational version includes the exact source commit.
@@ -89,15 +89,17 @@ results before committing. The root library assets are an original futuristic
 Do not alter station logos when migrating bundled root/group artwork.
 
 Keep legacy refresh history and schedule/trigger backups in the independent state
-file, not the signed station configuration. Do not reintroduce per-group task
-registrations, schedule-suppression settings or mutation APIs. The one-time startup
+file, not the signed station configuration. Keep one visible **Refresh TuneIn**
+scheduled task, with no default trigger, limited to enabled categories and saved
+selections. Do not reintroduce per-group task registrations, schedule-suppression
+settings or mutation APIs. The one-time startup
 migration may undo recorded plugin suppression of the exact built-in task, restoring
 saved/native triggers only while its schedule is empty and preserving administrator
 edits. Failed migration must retain state, attempt rollback and log errors.
 Ordinary configuration Save must never change schedules. The built-in task's
 read-only description and native result must not be modified or fabricated.
-Settings reads native status only on open/manual update, without polling. Retrieving
-the native failed-task report requires an explicit click and administrator access;
+Settings reads the dedicated TuneIn task status only on open/manual update, without
+polling. Retrieving its native failed-task report requires an explicit click and administrator access;
 bound it, reject stale attempts and render private error details as plain text.
 Do not implement `IHasChangeEvent` or queue the global task on install/update/Save:
 configuration invalidation must stay local. Existing host triggers are independent.
@@ -129,10 +131,10 @@ as an official upstream replacement:
   during discovery; no automatic catalogue crawl or setup playback.
 - Protected local relay and transcoding instead of handing untrusted stream URLs
   directly to Emby; supported/unsupported formats and network policies are documented.
-- Built-in Refresh Internet Channels scheduling, removal of plugin-specific workers,
-  one-time undo of legacy schedule suppression, and administrator-only native task
-  diagnostics. Task-list removal, restoration, authorization and actual station
-  import must be exercised on the real server before acceptance.
+- A TuneIn-only scheduled task, the all-provider Refresh Internet Channels task,
+  one-time undo of legacy schedule suppression, and administrator-only diagnostics
+  for Refresh TuneIn. Task registration, restoration, authorization and actual
+  station import must be exercised on the real server before acceptance.
 
 Do not submit or advertise the PR as runtime-verified until the administrator has
 completed the relevant Emby manual tests. See README.md and SECURITY.md.

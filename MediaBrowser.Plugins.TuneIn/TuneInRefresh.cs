@@ -178,6 +178,28 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
+        public async Task ExecuteConfiguredAsync(IChannelManager manager, ILogger logger,
+            CancellationToken token, IProgress<double> progress)
+        {
+            var categories = directory.Snapshot().Categories.ToArray();
+            if (categories.Length == 0)
+            {
+                token.ThrowIfCancellationRequested();
+                progress.Report(100);
+                return;
+            }
+
+            progress.Report(0);
+            for (var index = 0; index < categories.Length; index++)
+            {
+                token.ThrowIfCancellationRequested();
+                await ExecuteScheduledAsync(categories[index], manager, logger, token,
+                    new CategoryProgress(progress, index, categories.Length)).ConfigureAwait(false);
+            }
+            token.ThrowIfCancellationRequested();
+            progress.Report(100);
+        }
+
         private Job StartJob(string category, Func<string, int, CancellationToken, Task> synchronize, ILogger logger,
             bool waitForNative = false)
         {
@@ -344,6 +366,19 @@ namespace MediaBrowser.Plugins.TuneIn
             public CancellationTokenSource Cancellation { get; } = new CancellationTokenSource();
             public bool CancelledByAdmin { get; set; }
             public Task Completion { get; set; }
+        }
+
+        private sealed class CategoryProgress : IProgress<double>
+        {
+            private readonly IProgress<double> progress;
+            private readonly int index;
+            private readonly int count;
+
+            public CategoryProgress(IProgress<double> progress, int index, int count)
+            { this.progress = progress; this.index = index; this.count = count; }
+
+            public void Report(double value) =>
+                progress.Report(100d * (index + Math.Max(0d, Math.Min(100d, value)) / 100d) / count);
         }
     }
 }

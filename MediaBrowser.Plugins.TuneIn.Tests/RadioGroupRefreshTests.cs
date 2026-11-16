@@ -389,14 +389,75 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public void PluginRegistersNoScheduledTasksOrLegacyScheduleMutationRoutes()
+        public void PluginRegistersOneVisibleRefreshTaskAndNoLegacyScheduleMutationRoutes()
         {
-            Assert.DoesNotContain(typeof(Plugin).Assembly.GetTypes(),
-                type => !type.IsAbstract && typeof(IScheduledTask).IsAssignableFrom(type));
+            var taskType = Assert.Single(typeof(Plugin).Assembly.GetTypes(), type =>
+                !type.IsAbstract && typeof(IScheduledTask).IsAssignableFrom(type));
+            Assert.Equal(typeof(RefreshTuneInTask), taskType);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var task = new RefreshTuneInTask(manager, null, new TuneInRefresh(new TuneInDirectory(() => Ready())));
+            Assert.Equal("Refresh TuneIn", task.Name);
+            Assert.Equal("Internet Channels", task.Category);
+            Assert.Contains("only enabled TuneIn categories", task.Description);
+            Assert.Contains("saved sub-category selections", task.Description);
+            Assert.Empty(task.GetDefaultTriggers());
+            Assert.False(task.IsHidden);
+            Assert.True(task.IsEnabled);
             Assert.DoesNotContain(typeof(Plugin).Assembly.GetTypes().SelectMany(type =>
                 type.GetCustomAttributes<MediaBrowser.Model.Services.RouteAttribute>()),
                 route => route.Path.StartsWith("/TuneInFork/Schedule", StringComparison.Ordinal)
-                    || route.Path.StartsWith("/TuneInFork/Refresh", StringComparison.Ordinal));
+                    || route.Path.StartsWith("/TuneInFork/Refresh/", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public async Task RefreshTuneInTaskOnlyTraversesEnabledConfiguredCategories()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            config.EnableSports = true;
+            config.EnableLocalRadio = true;
+            config.EnableMusic = true;
+            config.Music.Add(new MediaBrowser.Plugins.TuneIn.Configuration.CatalogSelection { Id = "g1" });
+            var directory = new TuneInDirectory(() => config, (_, __) => Task.FromResult(Opml()));
+            var snapshot = directory.Snapshot();
+            var library = DispatchProxy.Create<MediaBrowser.Controller.Library.ILibraryManager, RefreshTaskLibraryProxy>();
+            var libraryProxy = (RefreshTaskLibraryProxy)(object)library;
+            libraryProxy.Parent = new MediaBrowser.Controller.Channels.Channel { InternalId = 100 };
+            foreach (var category in snapshot.Categories)
+            {
+                var folderId = directory.Register(snapshot, TuneInChannel.CategoryEntry(category));
+                libraryProxy.Roots.Add(new MediaBrowser.Controller.Entities.Folder
+                { InternalId = libraryProxy.Roots.Count + 1, ParentId = 100, ExternalId = folderId });
+            }
+            var channel = new TuneInChannel(ConfigurationAndNavigationTests.ArtworkHost(), null, directory, library);
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var managerProxy = (TaskManagerProxy)(object)manager;
+            managerProxy.Channel = channel;
+            managerProxy.TraverseFolders = true;
+            var refresh = new TuneInRefresh(directory);
+            var task = new RefreshTuneInTask(manager, null, refresh);
+            var progress = new InlineProgress();
+
+            await task.Execute(CancellationToken.None, progress);
+
+            var categories = managerProxy.RefreshedFolders.Select(folder =>
+                directory.Resolve(directory.Snapshot(), folder).Category).ToArray();
+            Assert.Equal(new[] { "music", "talk", "sports" }, categories);
+            Assert.Equal(100d, progress.Values.Last());
+            Assert.DoesNotContain("local", categories);
+        }
+
+        [Fact]
+        public async Task RefreshTuneInTaskWithNoEnabledCategoriesCompletesWithoutChannelCalls()
+        {
+            var directory = new TuneInDirectory(() => new PluginConfiguration());
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            var task = new RefreshTuneInTask(manager, null, new TuneInRefresh(directory));
+            var progress = new InlineProgress();
+
+            await task.Execute(CancellationToken.None, progress);
+
+            Assert.Equal(new[] { 100d }, progress.Values);
         }
 
         [Fact]
@@ -559,18 +620,57 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         {
             public TuneInChannel Channel { get; set; }
             public bool SwallowCancellation { get; set; }
+            public bool TraverseFolders { get; set; }
+            public List<string> RefreshedFolders { get; } = new List<string>();
             protected override object Invoke(MethodInfo method, object[] args)
             {
                 if (method.Name == "GetLogger") return null;
                 if (method.Name == "GetChannel") return Channel;
                 if (method.Name == "RefreshChannelContent")
+                {
+                    RefreshedFolders.Add((string)args[2]);
                     return Refresh((string)args[2], (CancellationToken)args[3]);
+                }
                 throw new InvalidOperationException("Unexpected native task call.");
             }
             private async Task Refresh(string folder, CancellationToken token)
             {
-                try { await Channel.GetChannelItems(new InternalChannelItemQuery { FolderId = folder }, token); }
+                try
+                {
+                    var pending = new Queue<(string Folder, int Depth)>();
+                    pending.Enqueue((folder, 0));
+                    while (pending.Count != 0)
+                    {
+                        var current = pending.Dequeue();
+                        var result = await Channel.GetChannelItems(
+                            new InternalChannelItemQuery { FolderId = current.Folder }, token);
+                        if (TraverseFolders && current.Depth < 8)
+                            foreach (var item in result.Items.Where(item => item.Type == ChannelItemType.Folder))
+                                pending.Enqueue((item.Id, current.Depth + 1));
+                    }
+                }
                 catch (OperationCanceledException) when (SwallowCancellation) { }
+            }
+        }
+
+        public class RefreshTaskLibraryProxy : DispatchProxy
+        {
+            public List<MediaBrowser.Controller.Entities.Folder> Roots { get; } =
+                new List<MediaBrowser.Controller.Entities.Folder>();
+            public MediaBrowser.Controller.Channels.Channel Parent { get; set; }
+
+            protected override object Invoke(MethodInfo method, object[] args)
+            {
+                if (method.Name == "GetItemList")
+                {
+                    var query = (MediaBrowser.Controller.Entities.InternalItemsQuery)args[0];
+                    if (query.ExternalId != null)
+                        return Roots.Where(item => item.ExternalId == query.ExternalId).ToArray();
+                    return Array.Empty<MediaBrowser.Controller.Entities.BaseItem>();
+                }
+                if (method.Name == "GetItemById") return Parent;
+                if (method.Name == "UpdateItem") return null;
+                throw new InvalidOperationException("Unexpected refresh task library call: " + method.Name);
             }
         }
         private sealed class InlineProgress : IProgress<double>

@@ -11,11 +11,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 {
     public class ScheduleTests
     {
-        private static (ITaskManager Manager, WorkerProxy Worker, TuneInRefreshStateStore Store) Fixture(bool disabled = true)
+        private static (ITaskManager Manager, WorkerProxy Worker, TuneInRefreshStateStore Store) Fixture(
+            bool disabled = true, string taskKey = "RefreshInternetChannels")
         {
             var worker = DispatchProxy.Create<IScheduledTaskWorker, WorkerProxy>();
             var proxy = (WorkerProxy)worker;
-            proxy.Task = new NativeRefreshTask();
+            proxy.Task = new NativeRefreshTask(taskKey);
             proxy.Value = Array.Empty<TaskTriggerInfo>();
             var manager = DispatchProxy.Create<ITaskManager, ManagerProxy>();
             ((ManagerProxy)manager).Workers = new[] { worker };
@@ -161,7 +162,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [Fact]
         public void NativeStatusAndFailedReportAreReadOnlyBoundedAndAttemptSpecific()
         {
-            var fixture = Fixture();
+            var fixture = Fixture(taskKey: RefreshTuneInTask.TaskKey);
             var diagnostics = new TuneInChannelRefresh(fixture.Manager);
             Assert.Equal("NeverRun", diagnostics.Status().LastResult);
             Assert.Null(diagnostics.Status().FailedAttempt);
@@ -195,7 +196,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [Fact]
         public void FailureWithoutDetailsIsExplicitAndMissingTaskIsNotReportedAsSuccess()
         {
-            var fixture = Fixture();
+            var fixture = Fixture(taskKey: RefreshTuneInTask.TaskKey);
             fixture.Worker.LastResult = new TaskResult { Status = TaskCompletionStatus.Failed };
             var diagnostics = new TuneInChannelRefresh(fixture.Manager);
             Assert.Contains("without error details", diagnostics.Failure(diagnostics.Status().FailedAttempt).Text);
@@ -206,7 +207,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [Fact]
         public void OversizedShortAndLongErrorsRemainBoundedWithoutDroppingTruncationNotice()
         {
-            var fixture = Fixture();
+            var fixture = Fixture(taskKey: RefreshTuneInTask.TaskKey);
             fixture.Worker.LastResult = new TaskResult
             {
                 Status = TaskCompletionStatus.Failed,
@@ -257,8 +258,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 
         private sealed class NativeRefreshTask : IScheduledTask
         {
-            public string Key => "RefreshInternetChannels";
-            public string Name => "Refresh Internet Channels";
+            private readonly string key;
+            public NativeRefreshTask(string key) { this.key = key; }
+            public string Key => key;
+            public string Name => key == RefreshTuneInTask.TaskKey ? "Refresh TuneIn" : "Refresh Internet Channels";
             public string Description => Name;
             public string Category => "Internet Channels";
             public IEnumerable<TaskTriggerInfo> GetDefaultTriggers() => new[] { new TaskTriggerInfo { Type = "WeeklyTrigger" } };

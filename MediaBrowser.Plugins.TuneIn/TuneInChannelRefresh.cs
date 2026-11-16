@@ -31,9 +31,9 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private IScheduledTaskWorker Worker()
         {
-            var matches = manager.ScheduledTasks.Where(worker => worker.ScheduledTask.Key == "RefreshInternetChannels").ToArray();
+            var matches = manager.ScheduledTasks.Where(worker => worker.ScheduledTask.Key == RefreshTuneInTask.TaskKey).ToArray();
             if (matches.Length != 1)
-                throw new InvalidOperationException("The built-in Refresh Internet Channels task is unavailable or ambiguous.");
+                throw new InvalidOperationException("The Refresh TuneIn scheduled task is unavailable or ambiguous.");
             return matches[0];
         }
 
@@ -60,10 +60,10 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             var result = Worker().LastExecutionResult;
             if (result == null || result.Status != TaskCompletionStatus.Failed)
-                throw new InvalidOperationException("No failed Internet Channels task report is available. Update the status first.");
+                throw new InvalidOperationException("No failed Refresh TuneIn task report is available. Update the status first.");
             if (attempt != Attempt(result))
-                throw new InvalidOperationException("The Internet Channels task result changed. Update the status before retrieving its report.");
-            var text = "Refresh Internet Channels - Failed\nStarted (UTC): " + result.StartTimeUtc.UtcDateTime.ToString("u")
+                throw new InvalidOperationException("The Refresh TuneIn task result changed. Update the status before retrieving its report.");
+            var text = "Refresh TuneIn - Failed\nStarted (UTC): " + result.StartTimeUtc.UtcDateTime.ToString("u")
                 + "\nFinished (UTC): " + result.EndTimeUtc.UtcDateTime.ToString("u") + "\n\n";
             var shortError = result.ErrorMessage;
             var longError = result.LongErrorMessage;
@@ -77,7 +77,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (text.Length < ReportLimit) text += "\n";
             }
             if (string.IsNullOrEmpty(shortError) && string.IsNullOrEmpty(longError))
-                text += "Emby recorded a failure without error details. Consult the server log for this time range.";
+                text += "Emby recorded a Refresh TuneIn failure without error details. Consult the server log for this time range.";
             return new ChannelRefreshFailure { Attempt = attempt, Text = text, Truncated = truncated };
         }
     }
