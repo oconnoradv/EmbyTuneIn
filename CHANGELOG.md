@@ -7,7 +7,7 @@ features explicitly removed below are not promises of current functionality.
 Superseded prerelease download records/assets are retired after the replacement
 release is verified; original source tags remain unchanged for provenance.
 
-## Unreleased - native refresh task integration
+## 1.3.0-fork.12 - native refresh task integration
 
 - Remove all eight Refresh TuneIn - ... scheduled tasks and their legacy
   start/cancel/status/schedule APIs. Use Emby's built-in Refresh Internet Channels.
@@ -18,6 +18,10 @@ release is verified; original source tags remain unchanged for provenance.
   update and explicit retrieval of the latest failed task's stored error report.
   Keep diagnostics administrator-only, bounded and plain-text; no full server-log
   access, background polling, provider queries or fabricated task results.
+- Retain fork.11's pre-roll handoff and live-provider compatibility fixes.
+  The reported disappearance/recreation of the channel after replacing the DLL
+  remains under investigation pending an upgrade retest and sanitized startup log;
+  this release does not claim to fix it.
 
 ## 1.3.0-fork.11 - live-provider compatibility
 
