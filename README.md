@@ -166,9 +166,9 @@ validated remote images; existing migrated/custom primary images are preserved.
 
 ## Manual testing and troubleshooting
 
-This candidate has **not** been verified on a real Emby server. After installing,
-check settings and administrator permissions, save/lock behavior, category
-selections, artwork, scheduled and individual refreshes, timeout/recovery, and
+The plugin has been tested against **Emby Server 4.11.0.13 beta**. After
+installing, check settings and administrator permissions, save/lock behavior,
+category selections, artwork, scheduled and individual refreshes, timeout/recovery, and
 settings persistence after restart. Test a station with required pre-roll past
 the ad into sustained music, a station without pre-roll such as KEXP, and
 stopping playback during both phases. Confirm local relay/transcoding behavior.
