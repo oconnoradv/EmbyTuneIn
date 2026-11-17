@@ -7,6 +7,13 @@ features explicitly removed below are not promises of current functionality.
 Superseded prereleases are marked deprecated after the replacement is verified.
 Published assets and original source tags remain unchanged for provenance.
 
+## 1.3.0-fork.18 - alphabet pagination fix
+
+- Preserve TuneIn's unescaped `#` alphabet filter in pagination links while
+  retaining destination and fragment restrictions.
+- Include a safe reason when a catalogue destination is rejected, without
+  exposing its URL or credentials in the refresh task report.
+
 ## 1.3.0-fork.17 - staged refresh root fix
 
 - Allow Emby's channel-root query during staged refresh and report swallowed

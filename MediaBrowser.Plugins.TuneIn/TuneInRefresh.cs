@@ -226,11 +226,11 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (status.State == "Cancelled") throw new OperationCanceledException(status.Error, token);
                 if (status.State != "Completed")
                 {
-                    var parameterDiagnostic = DirectoryRequest.ParameterDiagnostic(failure);
+                    var linkDiagnostic = DirectoryRequest.LinkDiagnostic(failure);
                     throw new InvalidOperationException("TuneIn category '" + status.Category + "' failed. Phase: "
                         + status.Phase + ". Catalogue requests completed/started: " + status.CompletedRequests + "/"
                         + status.TotalRequests + ". Last HTTP status: " + (status.LastHttpStatus?.ToString() ?? "not recorded")
-                        + ". " + status.Error + (parameterDiagnostic == null ? "" : " " + parameterDiagnostic), failure);
+                        + ". " + status.Error + (linkDiagnostic == null ? "" : " " + linkDiagnostic), failure);
                 }
                 progress.Report(100);
             }

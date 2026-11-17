@@ -903,14 +903,18 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             config.EnableMusic = true;
             config.Music.Add(new CatalogSelection { Id = "g1" });
             var filters = new List<string>();
+            var offsets = new List<string>();
             var directory = new TuneInDirectory(() => config, (request, _) =>
             {
                 Assert.Equal("g1", request.Parameters["id"]);
                 var filter = request.Parameters.GetValueOrDefault("filter");
                 filters.Add(filter);
+                offsets.Add(request.Parameters.GetValueOrDefault("offset"));
                 if (request.Parameters.ContainsKey("pivot"))
                     return Task.FromResult(Opml("<outline type='link' text='#' URL='http://opml.radiotime.com/Browse.ashx?id=g1&amp;filter=s:~%23'/>"
                         + "<outline type='link' text='E' URL='http://opml.radiotime.com/Browse.ashx?id=g1&amp;filter=s:~%C3%89'/>"));
+                if (filter == "s:~#" && !request.Parameters.ContainsKey("offset"))
+                    return Task.FromResult(Opml("<outline type='link' key='nextStations' text='Next' URL='http://opml.radiotime.com/Browse.ashx?offset=50&amp;id=g1&amp;filter=s:~#'/>"));
                 if (filter != null)
                     return Task.FromResult(Opml("<outline type='audio' text='Station' guide_id='s1'/>"));
                 return Task.FromResult(Opml("<outline type='link' text='Find by Name' key='pivotName' URL='http://opml.radiotime.com/Browse.ashx?pivot=name&amp;id=g1&amp;filter=s'/>"));
@@ -935,6 +939,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 
             Assert.Contains("s:~#", filters);
             Assert.Contains("s:~É", filters);
+            Assert.Contains("50", offsets);
             Assert.Equal("Completed", refresh.Status().Single(item => item.Category == "music").State);
         }
 
@@ -1174,6 +1179,26 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Contains("Invalid catalogue link parameter 'filter' (contains unsupported punctuation; length 13; occurrences 1).", failure.Message);
             Assert.DoesNotContain("private", failure.Message);
             Assert.DoesNotContain("radiotime.com", failure.Message);
+        }
+
+        [Fact]
+        public async Task NativeTaskMessageContainsSafeRejectedDestinationReason()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var directory = new TuneInDirectory(() => config, (_, __) => Task.FromResult(Opml(
+                "<outline type='link' text='Bad' URL='https://private.example/path?secret=value'/>")));
+            var manager = DispatchProxy.Create<IChannelManager, TaskManagerProxy>();
+            ((TaskManagerProxy)(object)manager).Channel = new TuneInChannel(
+                ConfigurationAndNavigationTests.ArtworkHost(), null, directory);
+            var refresh = new TuneInRefresh(directory);
+
+            var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                refresh.ExecuteConfiguredAsync(manager, null, CancellationToken.None, new InlineProgress()));
+
+            Assert.Contains("Untrusted catalogue link rejected (untrusted host).", failure.Message);
+            Assert.DoesNotContain("private", failure.Message);
+            Assert.DoesNotContain("secret", failure.Message);
         }
 
         public class TaskManagerProxy : DispatchProxy

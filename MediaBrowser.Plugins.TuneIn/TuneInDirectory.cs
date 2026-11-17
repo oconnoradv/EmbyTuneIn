@@ -116,7 +116,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
     internal sealed class DirectoryRequest
     {
-        private static readonly object ParameterDiagnosticKey = new object();
+        private static readonly object LinkDiagnosticKey = new object();
         public string Method { get; set; } = "Browse.ashx";
         public Dictionary<string, string> Parameters { get; } = new Dictionary<string, string>();
         public string Url => "https://opml.radiotime.com/" + Method + "?"
@@ -133,13 +133,24 @@ namespace MediaBrowser.Plugins.TuneIn
         public static DirectoryRequest ParseLink(string value)
         {
             value = HttpUtility.HtmlDecode(value);
-            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
-                || (uri.Scheme != "http" && uri.Scheme != "https") || !uri.IsDefaultPort
-                || uri.UserInfo.Length != 0 || uri.Fragment.Length != 0
-                || !uri.Host.Equals("opml.radiotime.com", StringComparison.OrdinalIgnoreCase)
-                || (uri.AbsolutePath != "/Browse.ashx" && uri.AbsolutePath != "/Tune.ashx"))
-                throw new InvalidDataException("Untrusted catalogue link rejected.");
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+                throw RejectedLink("missing or invalid absolute URL");
+            if (uri.Scheme != "http" && uri.Scheme != "https")
+                throw RejectedLink("unsupported scheme");
+            if (!uri.IsDefaultPort) throw RejectedLink("non-default port");
+            if (uri.UserInfo.Length != 0) throw RejectedLink("credentials in URL");
+            if (!uri.Host.Equals("opml.radiotime.com", StringComparison.OrdinalIgnoreCase))
+                throw RejectedLink("untrusted host");
+            if (uri.AbsolutePath != "/Browse.ashx" && uri.AbsolutePath != "/Tune.ashx")
+                throw RejectedLink("unsupported path");
             var query = HttpUtility.ParseQueryString(uri.Query);
+            var lastParameter = HttpUtility.UrlDecode(uri.Query.Substring(uri.Query.LastIndexOf('&') + 1).TrimStart('?'));
+            // TuneIn emits the # alphabet filter unescaped in some pagination links.
+            var trailingAlphabetHash = uri.Fragment == "#"
+                && (lastParameter == "filter=s:~" || lastParameter == "filter=p:~")
+                && query.GetValues("filter")?.Length == 1;
+            if (uri.Fragment.Length != 0 && !trailingAlphabetHash) throw RejectedLink("URL fragment");
+            if (trailingAlphabetHash) query["filter"] += "#";
             var request = new DirectoryRequest { Method = uri.AbsolutePath.Substring(1) };
             foreach (var key in new[] { "id", "c", "filter", "offset", "pivot", "sid" })
             {
@@ -159,7 +170,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         + "; length " + item.Length.ToString(CultureInfo.InvariantCulture)
                         + "; occurrences " + (query.GetValues(key)?.Length ?? 0).ToString(CultureInfo.InvariantCulture) + ").";
                     var error = new InvalidDataException(message);
-                    error.Data[ParameterDiagnosticKey] = message;
+                    error.Data[LinkDiagnosticKey] = message;
                     throw error;
                 }
                 request.Parameters[key] = item;
@@ -168,10 +179,18 @@ namespace MediaBrowser.Plugins.TuneIn
             return request;
         }
 
-        internal static string ParameterDiagnostic(Exception error)
+        private static InvalidDataException RejectedLink(string reason)
+        {
+            var message = "Untrusted catalogue link rejected (" + reason + ").";
+            var error = new InvalidDataException(message);
+            error.Data[LinkDiagnosticKey] = message;
+            return error;
+        }
+
+        internal static string LinkDiagnostic(Exception error)
         {
             for (; error != null; error = error.InnerException)
-                if (error.Data[ParameterDiagnosticKey] is string message) return message;
+                if (error.Data[LinkDiagnosticKey] is string message) return message;
             return null;
         }
     }

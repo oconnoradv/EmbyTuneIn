@@ -233,6 +233,28 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
+        [InlineData("s:~#", "s:~#")]
+        [InlineData("p%3A~#", "p:~#")]
+        public void BareHashInFinalAlphabetFilterIsEncodedForPagination(string rawFilter, string expected)
+        {
+            var link = DirectoryRequest.ParseLink(
+                "http://opml.radiotime.com/Browse.ashx?offset=50&id=c57941&filter=" + rawFilter);
+            Assert.Equal(expected, link.Parameters["filter"]);
+            Assert.Equal("50", link.Parameters["offset"]);
+            Assert.Contains("filter=" + Uri.EscapeDataString(expected), link.Url);
+            Assert.DoesNotContain("#", link.Url);
+        }
+
+        [Theory]
+        [InlineData("filter=s:~#private")]
+        [InlineData("filter=s:~&id=c57941#")]
+        [InlineData("filter=s:~&filter=s:~#")]
+        [InlineData("id=c57941#")]
+        public void BareHashNormalizationRejectsOtherFragments(string query) =>
+            Assert.Throws<System.IO.InvalidDataException>(() =>
+                DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?" + query));
+
+        [Theory]
         [InlineData("filter=s%3A~%26username%3Dsecret")]
         [InlineData("filter=s%3A~%0A")]
         [InlineData("filter=s%3A~%2F")]
@@ -562,6 +584,22 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("https://opml.radiotime.com/Browse.ashx?id=r1%26username%3Dsecret")]
         public void CatalogueLinksCannotIntroduceArbitraryTargetsOrParameters(string value) =>
             Assert.Throws<System.IO.InvalidDataException>(() => DirectoryRequest.ParseLink(value));
+
+        [Theory]
+        [InlineData(null, "missing or invalid absolute URL")]
+        [InlineData("ftp://opml.radiotime.com/Browse.ashx?secret=value", "unsupported scheme")]
+        [InlineData("https://opml.radiotime.com:444/Browse.ashx?secret=value", "non-default port")]
+        [InlineData("https://private:secret@opml.radiotime.com/Browse.ashx", "credentials in URL")]
+        [InlineData("https://opml.radiotime.com/Browse.ashx#private", "URL fragment")]
+        [InlineData("https://private.example/Browse.ashx?secret=value", "untrusted host")]
+        [InlineData("https://opml.radiotime.com/private?secret=value", "unsupported path")]
+        public void RejectedCatalogueDestinationsReportOnlySafeReason(string value, string reason)
+        {
+            var error = Assert.Throws<System.IO.InvalidDataException>(() => DirectoryRequest.ParseLink(value));
+            Assert.Equal("Untrusted catalogue link rejected (" + reason + ").", error.Message);
+            Assert.DoesNotContain("private", error.Message);
+            Assert.DoesNotContain("secret", error.Message);
+        }
 
         [Theory]
         [InlineData("filter=private%20value", "filter", "contains whitespace", 13, 1)]

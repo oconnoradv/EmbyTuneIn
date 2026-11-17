@@ -58,6 +58,27 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 
         [Fact]
         [Trait("Category", "Live")]
+        public async Task LiveMusicHashPaginationParsesThroughPinnedCatalogueTransport()
+        {
+            var transport = new SafeHttpTransport();
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+            using (var response = await transport.OpenAsync(
+                "https://opml.radiotime.com/Browse.ashx?filter=s%3A~%23&id=c57941", true, timeout.Token))
+            {
+                var bytes = await TuneInDirectory.ReadBoundedAsync(response.Body, 2 * 1024 * 1024, timeout.Token);
+                var document = TuneInDirectory.ParseCatalogue(bytes);
+                var next = Assert.Single(document.Descendants("outline"), row =>
+                    TuneInDirectory.Attribute(row, "key") == "nextStations");
+                var link = DirectoryRequest.ParseLink(TuneInDirectory.Attribute(next, "URL"));
+                Assert.Equal("s:~#", link.Parameters["filter"]);
+                Assert.Equal("c57941", link.Parameters["id"]);
+                Assert.True(link.Parameters.ContainsKey("offset"));
+                Assert.DoesNotContain("#", link.Url);
+            }
+        }
+
+        [Fact]
+        [Trait("Category", "Live")]
         public async Task LiveAdvertisedStationArtworkWorksThroughPinnedCdnTransport()
         {
             var entry = new NavigationEntry
