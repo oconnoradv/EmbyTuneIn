@@ -33,6 +33,47 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 TuneInDirectory.ParseCatalogue(Encoding.UTF8.GetBytes(xml)));
         }
 
+        [Fact]
+        public void TimeoutSettingDoesNotInvalidateExistingNavigationIdsButScopesResumeIdentity()
+        {
+            var original = Ready();
+            original.EnableTalk = true;
+            original.NavigationSecret = Convert.ToBase64String(Enumerable.Range(0, 32).Select(value => (byte)value).ToArray());
+            var changedTimeout = Ready();
+            changedTimeout.EnableTalk = true;
+            changedTimeout.NavigationSecret = original.NavigationSecret;
+            changedTimeout.RefreshTimeoutMinutes = 90;
+
+            var originalSnapshot = new ConfigurationSnapshot(original);
+            var changedSnapshot = new ConfigurationSnapshot(changedTimeout);
+
+            var serializer = new System.Xml.Serialization.XmlSerializer(typeof(PluginConfiguration));
+            string serialized;
+            using (var writer = new System.IO.StringWriter(System.Globalization.CultureInfo.InvariantCulture))
+            {
+                serializer.Serialize(writer, original);
+                serialized = writer.ToString();
+            }
+            var timeoutTag = "<RefreshTimeoutMinutes>";
+            var timeoutStart = serialized.IndexOf(timeoutTag, StringComparison.Ordinal);
+            Assert.True(timeoutStart >= 0);
+            var lineStart = serialized.LastIndexOf('\n', timeoutStart) + 1;
+            var lineEnd = serialized.IndexOf('\n', timeoutStart);
+            Assert.True(lineEnd >= timeoutStart);
+            var fork18Xml = serialized.Remove(lineStart, lineEnd + 1 - lineStart);
+            string expectedKey;
+            using (var hash = System.Security.Cryptography.SHA256.Create())
+                expectedKey = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(fork18Xml))).Replace("-", "");
+
+            Assert.Equal(expectedKey, originalSnapshot.Key);
+            Assert.Equal(expectedKey, changedSnapshot.Key);
+            Assert.NotEqual(originalSnapshot.SettingsKey, changedSnapshot.SettingsKey);
+            var directory = new TuneInDirectory(() => original);
+            var id = directory.Register(directory.Snapshot(), new NavigationEntry { Category = "talk", StationId = "s1" });
+            original.RefreshTimeoutMinutes = changedTimeout.RefreshTimeoutMinutes;
+            Assert.Equal("s1", directory.Resolve(directory.Snapshot(), id).StationId);
+        }
+
         [Theory]
         [InlineData("4.9.1.80", false)]
         [InlineData("4.9.1.81", false)]
@@ -143,14 +184,29 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             else Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
         }
 
+        [Theory]
+        [InlineData(0, false)]
+        [InlineData(1, true)]
+        [InlineData(60, true)]
+        [InlineData(1440, true)]
+        [InlineData(1441, false)]
+        public void RefreshTimeoutIsValidatedOnConfigurationSave(int minutes, bool valid)
+        {
+            var config = Ready();
+            config.RefreshTimeoutMinutes = minutes;
+            if (valid) ConfigurationSnapshot.Validate(config);
+            else Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+        }
+
         [Fact]
-        public void LegacyConfigurationDefaultsToThreeSecondInterval()
+        public void LegacyConfigurationDefaultsToThreeSecondIntervalAndOneHourTimeout()
         {
             var serializer = new System.Xml.Serialization.XmlSerializer(typeof(PluginConfiguration));
             using (var reader = new System.IO.StringReader("<PluginConfiguration><Username>legacy</Username></PluginConfiguration>"))
             {
                 var config = (PluginConfiguration)serializer.Deserialize(reader);
                 Assert.Equal(3, config.ApiRequestIntervalSeconds);
+                Assert.Equal(60, config.RefreshTimeoutMinutes);
             }
         }
 

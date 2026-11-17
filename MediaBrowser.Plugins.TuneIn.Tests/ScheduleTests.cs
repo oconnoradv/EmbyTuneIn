@@ -160,6 +160,42 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public void MaximumValidTimeoutCheckpointCanBePersistedAndReloaded()
+        {
+            var path = Path.Combine(Environment.CurrentDirectory, "tunein-state-bound-" + Guid.NewGuid().ToString("N") + ".xml");
+            try
+            {
+                var pages = new List<TuneInRefreshPageCheckpoint>();
+                using (var hash = System.Security.Cryptography.SHA256.Create())
+                {
+                    for (var index = 0; index < 4; index++)
+                    {
+                        var key = ":" + Convert.ToBase64String(hash.ComputeHash(System.Text.Encoding.UTF8.GetBytes(index.ToString())));
+                        pages.Add(new TuneInRefreshPageCheckpoint { Key = key, Bytes = new byte[2 * 1024 * 1024] });
+                    }
+                }
+                var completedFolders = new List<string>();
+                for (var index = 0; index < 1000; index++)
+                    completedFolders.Add(index.ToString("D4") + new string('x', 5996));
+
+                var store = new TuneInRefreshStateStore(path);
+                store.RecordTimeoutCheckpoint("talk", "attempt", new string('a', 64), 60, false,
+                    DateTime.UtcNow, pages: pages, completedImportFolders: completedFolders);
+
+                var length = new FileInfo(path).Length;
+                Assert.InRange(length, 12L * 1024 * 1024 + 1, 24L * 1024 * 1024);
+                var reloaded = new TuneInRefreshStateStore(path).TimeoutCheckpoint;
+                Assert.Equal(4, reloaded.Pages.Count);
+                Assert.Equal(1000, reloaded.CompletedImportFolders.Count);
+            }
+            finally
+            {
+                if (File.Exists(path)) File.Delete(path);
+                if (File.Exists(path + ".tmp")) File.Delete(path + ".tmp");
+            }
+        }
+
+        [Fact]
         public void NativeStatusAndFailedReportAreReadOnlyBoundedAndAttemptSpecific()
         {
             var fixture = Fixture(taskKey: RefreshTuneInTask.TaskKey);

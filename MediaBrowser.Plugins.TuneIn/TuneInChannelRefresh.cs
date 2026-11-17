@@ -14,6 +14,17 @@ namespace MediaBrowser.Plugins.TuneIn
         public DateTimeOffset? FinishedUtc { get; set; }
         public string FailedAttempt { get; set; }
         public ConfiguredRefreshStatus Current { get; set; }
+        public string Outcome { get; set; }
+        public bool Resumable { get; set; }
+        public string ResumeCategory { get; set; }
+        public string ResumeAttemptId { get; set; }
+        public int TimeoutMinutes { get; set; }
+        public int BaselineRequests { get; set; }
+        public int EstimatedRequests { get; set; }
+        public int EstimatedCompletedRequests { get; set; }
+        public double? EstimatedProgress { get; set; }
+        public bool ConfigurationMatchesBaseline { get; set; }
+        public string EstimateWarning { get; set; }
     }
 
     public sealed class ChannelRefreshFailure
@@ -47,6 +58,12 @@ namespace MediaBrowser.Plugins.TuneIn
             var worker = Worker();
             var result = worker.LastExecutionResult;
             var state = worker.State.ToString();
+            var baseline = refresh.CurrentBaseline();
+            var current = state == "Running" || state == "Cancelling"
+                ? refresh.CurrentConfiguredStatus() : null;
+            var resumable = refresh.LastTimedOutCategory();
+            var outcome = refresh.IsConfiguredRunActive ? "Running"
+                : Outcome(state, result, resumable, refresh.LastConfiguredOutcome);
             return new ChannelRefreshStatus
             {
                 State = state,
@@ -55,8 +72,31 @@ namespace MediaBrowser.Plugins.TuneIn
                 StartedUtc = result?.StartTimeUtc,
                 FinishedUtc = result?.EndTimeUtc,
                 FailedAttempt = result?.Status == TaskCompletionStatus.Failed ? Attempt(result) : null,
-                Current = state == "Running" || state == "Cancelling" ? refresh.CurrentConfiguredStatus() : null
+                Current = current,
+                Outcome = outcome,
+                Resumable = outcome == "TimedOut" && resumable?.Resumable == true,
+                ResumeCategory = outcome == "TimedOut" && resumable?.Resumable == true ? resumable.Category : null,
+                ResumeAttemptId = outcome == "TimedOut" && resumable?.Resumable == true ? resumable.Id : null,
+                TimeoutMinutes = refresh.CurrentTimeoutMinutes,
+                BaselineRequests = baseline?.TotalRequests ?? 0,
+                EstimatedRequests = current?.EstimatedRequests ?? baseline?.TotalRequests ?? 0,
+                EstimatedCompletedRequests = current?.EstimatedCompletedRequests ?? 0,
+                EstimatedProgress = current?.EstimatedProgress,
+                ConfigurationMatchesBaseline = baseline != null,
+                EstimateWarning = refresh.CurrentEstimateWarning
             };
+        }
+
+        private static string Outcome(string workerState, TaskResult result,
+            RadioGroupRefreshStatus resumable, string lastConfiguredOutcome)
+        {
+            if (workerState == "Running" || workerState == "Cancelling") return "Running";
+            var resultState = result?.Status.ToString();
+            if (resultState == "Completed") return "Completed";
+            if (resultState == "Cancelled" || resultState == "Canceled") return "Cancelled";
+            if (resultState == "Failed")
+                return resumable?.ConfiguredTask == true || lastConfiguredOutcome == "TimedOut" ? "TimedOut" : "Error";
+            return lastConfiguredOutcome;
         }
 
         private static string Attempt(TaskResult result) =>

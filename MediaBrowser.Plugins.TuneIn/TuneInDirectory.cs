@@ -24,6 +24,7 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         public PluginConfiguration Value { get; }
         public string Key { get; }
+        public string SettingsKey { get; }
         public ConfigurationSnapshot(PluginConfiguration value)
         {
             var serializer = new XmlSerializer(typeof(PluginConfiguration));
@@ -34,7 +35,13 @@ namespace MediaBrowser.Plugins.TuneIn
                 using (var reader = new StringReader(xml))
                     Value = (PluginConfiguration)serializer.Deserialize(reader);
                 using (var hash = SHA256.Create())
-                    Key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(xml))).Replace("-", "");
+                {
+                    SettingsKey = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(xml))).Replace("-", "");
+                    var navigationXml = Regex.Replace(xml,
+                        @"^[ \t]*<RefreshTimeoutMinutes>.*?</RefreshTimeoutMinutes>\r?\n", "",
+                        RegexOptions.CultureInvariant | RegexOptions.Multiline);
+                    Key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(navigationXml))).Replace("-", "");
+                }
             }
         }
 
@@ -100,6 +107,9 @@ namespace MediaBrowser.Plugins.TuneIn
             if (value.ApiRequestIntervalSeconds < PluginConfiguration.MinApiRequestIntervalSeconds
                 || value.ApiRequestIntervalSeconds > PluginConfiguration.MaxApiRequestIntervalSeconds)
                 throw new ArgumentException("TuneIn API request interval must be between 1 and 30 seconds.");
+            if (value.RefreshTimeoutMinutes < PluginConfiguration.MinRefreshTimeoutMinutes
+                || value.RefreshTimeoutMinutes > PluginConfiguration.MaxRefreshTimeoutMinutes)
+                throw new ArgumentException("TuneIn refresh timeout must be between 1 and 1440 minutes.");
             foreach (var category in new[] { "music", "language", "location", "local" })
             {
                 var items = category == "music" ? value.Music : category == "language" ? value.Languages
@@ -233,6 +243,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Dictionary<string, CancellationTokenSource> categoryChanges = new Dictionary<string, CancellationTokenSource>();
         private readonly AsyncLocal<RefreshContext> refreshContext = new AsyncLocal<RefreshContext>();
         private readonly AsyncLocal<RefreshRun> refreshRun = new AsyncLocal<RefreshRun>();
+        private RefreshRun activeRefreshRun;
         private int cachedBytes;
         private int recentRefreshBytes;
         private long cacheGeneration;
@@ -460,10 +471,11 @@ namespace MediaBrowser.Plugins.TuneIn
             CancellationToken categoryToken;
             lock (gate)
             {
+                var activeRun = refreshRun.Value ?? activeRefreshRun;
                 token.ThrowIfCancellationRequested();
                 if (snapshot.Key != key) throw new OperationCanceledException("Configuration changed.");
-                if (refreshContext.Value != null && refreshRun.Value != null
-                    && (refreshRun.Value.Key != key || refreshRun.Value.Generation != cacheGeneration))
+                if (refreshContext.Value != null && activeRun != null
+                    && (activeRun.Key != key || activeRun.Generation != cacheGeneration))
                     throw new OperationCanceledException("TuneIn configuration changed.");
                 if (!refresh && pages.TryGetValue(id, out var cached) && cached.Expires > DateTime.UtcNow)
                 {
@@ -472,14 +484,14 @@ namespace MediaBrowser.Plugins.TuneIn
                     return ParseCatalogue(cached.Bytes);
                 }
                 var sharedKey = RequestKey(snapshot, "", request);
-                if (!refresh && refreshContext.Value != null && refreshRun.Value != null
-                    && refreshRun.Value.Pages.TryGetValue(sharedKey, out var shared))
+                if (!refresh && refreshContext.Value != null && activeRun != null
+                    && activeRun.Pages.TryGetValue(sharedKey, out var shared))
                 {
                     refreshContext.Value.Pages.Add(id);
                     refreshContext.Value.CacheHit?.Invoke();
                     return ParseCatalogue(shared.Bytes);
                 }
-                if (!refresh && refreshContext.Value != null && refreshRun.Value != null
+                if (!refresh && refreshContext.Value != null && activeRun != null
                     && recentRefreshPages.TryGetValue(sharedKey, out var recent) && recent.Expires > utcNow())
                 {
                     refreshContext.Value.Pages.Add(id);
@@ -523,13 +535,17 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
                     else if (refresh)
                         throw new InvalidOperationException("Catalogue cache capacity exceeded; refresh fewer saved selections.");
-                    var run = refreshRun.Value;
+                    var run = refreshRun.Value ?? activeRefreshRun;
                     var sharedKey = RequestKey(snapshot, "", request);
-                    if (run != null && refreshContext.Value != null && !run.Pages.ContainsKey(sharedKey)
-                        && run.Pages.Count < 128 && run.Bytes + bytes.Length <= 8 * 1024 * 1024)
+                    if (run != null && refreshContext.Value != null && !run.Pages.ContainsKey(sharedKey))
                     {
-                        run.Pages.Add(sharedKey, new CachedPage { Bytes = bytes, Expires = utcNow().AddMinutes(10) });
-                        run.Bytes += bytes.Length;
+                        if (run.Pages.Count < 128 && run.Bytes + bytes.Length <= 8 * 1024 * 1024)
+                        {
+                            run.Pages.Add(sharedKey, new CachedPage { Bytes = bytes, Expires = utcNow().AddMinutes(10) });
+                            run.Bytes += bytes.Length;
+                        }
+                        else
+                            run.PagesTruncated = true;
                     }
                 }
                 if (refreshContext.Value != null)
@@ -550,7 +566,8 @@ namespace MediaBrowser.Plugins.TuneIn
         public async Task SynchronizeCategoryAsync(string category, int expectedPages, Func<Task> synchronize,
             Action<DirectoryRequest> requestStarted = null, Action<int> statusReceived = null,
             Action<XDocument> requestCompleted = null, IEnumerable<string> requiredPages = null,
-            Action cacheHit = null, Action discoveryComplete = null, Action<string> phaseChanged = null)
+            Action cacheHit = null, Action discoveryComplete = null, Action<string> phaseChanged = null,
+            Action<int, int, int, int> importProgress = null)
         {
             var previous = refreshContext.Value;
             var context = new RefreshContext
@@ -563,7 +580,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 RequiredPages = requiredPages?.ToArray(),
                 CacheHit = cacheHit,
                 DiscoveryComplete = discoveryComplete,
-                PhaseChanged = phaseChanged
+                PhaseChanged = phaseChanged,
+                ImportProgress = importProgress
             };
             refreshContext.Value = context;
             try
@@ -576,20 +594,79 @@ namespace MediaBrowser.Plugins.TuneIn
             finally { refreshContext.Value = previous; }
         }
 
-        internal async Task WithRefreshRunAsync(Func<Task> action)
+        internal Task WithRefreshRunAsync(Func<Task> action) => WithRefreshRunAsync(action, null);
+
+        internal async Task WithRefreshRunAsync(Func<Task> action, IEnumerable<TuneInRefreshPageCheckpoint> seedPages)
         {
             var previous = refreshRun.Value;
+            RefreshRun previousActive;
+            RefreshRun run;
             Snapshot();
-            lock (gate) refreshRun.Value = new RefreshRun { Key = key, Generation = cacheGeneration };
+            lock (gate)
+            {
+                run = new RefreshRun { Key = key, Generation = cacheGeneration };
+                if (seedPages != null) SeedRefreshPages(run, seedPages);
+                previousActive = activeRefreshRun;
+                activeRefreshRun = run;
+                refreshRun.Value = run;
+            }
             try { await action().ConfigureAwait(false); }
-            finally { refreshRun.Value = previous; }
+            finally
+            {
+                refreshRun.Value = previous;
+                lock (gate)
+                    if (ReferenceEquals(activeRefreshRun, run))
+                        activeRefreshRun = previousActive;
+            }
+        }
+
+        internal bool HasRefreshRun
+        {
+            get { lock (gate) return refreshRun.Value != null || activeRefreshRun != null; }
+        }
+
+        internal List<TuneInRefreshPageCheckpoint> CaptureRefreshPages(out bool complete)
+        {
+            RefreshRun run;
+            lock (gate) run = refreshRun.Value ?? activeRefreshRun;
+            if (run == null)
+            {
+                complete = false;
+                return new List<TuneInRefreshPageCheckpoint>();
+            }
+            lock (gate)
+            {
+                complete = !run.PagesTruncated;
+                return run.Pages.Select(pair => new TuneInRefreshPageCheckpoint
+                { Key = pair.Key, Bytes = (byte[])pair.Value.Bytes.Clone() }).ToList();
+            }
+        }
+
+        private static void SeedRefreshPages(RefreshRun run, IEnumerable<TuneInRefreshPageCheckpoint> pages)
+        {
+            var entries = pages.ToArray();
+            if (entries.Length > 128) throw new InvalidDataException("TuneIn resume checkpoint exceeds the page-count limit.");
+            foreach (var page in entries)
+            {
+                if (page == null || page.Bytes == null || page.Bytes.Length == 0 || page.Bytes.Length > 2 * 1024 * 1024
+                    || !Regex.IsMatch(page.Key ?? "", @"^:[A-Za-z0-9+/]{43}=$", RegexOptions.CultureInvariant)
+                    || run.Pages.ContainsKey(page.Key))
+                    throw new InvalidDataException("TuneIn resume checkpoint contains an invalid catalogue page.");
+                run.Bytes += page.Bytes.Length;
+                if (run.Bytes > 8 * 1024 * 1024)
+                    throw new InvalidDataException("TuneIn resume checkpoint exceeds the byte limit.");
+                ParseCatalogue(page.Bytes);
+                run.Pages.Add(page.Key, new CachedPage { Bytes = (byte[])page.Bytes.Clone(), Expires = DateTime.MaxValue });
+            }
         }
 
         internal void CommitRefreshRun()
         {
-            var run = refreshRun.Value ?? throw new InvalidOperationException("No refresh run is active.");
+            RefreshRun run;
             lock (gate)
             {
+                run = refreshRun.Value ?? activeRefreshRun;
+                if (run == null) throw new InvalidOperationException("No refresh run is active.");
                 if (run.Key != key || run.Generation != cacheGeneration)
                     throw new OperationCanceledException("TuneIn configuration changed.");
                 foreach (var pair in run.Pages)
@@ -621,6 +698,56 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         internal void ReportRefreshPhase(string phase) => refreshContext.Value?.PhaseChanged?.Invoke(phase);
+
+        internal void BeginStagedImport(int stagedFolderCount, IEnumerable<string> completedFolders = null)
+        {
+            var context = refreshContext.Value ?? throw new InvalidOperationException("No scoped refresh is active.");
+            lock (gate)
+            {
+                context.StagedFolderCount = stagedFolderCount;
+                context.ImportFoldersSeen.Clear();
+                context.ImportItemsServed = 0;
+                context.ImportFoldersCompleted.Clear();
+                if (completedFolders != null)
+                    foreach (var folder in completedFolders) context.ImportFoldersCompleted.Add(folder);
+            }
+            ReportImportProgress(context);
+        }
+
+        internal void ReportStagedImport(string folderId, int itemCount)
+        {
+            var context = refreshContext.Value;
+            if (context == null) return;
+            lock (gate)
+            {
+                context.ImportFoldersSeen.Add(folderId);
+                context.ImportItemsServed += itemCount;
+            }
+            ReportImportProgress(context);
+        }
+
+        internal void CompleteStagedImportFolder(string folderId)
+        {
+            var context = refreshContext.Value ?? throw new InvalidOperationException("No scoped refresh is active.");
+            lock (gate) context.ImportFoldersCompleted.Add(folderId);
+            ReportImportProgress(context);
+        }
+
+        private void ReportImportProgress(RefreshContext context)
+        {
+            int total;
+            int requested;
+            int items;
+            int completed;
+            lock (gate)
+            {
+                total = context.StagedFolderCount;
+                requested = context.ImportFoldersSeen.Count;
+                items = context.ImportItemsServed;
+                completed = context.ImportFoldersCompleted.Count;
+            }
+            context.ImportProgress?.Invoke(total, requested, items, completed);
+        }
 
         internal void VerifyRefreshDiscovery()
         {
@@ -668,6 +795,11 @@ namespace MediaBrowser.Plugins.TuneIn
             public Action CacheHit { get; set; }
             public Action DiscoveryComplete { get; set; }
             public Action<string> PhaseChanged { get; set; }
+            public Action<int, int, int, int> ImportProgress { get; set; }
+            public int StagedFolderCount { get; set; }
+            public int ImportItemsServed { get; set; }
+            public HashSet<string> ImportFoldersSeen { get; } = new HashSet<string>();
+            public HashSet<string> ImportFoldersCompleted { get; } = new HashSet<string>();
         }
 
         private sealed class RefreshRun
@@ -676,6 +808,7 @@ namespace MediaBrowser.Plugins.TuneIn
             public long Generation { get; set; }
             public Dictionary<string, CachedPage> Pages { get; } = new Dictionary<string, CachedPage>();
             public int Bytes { get; set; }
+            public bool PagesTruncated { get; set; }
         }
 
         public Task<XDocument> FetchAsync(DirectoryRequest request, CancellationToken token, Action<int> statusReceived = null) =>

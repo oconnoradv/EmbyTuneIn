@@ -1,4 +1,4 @@
-<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/tuneinforkjs130fork18" data-title="TuneIn">
+<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/tuneinforkjs130fork19" data-title="TuneIn">
     <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
         <form class="auto-center">
             <style>
@@ -6,10 +6,24 @@
                 .tuneInSettingsSection > summary { cursor: pointer; padding: .75em 0; font-size: 1.17em; font-weight: bold; }
                 .tuneInSettingsSection[open] > summary { margin-bottom: .5em; }
                 .channelRefreshLog { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24em; overflow-y: auto; }
+                .channelRefreshStatus { white-space: pre-line; }
+                .configurationFields { border: 0; margin: 0; padding: 0; min-width: 0; }
+                .settingsLockToggle { display: inline-flex; align-items: center; gap: .6em; cursor: pointer; }
+                .settingsLocked { appearance: none; width: 2.6em; height: 1.4em; border: 2px solid currentColor; border-radius: 1em; position: relative; cursor: pointer; }
+                .settingsLocked::before { content: ""; position: absolute; width: .85em; height: .85em; top: .15em; left: .15em; border-radius: 50%; background: currentColor; }
+                .settingsLocked:checked::before { left: 1.3em; }
+                .settingsLocked:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+                .settingsLocked:disabled { opacity: .5; cursor: not-allowed; }
             </style>
-            <h2>TuneIn Fork 1.3.0-fork.18</h2>
+            <h2>TuneIn Fork 1.3.0-fork.19</h2>
             <p>Expand a heading to view its settings. Configure categories and selections, then save and enable browsing. Saving configuration does not start a catalogue crawl.</p>
-            <details class="tuneInSettingsSection" data-section="setup" open>
+            <label class="settingsLockToggle">
+                <input type="checkbox" role="switch" class="settingsLocked" disabled />
+                <span>Lock settings</span>
+            </label>
+            <p class="settingsLockMessage" role="status" aria-live="polite">Loading settings lock...</p>
+            <fieldset class="configurationFields" disabled>
+            <details class="tuneInSettingsSection" data-section="setup">
                 <summary>Setup and account</summary>
                 <label class="checkboxContainer emby-checkbox-label">
                     <input type="checkbox" is="emby-checkbox" class="configurationCompleted" />
@@ -22,6 +36,10 @@
                 <div class="inputContainer">
                     <input type="number" is="emby-input" class="apiRequestInterval" min="1" max="30" step="1" label="Catalogue request interval (seconds):" />
                     <p class="fieldDescription">Whole seconds from 1 to 30. Default: 3. Shorter intervals may trigger TuneIn throttling; provider retry delays still apply.</p>
+                </div>
+                <div class="inputContainer">
+                    <input type="number" is="emby-input" class="refreshTimeout" min="1" max="1440" step="1" label="Refresh timeout (minutes):" />
+                    <p class="fieldDescription">Whole minutes from 1 to 1440. Default: 60. Applies to a full refresh or an individual category refresh.</p>
                 </div>
             </details>
             <details class="tuneInSettingsSection" data-section="categories">
@@ -48,17 +66,20 @@
             <p class="status" role="status" aria-live="polite"></p>
             <p>Disabled categories or categories with no required selections stay unavailable. Saving invalidates old navigation and stops applicable in-flight requests. Return to the channel root after saving or restarting Emby.</p>
             <button is="emby-button" type="submit" class="raised button-submit block"><span>Save configuration</span></button>
-            <section aria-labelledby="channelRefreshHeading">
-                <h3 id="channelRefreshHeading">Refresh TuneIn</h3>
+            </fieldset>
+            <details class="tuneInSettingsSection channelRefreshSection" data-section="refresh">
+                <summary id="channelRefreshHeading">Refresh TuneIn</summary>
                 <p>Run or schedule <strong>Refresh TuneIn</strong> under Scheduled Tasks. It refreshes only enabled TuneIn categories and their saved sub-category selections; other channel providers are not refreshed. No automatic schedule is added. Use Emby's built-in Refresh Internet Channels task when you want to refresh all providers.</p>
-                <p>Choose Update status to see the current category and stage; the display does not update automatically.</p>
+                <p>Category refreshes and resumed jobs appear below; Emby's scheduled-task result reflects its last scheduled run.</p>
+                <p>Choose Update status to check the current category and stage. Active jobs update while this page is open.</p>
                 <p class="channelRefreshStatus" role="status" aria-live="polite">Refresh status has not been loaded.</p>
+                <div class="refreshGroups"></div>
                 <button is="emby-button" type="button" class="raised channelRefreshUpdate"><span>Update status</span></button>
                 <button is="emby-button" type="button" class="raised channelRefreshFailure" disabled><span>Retrieve failed Refresh TuneIn report</span></button>
                 <p class="channelRefreshMessage" role="status" aria-live="polite"></p>
                 <p>This retrieves the latest failed Refresh TuneIn task report, not the full server log. A later task result replaces it. Reports may contain private server details; redact them before sharing.</p>
                 <pre class="channelRefreshLog" tabindex="0" aria-label="Failed Refresh TuneIn task report" hidden></pre>
-            </section>
+            </details>
         </form>
     </div>
 </div>

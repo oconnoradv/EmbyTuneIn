@@ -7,6 +7,14 @@ features explicitly removed below are not promises of current functionality.
 Superseded prereleases are marked deprecated after the replacement is verified.
 Published assets and original source tags remain unchanged for provenance.
 
+## 1.3.0-fork.19 - refresh controls and recovery
+
+- Add a persistent settings lock, collapsed setup sections, category refresh
+  actions, configurable timeout and more detailed refresh status.
+- Estimate request progress from the last successful matching configuration.
+  Timeout recovery reuses bounded catalogue checkpoints and restarts any
+  interrupted Emby category import; oversized checkpoints require restart.
+
 ## 1.3.0-fork.18 - alphabet pagination fix
 
 - Preserve TuneIn's unescaped `#` alphabet filter in pagination links while

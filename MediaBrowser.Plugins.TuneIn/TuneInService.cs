@@ -51,6 +51,43 @@ namespace MediaBrowser.Plugins.TuneIn
         public string Attempt { get; set; }
     }
 
+    [Route("/TuneInFork/SettingsLock", "GET")]
+    [Authenticated(Roles = "Admin")]
+    public class GetTuneInSettingsLock : IReturn<TuneInSettingsLock> { }
+
+    [Route("/TuneInFork/SettingsLock", "POST")]
+    [Authenticated(Roles = "Admin")]
+    public class SetTuneInSettingsLock : IReturn<TuneInSettingsLock>
+    {
+        public bool? Locked { get; set; }
+    }
+
+    [Route("/TuneInFork/RefreshTuneIn/Category", "POST")]
+    [Authenticated(Roles = "Admin")]
+    public class StartTuneInCategoryRefresh : IReturn<RadioGroupRefreshStatus>
+    {
+        public string Category { get; set; }
+    }
+
+    [Route("/TuneInFork/RefreshTuneIn/Category", "GET")]
+    [Authenticated(Roles = "Admin")]
+    public class GetTuneInCategoryRefresh : IReturn<RadioGroupRefreshStatus>
+    {
+        public string Category { get; set; }
+    }
+
+    [Route("/TuneInFork/RefreshTuneIn/Categories", "GET")]
+    [Authenticated(Roles = "Admin")]
+    public class GetTuneInCategoryRefreshes : IReturn<RadioGroupRefreshStatus[]> { }
+
+    [Route("/TuneInFork/RefreshTuneIn/Category/Resume", "POST")]
+    [Authenticated(Roles = "Admin")]
+    public class ResumeTuneInCategoryRefresh : IReturn<RadioGroupRefreshStatus>
+    {
+        public string Category { get; set; }
+        public string AttemptId { get; set; }
+    }
+
     public class TuneInService : IService, IRequiresRequest
     {
         private readonly ILogger logger;
@@ -58,22 +95,38 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly TuneInDirectory directory;
         private readonly ITaskManager taskManager;
         private readonly IFfmpegManager ffmpegManager;
+        private readonly IChannelManager channelManager;
+        private readonly TuneInRefresh refresh;
+        private readonly TuneInSettingsLockStore settingsLock;
         public TuneInService(ILogManager logManager, IChannelManager channelManager, IHttpResultFactory resultFactory,
             ITaskManager taskManager, IFfmpegManager ffmpegManager)
             : this(logManager, channelManager, resultFactory, TuneInDirectory.Instance,
                 ffmpegManager ?? throw new ArgumentNullException(nameof(ffmpegManager)))
         {
             this.taskManager = taskManager ?? throw new ArgumentNullException(nameof(taskManager));
+            this.channelManager = channelManager ?? throw new ArgumentNullException(nameof(channelManager));
+            refresh = TuneInRefresh.Instance;
+            settingsLock = Plugin.Instance?.SettingsLock ?? new TuneInSettingsLockStore();
         }
         internal TuneInService(ILogManager logManager, IChannelManager channelManager, IHttpResultFactory resultFactory,
-            TuneInDirectory directory, IFfmpegManager ffmpegManager = null)
+            TuneInDirectory directory, IFfmpegManager ffmpegManager = null, ITaskManager taskManager = null,
+            TuneInRefresh refresh = null, TuneInSettingsLockStore settingsLock = null)
         {
             logger = logManager.GetLogger(GetType().Name);
             this.resultFactory = resultFactory ?? throw new ArgumentNullException(nameof(resultFactory));
             this.directory = directory;
             this.ffmpegManager = ffmpegManager;
+            this.taskManager = taskManager;
+            this.channelManager = channelManager;
+            this.refresh = refresh ?? TuneInRefresh.Instance;
+            this.settingsLock = settingsLock ?? Plugin.Instance?.SettingsLock ?? new TuneInSettingsLockStore();
         }
-        internal TuneInService() { directory = TuneInDirectory.Instance; }
+        internal TuneInService()
+        {
+            directory = TuneInDirectory.Instance;
+            refresh = TuneInRefresh.Instance;
+            settingsLock = Plugin.Instance?.SettingsLock ?? new TuneInSettingsLockStore();
+        }
         public IRequest Request { get; set; }
 
         public Task<SelectorResult> Get(GetTuneInSelectors request) =>
@@ -84,6 +137,30 @@ namespace MediaBrowser.Plugins.TuneIn
             new TuneInChannelRefresh(taskManager).Status();
         public ChannelRefreshFailure Get(GetTuneInChannelRefreshFailure request) =>
             new TuneInChannelRefresh(taskManager).Failure(request.Attempt);
+        public TuneInSettingsLock Get(GetTuneInSettingsLock request) =>
+            refresh.ReadSettingsLock(settingsLock);
+        public TuneInSettingsLock Post(SetTuneInSettingsLock request)
+        {
+            if (!request.Locked.HasValue) throw new ArgumentException("Locked must be supplied as a JSON boolean.");
+            return refresh.SetSettingsLock(settingsLock, request.Locked.Value);
+        }
+        public RadioGroupRefreshStatus Post(StartTuneInCategoryRefresh request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Category)) throw new ArgumentException("Category is required.");
+            return refresh.StartApiCategory(request.Category, channelManager, logger);
+        }
+        public RadioGroupRefreshStatus Get(GetTuneInCategoryRefresh request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Category)) throw new ArgumentException("Category is required.");
+            return refresh.CategoryStatus(request.Category);
+        }
+        public RadioGroupRefreshStatus[] Get(GetTuneInCategoryRefreshes request) => refresh.Status();
+        public RadioGroupRefreshStatus Post(ResumeTuneInCategoryRefresh request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Category)) throw new ArgumentException("Category is required.");
+            if (string.IsNullOrWhiteSpace(request.AttemptId)) throw new ArgumentException("AttemptId is required.");
+            return refresh.ResumeTimedOutCategory(request.Category, request.AttemptId, channelManager, logger);
+        }
 
         public async Task<object> Get(GetTuneInRelay request)
         {

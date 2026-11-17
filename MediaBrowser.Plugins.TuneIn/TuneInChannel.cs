@@ -64,6 +64,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     directory.AssertCategoryRefresh(entry.Category);
                     if (!staged.TryGetValue(query.FolderId, out var result))
                         throw new InvalidOperationException("Emby requested a folder outside the staged refresh.");
+                    directory.ReportStagedImport(query.FolderId, result.Items.Count);
                     return result;
                 }
                 return await GetChannelItemsCore(query, token).ConfigureAwait(false);
@@ -71,10 +72,11 @@ namespace MediaBrowser.Plugins.TuneIn
             catch (Exception error) { directory.RecordRefreshFailure(error); throw; }
         }
 
-        internal async Task SynchronizeStagedAsync(string folder, int depth, Func<Task> synchronize,
+        internal async Task SynchronizeStagedAsync(string folder, int depth, Func<Task> synchronizeRoot,
             CancellationToken token)
         {
             var staged = new Dictionary<string, ChannelItemResult>();
+            var folderOrder = new List<string>();
             var pending = new Queue<(string Id, int Depth)>();
             pending.Enqueue((folder, 0));
             long estimatedBytes = 0;
@@ -98,11 +100,19 @@ namespace MediaBrowser.Plugins.TuneIn
                         pending.Enqueue((item.Id, current.Depth + 1));
                 }
                 staged.Add(current.Id, result);
+                folderOrder.Add(current.Id);
             }
             directory.CompleteRefreshDiscovery();
+            directory.BeginStagedImport(staged.Count);
             var previous = stagedRefresh.Value;
             stagedRefresh.Value = staged;
-            try { await synchronize().ConfigureAwait(false); }
+            try
+            {
+                await synchronizeRoot().ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                foreach (var folderId in folderOrder)
+                    directory.CompleteStagedImportFolder(folderId);
+            }
             finally { stagedRefresh.Value = previous; }
         }
 
