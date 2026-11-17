@@ -355,13 +355,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             {
                 capturedPageCount = directory.CaptureRefreshPages(out _).Count;
                 if (Interlocked.Increment(ref importAttempts) == 1)
-                   await Task.Delay(2000);
+                    await Task.Delay(2000);
             };
             var statePath = Path.Combine(Environment.CurrentDirectory, "tunein-full-resume-" + Guid.NewGuid().ToString("N") + ".xml");
             try
             {
                 var refresh = new TuneInRefresh(directory, new TuneInRefreshStateStore(statePath),
-                   TimeSpan.FromSeconds(1));
+                    TimeSpan.FromSeconds(1));
                 await Assert.ThrowsAsync<TimeoutException>(() => refresh.ExecuteConfiguredAsync(
                     manager, null, CancellationToken.None, new InlineProgress()));
 
