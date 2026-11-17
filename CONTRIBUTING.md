@@ -23,9 +23,11 @@ restoring stale dashboard markup. Use plugin `viewshow`/`viewbeforehide` events;
 let Emby's plugin adapter provide BaseView and native transition handling rather
 than depending on a legacy `baseView` AMD alias.
 Verification rejects inconsistent page/documentation versions. Never replace
-published tags/assets. Superseded prerelease records/assets may be retired only
-on the repository owner's explicit request, after replacement artifacts and
-consolidated documentation are verified; preserve original source tags.
+published tags/assets in place. Superseded development releases, assets and tags
+may be retired only on the repository owner's explicit request, after replacement
+artifacts and consolidated documentation are verified. Preserve upstream tags and
+commit history; never move the retained release tag. CHANGELOG.md contains the
+single consolidated RC1 entry rather than intermediate development release logs.
 
 Keep the independent plugin GUID, `MediaBrowser.Plugins.TuneIn.Fork.dll` and XML
 filename, and `TuneInFork` routes while manually testing this fork. Otherwise Emby

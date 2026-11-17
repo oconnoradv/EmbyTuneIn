@@ -1,228 +1,93 @@
-# Consolidated fork history
+# Changelog
 
-This history covers the enhancements added in oconnoradv/EmbyTuneIn beyond the
-upstream MediaBrowser/TuneIn 1.2.8.0 baseline. README.md (distributed as INSTALL.md),
-SECURITY.md and CONTRIBUTING.md describe the current behavior in full. Historical
-features explicitly removed below are not promises of current functionality.
-Superseded prereleases are marked deprecated after the replacement is verified.
-Published assets and original source tags remain unchanged for provenance.
+## RC1 - 1.3.0-fork.20-rc.1
 
-## 1.3.0-fork.20-rc.1 - consolidated release candidate
+Consolidated changes in this fork from the upstream MediaBrowser/TuneIn 1.2.8.0
+baseline. This entry replaces the intermediate development release logs and
+describes the retained implementation, not superseded behavior.
 
-- Consolidate the current features, setup, operational limits and testing
-  guidance in README.md. Historical point releases below are deprecated.
+### Playback
 
-## 1.3.0-fork.19 - refresh controls and recovery
+- Play recognized required pre-roll before opening one working live alternative,
+  fixing ad-only playback while the client still appeared active.
+- Decode ad/live inputs separately to one PCM/WAV format across codec changes;
+  retain compressed passthrough for stations without recognized pre-roll.
+- Accept provider LF-only headers, repeated advisory ICY fields and legacy identity
+  transfer encoding while retaining strict framing and destination validation.
+- Fix relay HTTP 500s through constructor-injected response factories; release
+  connections and decoders on failure, cancellation and abandoned probes.
+- Preserve case-sensitive stream paths and bounded MP3/AAC and M3U/PLS fallback
+  resolution without treating live alternatives as a sequential queue.
 
-- Add a persistent settings lock, collapsed setup sections, category refresh
-  actions, configurable timeout and more detailed refresh status.
-- Estimate request progress from the last successful matching configuration.
-  Timeout recovery reuses bounded catalogue checkpoints and restarts any
-  interrupted Emby category import; oversized checkpoints require restart.
+### Browsing and configuration
 
-## 1.3.0-fork.18 - alphabet pagination fix
+- Add configuration-first browsing with eight group switches, lazy administrator
+  selectors, saved languages/music/geographies, multiple local areas, validated
+  coordinates and station deduplication; no automatic worldwide setup crawl.
+- Enforce category and saved-selection ancestry through signed, restart-stable
+  navigation, pagination, playback and artwork; reject disabled and stale scopes.
+- Restrict language music hubs to saved music selections and honor Music/Talk/Sports
+  switches beneath languages without restricting unrelated groups.
+- Fix alphabetical station/show filters, including international letters and
+  TuneIn's unescaped trailing `#`, normalized to `%23` only in the recognized filter.
+- Isolate the fork's plugin/DLL/XML/API identity from upstream updates; preserve
+  independent settings on upgrades without silently importing upstream XML.
+- Correct checkbox labels, native settings lifecycle, versioned views and stale
+  asynchronous replies. Add clear empty-library diagnostics, collapsible sections,
+  an initially unlocked persistent settings lock and save protection during
+  plugin-tracked refreshes.
 
-- Preserve TuneIn's unescaped `#` alphabet filter in pagination links while
-  retaining destination and fragment restrictions.
-- Include a safe reason when a catalogue destination is rejected, without
-  exposing its URL or credentials in the refresh task report.
+### Refresh and diagnostics
 
-## 1.3.0-fork.17 - staged refresh root fix
+- Provide one TuneIn-only scheduled task with no default trigger plus individual
+  category actions in Settings; traverse enabled selections and descendant pages.
+- Stage bounded discovery before category import, accept Emby's root query and
+  surface swallowed import failures before artwork updates.
+- Reuse equivalent validated catalogue responses within bounded caches instead of
+  truncating sections; retain separate language/location membership requests.
+- Add serialized, adjustable 1-30 second request pacing (default 3 seconds),
+  HTTP 429 retry-delay handling and a configurable timeout (default 60 minutes).
+- Distinguish timeout, error and cancellation; resume eligible bounded catalogue
+  checkpoints and remaining full-refresh categories, restarting interrupted imports.
+- Report category, stage, import activity, request/cache counts, matching-run
+  estimates and administrator-requested bounded native failure reports.
+- Preserve last-success history separately from failed attempts and configuration;
+  guard duplicate starts, cancellation, launch failures and completion races.
+- Avoid plugin-requested global refreshes on install/update/Save. Remove obsolete
+  per-group tasks and schedule suppression; restore recorded host schedules once
+  without overwriting subsequent administrator edits.
 
-- Allow Emby's channel-root query during staged refresh and report swallowed
-  import errors before attempting artwork updates.
+### Artwork
 
-## 1.3.0-fork.16 - refresh performance and status
+- Add original library and category artwork, content icons beneath languages and
+  protected station PNG/JPEG logos with image identities separate from playback IDs.
+- Migrate persisted folder primary images through scoped library updates and
+  preserve previously migrated/custom images.
 
-- Discover and stage bounded selected-category results before starting Emby's
-  category import, share identical validated catalogue requests within a task
-  run and briefly after successful refreshes, and record safe discovery/import
-  timing and cache-hit diagnostics. Add an administrator-configurable catalogue
-  request interval, defaulting to three seconds. Respect provider rate-limit
-  responses without assuming that music results establish language or location
-  membership.
-- Show the current category and discovery, import or artwork phase in the
-  dedicated refresh task status without background polling.
+### Security and release safeguards
 
-## 1.3.0-fork.15 - alphabetic browse refresh fix
+- Require patched Emby hosts for CVE-2025-64113: stable 4.9.1.90+ or compatible
+  beta 4.9.2.7+. The withdrawn NuGet attribution concerned an underlying server
+  flaw; the plugin DLL is not an Emby Server security patch.
+- Validate fixed-host catalogue URLs and bounded OPML against a trusted schema;
+  prohibit DTD/entities and render untrusted labels/reports as text.
+- Protect playback/artwork through local relays, public-DNS pinning, redirect
+  restrictions, bounded requests/playlists/images and server-side authorization.
+- Remove unused unversioned parser sources without claiming an unverified CVE.
+  Add locked dependencies, analyzers, regression/live-provider tests, advisory and
+  CodeQL gates, exact-source version stamping, SBOM and SHA-256 release evidence.
+- Preserve upstream license and commit history. Obsolete development releases,
+  attached assets and fork/initial-development tags are retired; RC1 is retained.
 
-- Accept TuneIn's bounded alphabetic station/show filters for **Find by Name**,
-  including encoded `#` and international letters, without relaxing destination
-  or selected-category restrictions. These provider links previously failed Music
-  refreshes. Include safe rejected-parameter details in the task's main error
-  message when Emby omits inner exceptions from its stored report.
+### Testing and known limitations
 
-## 1.3.0-fork.14 - refresh diagnostics (deprecated)
-
-- Preserve the original refresh exception chain in the native failed-task report,
-  including failures swallowed by host traversal. Identify the category, phase,
-  completed/started catalogue requests and last HTTP status instead of reporting
-  only a generic section failure. Existing administrator-only report limits apply.
-  Rejected catalogue parameter errors identify the parameter and rejection class,
-  length and occurrence count without including its value or URL.
-  This release does not claim to fix the observed refresh failure.
-
-## 1.3.0-fork.13 - category-scoped refresh task (deprecated)
-
-- Add one visible, manually schedulable **Refresh TuneIn** task. It runs only
-  enabled TuneIn categories and their saved sub-category selections; the separate
-  built-in Refresh Internet Channels task remains all-provider.
-- Point Settings status and failed-report retrieval at the dedicated Refresh TuneIn
-  task, rather than the host's global refresh result.
-
-## 1.3.0-fork.12 - native refresh task integration (deprecated)
-
-- Remove all eight Refresh TuneIn - ... scheduled tasks and their legacy
-  start/cancel/status/schedule APIs. Use Emby's built-in Refresh Internet Channels.
-- Remove plugin schedule suppression. On upgrade, restore a recorded disabled
-  global schedule from its backup or host defaults, preserving later administrator
-  edits and leaving never-managed schedules unchanged.
-- Show native task state/progress/last result in Settings, with manual status
-  update and explicit retrieval of the latest failed task's stored error report.
-  Keep diagnostics administrator-only, bounded and plain-text; no full server-log
-  access, background polling, provider queries or fabricated task results.
-- Retain fork.11's pre-roll handoff and live-provider compatibility fixes.
-  The reported disappearance/recreation of the channel after replacing the DLL
-  remains under investigation pending an upgrade retest and sanitized startup log;
-  this release does not claim to fix it.
-
-## 1.3.0-fork.11 - live-provider compatibility
-
-- Fix live-opening failures after a successful pre-roll when radio providers repeat
-  advisory ICY headers, use LF-only HTTP response lines, or send legacy
-  `Transfer-Encoding: identity`. Keep catalogue parsing strict, chunk framing
-  strict and duplicate framing/decoding/redirect headers rejected.
-- Add full-provider pre-roll-to-live tests for the four stations identified in
-  runtime logs, alongside deterministic protocol/sequence regressions.
-
-## 1.3.0-fork.10 - playback handoff
-
-- Deprecate all earlier fork versions for the pre-roll-to-live playback defect.
-  Some stations without pre-roll can still work; historical source/assets remain
-  for provenance, not as recommended playback builds.
-- Preserve TuneIn's recognized required pre-roll, then hand off to one working
-  live-stream alternative instead of ending at the ad's EOF. Keep stations without
-  pre-roll on their existing compressed passthrough path.
-- Use the host-configured, pipe-only FFmpeg decoder for pre-roll sessions and
-  serve one fixed PCM/WAV format across differing ad/live codecs. Retain protected
-  network resolution, bounded opening, cancellation and scoped configuration.
-- Add deterministic handoff/fallback/error/cleanup coverage and opt-in actual
-  MP3-to-AAC decoder/process regressions. Real Emby runtime verification is pending.
-
-## 1.3.0-fork.9 - consolidated release
-
-- Original futuristic 544x306 library Primary/Thumb/Backdrop artwork, without a
-  FORK subtitle. An explicit group refresh migrates existing parent-channel images.
-- Remove individual radio-group refresh and automatic-interval sections from
-  plugin settings, including their AJAX requests, progress widgets and timers.
-  Keep the eight native Scheduled Tasks, scheduling, cancellation and history.
-- Remove provider content-change notifications that can request global refreshes;
-  install/update/Save do not queue Refresh Internet Channels. Host-owned triggers
-  and explicit administrator actions remain independent.
-- Consolidate all fork enhancements and upgrade/security limitations in the latest
-  documentation and release assets; squash accumulated source into the fork's
-  actual default branch, master. No upstream submission is implied.
-
-## 1.3.0-fork.8
-
-- Migrate persisted folder Primary images using scoped library updates; changing
-  the advertised URL alone did not replace images already stored by Emby.
-- Route settings refresh buttons through real native task execution so native
-  Last ran and shared history update consistently; guard startup, duplicate jobs,
-  pre-start cancellation, launch failures and history-publication races.
-- Remove the repeated built-in-task explanation from TuneIn task descriptions.
-- Correct host-managed settings lifecycle/transitions, version HTML/controller
-  routes, use native input/select label containers and ignore stale config replies.
-- Settings buttons were subsequently removed in fork.9; native execution remains.
-
-## 1.3.0-fork.7
-
-- Persist per-group last-success and last-attempt/result independently of signed
-  station configuration, retaining success after failure/cancellation.
-- Distinct original artwork for all eight groups and content icons beneath languages.
-- Introduce explicitly applied shared/per-group interval controls and reversible
-  all-provider global-trigger management with persisted backups and rollback.
-  These settings-page controls were removed in fork.9. Existing native triggers,
-  backups and administrator-only compatibility APIs remain; nothing reapplies
-  scheduling automatically.
-- The global task always honored TuneIn configuration; no unrestricted bypass
-  was implemented. The repeated notice was removed from task descriptions in fork.8.
-
-## 1.3.0-fork.6
-
-- Language Music hubs list only enabled saved music selections. Signed descendants,
-  subgenres, stations, pagination and artwork preserve both language and music scope.
-- Reject removed/disabled and legacy unscoped items, including after restart.
-  Do not impose this language-specific music intersection on unrelated groups.
-
-## 1.3.0-fork.5
-
-- Music/Talk/Sports switches apply beneath every language, through all descendant
-  folders, stations, playback and artwork. Preserve the selected language on requests.
-
-## 1.3.0-fork.4
-
-- Bundled category-folder artwork and station PNG/JPEG logos through signed
-  loopback-only endpoints, independent of stable playback IDs.
-- Restrict remote images to two verified TuneIn CDNs, HTTPS, pinned public DNS,
-  bounded redirects/time/bytes and validated raster dimensions/signatures.
-
-## 1.3.0-fork.3
-
-- Fix relay HTTP 500 by requiring constructor-injected IHttpResultFactory rather
-  than relying on property population. Dispose opened radio resources when
-  response creation fails; retain normal server probing/transcoding.
-
-## 1.3.0-fork.2
-
-- Eight dedicated native group tasks populate actual selected station metadata
-  through the host's eight-level descendant/pagination traversal, not only one page.
-- Scoped cancellation, growing request totals, HTTP/API-fault reporting, missing-node
-  and swallowed-provider-error detection; 1000-request/20-minute limits.
-- Bound/evict cache entries rather than truncating sections at cache capacity.
-- Collapsible settings with accessible Save, later reduced to four sections in fork.9.
-
-## 1.3.0-fork.1
-
-- Independent group refresh/cancel/status APIs and controls, bounded jobs and scoped
-  cache warming. Native full-section population superseded first-page warming in fork.2.
-- Remove unused HtmlAgilityPack/IniParser sources, centralize SemVer/source stamping,
-  preserve upstream license/history and document upstream-review decisions.
-- Settings refresh controls were removed in fork.9; protected APIs remain compatible.
-
-## 0.0.3
-
-- Correct native checkbox label/caption markup and dynamic widget initialization.
-- Explicit disabled-browsing/no-enabled-category diagnostics and refreshed controller
-  identity, preventing an apparently empty library with no setup explanation.
-
-## 0.0.2
-
-- Independent plugin GUID, DLL/XML identity, dashboard/controller/API namespaces and
-  Advanced-menu entry point so upstream updates cannot replace the fork.
-- Preserve subsequent fork settings across upgrades; leave old upstream/v0.0.1 XML
-  untouched rather than silently importing it.
-
-## 0.0.1
-
-- Configuration-first gate and eight category switches; selected languages, music
-  genres, geographic hierarchy, multiple local areas and validated coordinates.
-- Explicit lazy administrator selectors with disclosed/discarded incidental geographic
-  station metadata; no worldwide setup crawl or silent IP-location fallback.
-- Stable signed navigation, server-side selection/category enforcement, stale-ID
-  rejection, scoped pagination, coordinate propagation and station deduplication.
-- Exact catalogue URL policy and bounded schema-validated OPML parsing; protected
-  local relay, public-DNS pinning, redirect checks, case-sensitive stream paths,
-  bounded M3U/PLS alternatives and forced server transcoding.
-- Patched Emby host minimum, locked dependencies, clean build/analyzers/format/tests,
-  NuGet/GitHub/NVD advisory gates, security-extended CodeQL, SBOM and checksums.
-- Trusted OPML schema validation and security-review findings were fixed before
-  publication. NIST SSDF alignment is practical evidence, not certification.
-
-## Continuing limitations
-
-Real Emby installation, dashboard/authentication/CSRF, library images, scheduled
-task integration and playback require manual verification. Provider availability,
-geographic levels/restrictions, eight-level/request/time limits, rejected HLS/private
-streams and unavailable online revocation checking remain documented limitations,
-not removed features or guarantees. See INSTALL.md/README.md and SECURITY.md.
+- Tested against Emby Server 4.11.0.13 beta; automated results do not establish
+  compatibility with every host/client or provider.
+- Category-folder retention remains deferred; configuration changes may cause
+  Emby to remove and recreate folders. Host import is not transactional.
+- Resume requires a checkpoint within 128 pages/8 MiB. The save guard excludes
+  Emby's global refresh, and scheduled-task APIs provide no plugin-controlled text
+  beneath the native progress bar.
+- Provider restrictions, traversal/request/time bounds and rejected HLS/private
+  streams still apply. Online certificate revocation checking is not claimed.
+  See README.md and SECURITY.md for operating and security details.
