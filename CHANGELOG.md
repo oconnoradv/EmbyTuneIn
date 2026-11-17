@@ -1,6 +1,6 @@
 # Changelog
 
-## RC1 - 1.3.0-fork.20-rc.1
+## RC2 - 1.3.0-fork.20-rc.2
 
 Consolidated changes in this fork from the upstream MediaBrowser/TuneIn 1.2.8.0
 baseline. This entry replaces the intermediate development release logs and
@@ -30,8 +30,9 @@ describes the retained implementation, not superseded behavior.
   switches beneath languages without restricting unrelated groups.
 - Fix alphabetical station/show filters, including international letters and
   TuneIn's unescaped trailing `#`, normalized to `%23` only in the recognized filter.
-- Isolate the fork's plugin/DLL/XML/API identity from upstream updates; preserve
-  independent settings on upgrades without silently importing upstream XML.
+- Use the upstream plugin/DLL/XML identity and TuneIn display name. Copy a
+  validated previous fork configuration only when the original XML is absent;
+  never overwrite an existing original configuration automatically.
 - Correct checkbox labels, native settings lifecycle, versioned views and stale
   asynchronous replies. Add clear empty-library diagnostics, collapsible sections,
   an initially unlocked persistent settings lock and save protection during
@@ -81,7 +82,8 @@ describes the retained implementation, not superseded behavior.
 
 ### Testing and known limitations
 
-- Tested against Emby Server 4.11.0.13 beta; automated results do not establish
+- Previous fork RC1 was tested against Emby Server 4.11.0.13 beta. The RC2 identity
+  migration has not been tested in a live host; automated results do not establish
   compatibility with every host/client or provider.
 - Category-folder retention remains deferred; configuration changes may cause
   Emby to remove and recreate folders. Host import is not transactional.

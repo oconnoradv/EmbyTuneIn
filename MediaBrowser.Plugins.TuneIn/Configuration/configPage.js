@@ -1,6 +1,6 @@
 define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby-scroller'], function (loading, $) {
     'use strict';
-    var pluginId = 'd9314bc3-33e0-4080-88ef-8e7e718524f2';
+    var pluginId = '10b82431-f939-4507-a8e2-9509dd3fd6ae';
     var categories = [
         ['EnableLocalRadio', 'Local Radio'], ['EnableMusic', 'Music'],
         ['EnableLanguage', 'By Language'], ['EnableLocation', 'By Location'],

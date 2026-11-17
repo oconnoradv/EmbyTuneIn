@@ -27,6 +27,7 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             if (!SupportsServerVersion(applicationHost.ApplicationVersion))
                 throw new NotSupportedException("TuneIn requires Emby Server 4.9.1.90+ or patched beta 4.9.2.7+.");
+            ConfigurationMigration.CopyPreviousForkConfiguration(applicationPaths.PluginConfigurationsPath);
             Instance = this;
             RefreshState = new TuneInRefreshStateStore(Path.Combine(applicationPaths.DataPath, "tunein-fork-refresh.xml"));
             SettingsLock = new TuneInSettingsLockStore(Path.Combine(applicationPaths.DataPath, "tunein-fork-settings-lock.xml"));
@@ -74,8 +75,8 @@ namespace MediaBrowser.Plugins.TuneIn
             };
         }
 
-        private readonly Guid _id = new Guid("d9314bc3-33e0-4080-88ef-8e7e718524f2");
-        public override string ConfigurationFileName => "MediaBrowser.Plugins.TuneIn.Fork.xml";
+        private readonly Guid _id = new Guid("10b82431-f939-4507-a8e2-9509dd3fd6ae");
+        public override string ConfigurationFileName => "MediaBrowser.Plugins.TuneIn.xml";
         public override Guid Id
         {
             get { return _id; }
@@ -87,7 +88,7 @@ namespace MediaBrowser.Plugins.TuneIn
         /// <value>The name.</value>
         public override string Name
         {
-            get { return "TuneIn (oconnoradv fork)"; }
+            get { return "TuneIn"; }
         }
 
         /// <summary>

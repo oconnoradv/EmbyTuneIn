@@ -701,7 +701,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public void ForkConfigurationPagesUseIndependentIdentityAndBothDashboardEntryPoints()
+        public void ConfigurationPagesUseOriginalIdentityAndBothDashboardEntryPoints()
         {
             var previous = Plugin.Instance;
             try
@@ -721,9 +721,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.NotEqual(main.Name, script.Name);
                 Assert.Equal(Plugin.ConfigurationPageName, main.Name);
                 Assert.NotEqual("tuneinfork", main.Name);
-                Assert.NotEqual(new Guid("10b82431-f939-4507-a8e2-9509dd3fd6ae"), plugin.Id);
-                Assert.Equal("MediaBrowser.Plugins.TuneIn.Fork", typeof(Plugin).Assembly.GetName().Name);
-                Assert.Equal("MediaBrowser.Plugins.TuneIn.Fork.xml", plugin.ConfigurationFileName);
+                Assert.Equal(new Guid("10b82431-f939-4507-a8e2-9509dd3fd6ae"), plugin.Id);
+                Assert.Equal("MediaBrowser.Plugins.TuneIn", typeof(Plugin).Assembly.GetName().Name);
+                Assert.Equal("MediaBrowser.Plugins.TuneIn.xml", plugin.ConfigurationFileName);
+                Assert.Equal("TuneIn", plugin.Name);
                 using (var html = new System.IO.StreamReader(typeof(Plugin).Assembly.GetManifestResourceStream(main.EmbeddedResourcePath)))
                 using (var js = new System.IO.StreamReader(typeof(Plugin).Assembly.GetManifestResourceStream(script.EmbeddedResourcePath)))
                 {
@@ -734,6 +735,59 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             finally
             {
                 typeof(Plugin).GetProperty(nameof(Plugin.Instance)).SetValue(null, previous);
+            }
+        }
+
+        [Fact]
+        public void PluginLoadsMigratedConfigurationOnFirstAccess()
+        {
+            var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tunein-startup-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(directory);
+            var previous = Plugin.Instance;
+            try
+            {
+                var original = new PluginConfiguration
+                {
+                    Username = "test-user",
+                    SchemaVersion = 1,
+                    ConfigurationCompleted = true,
+                    EnableTalk = true
+                };
+                using (var file = System.IO.File.Create(System.IO.Path.Combine(directory, "MediaBrowser.Plugins.TuneIn.Fork.xml")))
+                    new System.Xml.Serialization.XmlSerializer(typeof(PluginConfiguration)).Serialize(file, original);
+                var paths = DispatchProxy.Create<MediaBrowser.Common.Configuration.IApplicationPaths, MigrationPathsProxy>();
+                ((MigrationPathsProxy)(object)paths).DirectoryPath = directory;
+                var plugin = new Plugin(paths,
+                    DispatchProxy.Create<MediaBrowser.Model.Serialization.IXmlSerializer, MigrationSerializerProxy>(),
+                    DispatchProxy.Create<IServerApplicationHost, SourceHostProxy>());
+                Assert.Equal("test-user", plugin.Configuration.Username);
+                Assert.Equal(original.NavigationSecret, plugin.Configuration.NavigationSecret);
+                Assert.True(plugin.Configuration.EnableTalk);
+            }
+            finally
+            {
+                typeof(Plugin).GetProperty(nameof(Plugin.Instance)).SetValue(null, previous);
+                System.IO.Directory.Delete(directory, true);
+            }
+        }
+
+        public class MigrationPathsProxy : DispatchProxy
+        {
+            public string DirectoryPath { get; set; }
+            protected override object Invoke(MethodInfo method, object[] args)
+            {
+                Assert.Contains(method.Name, new[] { "get_PluginConfigurationsPath", "get_DataPath" });
+                return DirectoryPath;
+            }
+        }
+
+        public class MigrationSerializerProxy : DispatchProxy
+        {
+            protected override object Invoke(MethodInfo method, object[] args)
+            {
+                Assert.Equal("DeserializeFromFile", method.Name);
+                using (var stream = System.IO.File.OpenRead((string)args[1]))
+                    return new System.Xml.Serialization.XmlSerializer((Type)args[0]).Deserialize(stream);
             }
         }
 

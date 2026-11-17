@@ -433,7 +433,7 @@ test('resume and save do not crawl; setup preserves legacy account/coordinates a
     assert.equal(app.calls.saves[0].ApiRequestIntervalSeconds, 3);
     assert.equal(app.calls.saves[0].RefreshTimeoutMinutes, 60);
     assert.equal(app.calls.catalogue.length, 0);
-    assert.deepEqual(app.calls.configReads, ['d9314bc3-33e0-4080-88ef-8e7e718524f2']);
+    assert.deepEqual(app.calls.configReads, ['10b82431-f939-4507-a8e2-9509dd3fd6ae']);
     assert.deepEqual(app.calls.configWrites, app.calls.configReads);
 });
 

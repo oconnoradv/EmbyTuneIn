@@ -152,11 +152,12 @@ and check state; rerun checks when rebuilding or receiving a new advisory.
 
 ## Practical NIST SSDF alignment (not certification)
 
-The fork has an independent plugin ID, DLL/configuration filenames and dashboard/
-API names. Upstream TuneIn updates must not replace its hardened implementation.
-When migrating from v0.0.1, remove the original DLL and cancel pending upstream
-updates; do not install both implementations together. The Advanced-menu link
-uses the same main configuration page and does not relax administrator checks.
+The replacement uses the upstream plugin ID and DLL/configuration filenames;
+upstream updates can overwrite it. Remove the old original and fork DLLs before
+installing and do not load both implementations together. Back up and resolve
+conflicting configuration files as described in README; the migration never
+overwrites an existing original configuration. The Advanced-menu link uses the
+same main configuration page and does not relax administrator checks.
 
 Remote OPML is validated against a trusted local structural schema before use.
 DTD/entity resolution and remote/inline schema loading are disabled; only body

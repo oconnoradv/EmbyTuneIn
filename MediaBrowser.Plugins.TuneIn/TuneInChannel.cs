@@ -44,7 +44,7 @@ namespace MediaBrowser.Plugins.TuneIn
             this.library = library;
         }
 
-        public string Name => "TuneIn (fork)";
+        public string Name => "TuneIn";
         public string Description => "Configuration-first TuneIn radio.";
         public string HomePageUrl => "https://tunein.com/";
         public ChannelParentalRating ParentalRating => ChannelParentalRating.GeneralAudience;

@@ -129,7 +129,7 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
-      "MediaBrowser.Plugins.TuneIn.Fork": {
+      "mediabrowser.plugins.tunein": {
         "type": "Project"
       }
     }

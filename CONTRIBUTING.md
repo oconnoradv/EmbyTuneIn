@@ -4,10 +4,10 @@ The original repository is [MediaBrowser/TuneIn](https://github.com/MediaBrowser
 with `master` as its default branch. This fork retains upstream history and license.
 No upstream pull request or merge is created by building or publishing this fork.
 
-## Versioning and independent identity
+## Versioning and replacement identity
 
 Upstream currently declares assembly/file version `1.2.8.0`. The fork's new
-configuration/refresh functionality uses SemVer `1.3.0-fork.20-rc.1`: the prerelease
+configuration/refresh functionality uses SemVer `1.3.0-fork.20-rc.2`: the prerelease
 suffix identifies a fork test candidate, not an official upstream release.
 The `.csproj` `<Version>` is the source of truth. The SDK derives assembly/file
 version `1.3.0.0`; informational version includes the exact source commit.
@@ -29,10 +29,13 @@ artifacts and consolidated documentation are verified. Preserve upstream tags an
 commit history; never move the retained release tag. CHANGELOG.md contains the
 single consolidated RC1 entry rather than intermediate development release logs.
 
-Keep the independent plugin GUID, `MediaBrowser.Plugins.TuneIn.Fork.dll` and XML
-filename, and `TuneInFork` routes while manually testing this fork. Otherwise Emby
-can replace it with upstream again. Upgrades from v0.0.2/v0.0.3 preserve settings.
-Do not install both implementations together.
+Use upstream's plugin GUID, `MediaBrowser.Plugins.TuneIn.dll`, XML filename and
+TuneIn display names. Keep the existing internal `TuneInFork` routes for the
+fork's security and playback functionality. This replacement can be overwritten
+by an upstream update; never load it alongside the original or the old fork DLL.
+The previous fork XML is copied only if the original XML is absent; do not
+overwrite an existing original XML. See README for the explicit conflict and
+rollback procedure.
 
 ## Build and review gates
 
@@ -115,8 +118,8 @@ folder artwork, custom images and stable playback IDs when removing group worker
 ## Upstream review checklist
 
 Prepare the PR from the tested feature branch in `oconnoradv/EmbyTuneIn` to
-`MediaBrowser/TuneIn:master`. The fork's `main` contains the consolidated
-squash-merged implementation.
+`MediaBrowser/TuneIn:master`. The consolidated implementation is maintained on
+`fork-maintenance`; fork `main` tracks upstream.
 Fetch the latest upstream `master` and inspect the comparison before submission;
 do not force-push, discard work or merge upstream changes without reviewing them.
 
@@ -128,9 +131,9 @@ testing that has not actually occurred.
 Call out these maintainer decisions rather than silently shipping fork identity
 as an official upstream replacement:
 
-- Independent fork GUID/assembly/config filenames and dashboard/API names. Upstream
-  may choose its original identity, but must review configuration migration and
-  ensure the secure-default browsing gate remains intact.
+- Configuration migration, signed IDs and retained internal dashboard/API routes.
+  The replacement uses upstream plugin identity; secure-default browsing remains
+  gated until configured.
 - SDK/minimum host change from 4.6.0.50 references to compatible patched 4.9.1.90+
   stable or 4.9.2.7+ beta; the DLL is not itself an Emby Server CVE patch.
 - Explicit selector requests can include incidental station metadata, discarded

@@ -17,7 +17,7 @@ const versions = [...fs.readFileSync(projectFile, 'utf8').matchAll(/<Version>([^
 if (versions.length !== 1 || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(versions[0][1]))
     throw new Error('The project must declare one valid release version.');
 const version = versions[0][1];
-const assemblyName = 'MediaBrowser.Plugins.TuneIn.Fork';
+const assemblyName = 'MediaBrowser.Plugins.TuneIn';
 const pluginFile = assemblyName + '.dll';
 
 function run(command, args, quiet = false) {
@@ -84,7 +84,7 @@ async function main() {
     }
     if (release && (!online || !live)) throw new Error('Release verification requires --online and --live.');
     const html = fs.readFileSync(path.join('MediaBrowser.Plugins.TuneIn', 'Configuration', 'configPage.html'), 'utf8');
-    if (!html.includes(`TuneIn Fork ${version}</h2>`)
+    if (!html.includes(`TuneIn ${version}</h2>`)
         || !html.includes(`__plugin/tuneinforkjs${version.replaceAll('.', '').replaceAll('-', '')}`))
         throw new Error('Configuration page/controller version differs from the project.');
     if (fs.readFileSync('README.md', 'utf8').split(/\r?\n/)[0] !== `# TuneIn for Emby - fork v${version}`)
@@ -209,7 +209,9 @@ async function main() {
     if (run('git', ['rev-parse', 'HEAD'], true) !== revision || (release && run('git', ['status', '--porcelain'], true)))
         throw new Error('Source revision changed while verifying.');
     json('release-evidence.json', evidence);
-    const assets = fs.readdirSync(out).filter(file => /\.(dll|json|md)$/.test(file)).sort();
+    const assets = [pluginFile, 'LICENSE.md', 'INSTALL.md', 'SECURITY.md', 'CONTRIBUTING.md',
+        'CHANGELOG.md', 'dependency-inventory.json', 'nuget-audit.json', 'advisory-cross-check.json',
+        'sbom.cdx.json', 'release-evidence.json'].sort();
     fs.writeFileSync(path.join(out, 'SHA256SUMS.txt'), assets.map(file =>
         `${crypto.createHash('sha256').update(fs.readFileSync(path.join(out, file))).digest('hex')}  ${file}`).join('\n') + '\n');
     console.log(`Verified ${revision}; DLL SHA-256 ${sha}`);

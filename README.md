@@ -1,11 +1,11 @@
-# TuneIn for Emby - fork v1.3.0-fork.20-rc.1
+# TuneIn for Emby - fork v1.3.0-fork.20-rc.2
 
 This independent fork of [MediaBrowser/TuneIn](https://github.com/MediaBrowser/TuneIn)
 adds configuration-first radio browsing, scoped refreshes, safer playback and
 administrative controls. It is a **release candidate for testing**, not an
 official upstream release or a claim of production runtime certification.
-The fork uses its own plugin ID, DLL, configuration file and dashboard/API
-namespace so an upstream update does not replace it.
+This candidate replaces the original TuneIn plugin: it uses the upstream plugin
+ID, DLL and configuration filename. An upstream update can replace it.
 
 ## Consolidated fixes and enhancements
 
@@ -30,8 +30,7 @@ it describes current behavior, not every intermediate implementation.
   lazy language/music/location selectors, multiple local areas and optional
   coordinates. Signed navigation enforces saved selections and group switches
   through descendants, pagination, playback and artwork; disabled or stale items
-  cannot bypass those scopes. An independent plugin identity prevents upstream
-  updates from replacing the fork.
+  cannot bypass those scopes. The plugin and library are displayed as TuneIn.
 
 ### Refresh and interface fixes
 
@@ -78,32 +77,45 @@ Use **Emby Server stable 4.9.1.90 or newer**, or a compatible patched beta
 or newer. Do not copy SDK dependencies from the build directory. See
 [SECURITY.md](SECURITY.md) for the host security requirement.
 
-1. Download `MediaBrowser.Plugins.TuneIn.Fork.dll`, `SHA256SUMS.txt` and
-   `INSTALL.md` from [v1.3.0-fork.20-rc.1](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.3.0-fork.20-rc.1).
+1. Download `MediaBrowser.Plugins.TuneIn.dll`, `SHA256SUMS.txt` and
+   `INSTALL.md` from [v1.3.0-fork.20-rc.2](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.3.0-fork.20-rc.2).
    Keep the accompanying license. Verify the DLL against `SHA256SUMS.txt`, for
-   example with `Get-FileHash .\MediaBrowser.Plugins.TuneIn.Fork.dll -Algorithm SHA256`
-   on Windows or `shasum -a 256 MediaBrowser.Plugins.TuneIn.Fork.dll` on Linux/macOS.
-2. Stop Emby and back up your existing TuneIn DLL and XML configuration. Find the
-   actual plugins directory using Emby's dashboard paths. Move the upstream or
-   v0.0.1 `MediaBrowser.Plugins.TuneIn.dll` out of that directory; do not install
-   both implementations together. Cancel any pending upstream TuneIn update.
-3. Copy **only** the fork DLL to the plugins directory and restart Emby. Open
-   **Dashboard > Advanced > TuneIn** or **Dashboard > Plugins > TuneIn
-   (oconnoradv fork) > Settings**. Confirm the page displays **TuneIn Fork
-   1.3.0-fork.20-rc.1**; reopen it from the dashboard and hard-refresh if needed.
-4. Enable desired radio groups and add their selections. Music, Language and
+   example with `Get-FileHash .\MediaBrowser.Plugins.TuneIn.dll -Algorithm SHA256`
+   on Windows or `shasum -a 256 MediaBrowser.Plugins.TuneIn.dll` on Linux/macOS.
+2. Stop Emby. Back up the existing plugin DLLs, both TuneIn XML configuration
+   files if present, and server data before any library refresh. Locate the
+   actual plugins and plugin-configuration directories in Emby's dashboard.
+   Remove or move both the old `MediaBrowser.Plugins.TuneIn.dll` and
+   `MediaBrowser.Plugins.TuneIn.Fork.dll` out of the plugins directory. Do not
+   load two TuneIn implementations together. Cancel pending upstream updates.
+3. If both `MediaBrowser.Plugins.TuneIn.xml` and
+   `MediaBrowser.Plugins.TuneIn.Fork.xml` exist, the original filename wins;
+   neither file is overwritten automatically. To retain the fork's settings,
+   back up both, move the original XML out of the configuration directory and
+   let the plugin copy the fork XML on startup. If only the original XML exists,
+   it is used unchanged. If only the fork XML exists, it is validated and copied
+   to the original filename, preserving its signing key and selections. The
+   source file is retained. An invalid fork XML stops migration rather than
+   replacing settings. Keep all XML backups private.
+4. Copy **only** the new DLL into the plugins directory and restart Emby. Open
+   **Dashboard > Advanced > TuneIn** or **Dashboard > Plugins > TuneIn >
+   Settings**. Confirm the page displays **TuneIn 1.3.0-fork.20-rc.2**;
+   reopen it from the dashboard and hard-refresh if needed.
+5. Enable desired radio groups and add their selections. Music, Language and
    Location need enabled selections; Favorites needs a username; Local Radio
    needs enabled areas and/or coordinates. Select **Enable configured browsing
    after saving**, then save. Return to the channel root and run a refresh if
    needed.
 
-The fork's plugin ID is `d9314bc3-33e0-4080-88ef-8e7e718524f2` and its
-configuration is `MediaBrowser.Plugins.TuneIn.Fork.xml`. An upgrade from
-upstream or v0.0.1 does not import the old XML: re-enter the account,
-coordinates and selections. Later fork upgrades retain the independent
-configuration. If installation fails, stop Emby, remove the fork DLL and
-restore your backup. Keep configuration XML private; it contains account,
-location and signing-key information.
+The plugin ID is `10b82431-f939-4507-a8e2-9509dd3fd6ae`. Original settings
+retain their username and coordinates, but configured browsing requires an
+explicit save and enabled selections. Existing host library/channel records,
+artwork and schedules may not transfer between identities automatically; check
+them and run the TuneIn-only refresh if needed. No automatic global refresh is
+requested. If installation fails, stop Emby, remove the new DLL and restore the
+chosen prior DLL and XML backups; library imports may require separate recovery.
+Keep configuration XML private; it contains account, location and signing-key
+information. These identity changes have not been tested in a live Emby server.
 
 ## Configure and browse
 
