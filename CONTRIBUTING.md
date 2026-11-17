@@ -7,7 +7,7 @@ No upstream pull request or merge is created by building or publishing this fork
 ## Versioning and independent identity
 
 Upstream currently declares assembly/file version `1.2.8.0`. The fork's new
-configuration/refresh functionality uses SemVer `1.3.0-fork.19`: the prerelease
+configuration/refresh functionality uses SemVer `1.3.0-fork.20-rc.1`: the prerelease
 suffix identifies a fork test candidate, not an official upstream release.
 The `.csproj` `<Version>` is the source of truth. The SDK derives assembly/file
 version `1.3.0.0`; informational version includes the exact source commit.
@@ -113,7 +113,7 @@ folder artwork, custom images and stable playback IDs when removing group worker
 ## Upstream review checklist
 
 Prepare the PR from the tested feature branch in `oconnoradv/EmbyTuneIn` to
-`MediaBrowser/TuneIn:master`. The fork's `master` contains the consolidated
+`MediaBrowser/TuneIn:master`. The fork's `main` contains the consolidated
 squash-merged implementation.
 Fetch the latest upstream `master` and inspect the comparison before submission;
 do not force-push, discard work or merge upstream changes without reviewing them.

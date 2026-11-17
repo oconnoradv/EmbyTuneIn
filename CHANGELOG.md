@@ -7,6 +7,11 @@ features explicitly removed below are not promises of current functionality.
 Superseded prereleases are marked deprecated after the replacement is verified.
 Published assets and original source tags remain unchanged for provenance.
 
+## 1.3.0-fork.20-rc.1 - consolidated release candidate
+
+- Consolidate the current features, setup, operational limits and testing
+  guidance in README.md. Historical point releases below are deprecated.
+
 ## 1.3.0-fork.19 - refresh controls and recovery
 
 - Add a persistent settings lock, collapsed setup sections, category refresh
