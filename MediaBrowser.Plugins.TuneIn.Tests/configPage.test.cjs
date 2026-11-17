@@ -27,18 +27,26 @@ class Element {
                 : selector.startsWith('[data-category=') ? element.attributes['data-category'] === selector.split('"')[1]
                     : element.tag === selector);
     }
+    querySelectorAll(selector) {
+        if (selector === '.configurationFields .tuneInSettingsSection')
+            return this.all().filter(element => (element.className || '').split(' ').includes('tuneInSettingsSection')
+                && element !== this.querySelector('.channelRefreshSection'));
+        throw new Error('Unsupported selector: ' + selector);
+    }
 }
 
 function harness(config) {
     const view = new Element('view');
-    for (const name of ['form', 'txtUsername', 'txtLatLon', 'useCoordinates', 'configurationCompleted',
+    for (const name of ['form', 'txtUsername', 'txtLatLon', 'apiRequestInterval', 'useCoordinates', 'configurationCompleted',
         'categories', 'selectors', 'status', 'channelRefreshUpdate', 'channelRefreshFailure',
-        'channelRefreshStatus', 'channelRefreshMessage', 'channelRefreshLog']) {
+        'channelRefreshStatus', 'channelRefreshMessage', 'channelRefreshLog', 'channelRefreshSection',
+        'settingsLocked', 'settingsLockMessage', 'configurationFields', 'button-submit', 'refreshTimeout', 'refreshGroups']) {
         const element = new Element(name === 'form' ? 'form' : 'div');
         element.className = name;
         view.appendChild(element);
     }
-    const calls = { catalogue: [], saves: [], configReads: [], configWrites: [], upgrades: [], diagnostics: [] };
+    const calls = { catalogue: [], saves: [], configReads: [], configWrites: [], upgrades: [], diagnostics: [], locks: [], groups: [], batches: 0 };
+    const timers = [];
     let View;
     function BaseView(element) { this.view = element; }
     BaseView.prototype.onResume = function () { return this.view.listeners.viewshow(); };
@@ -63,6 +71,27 @@ function harness(config) {
             return {};
         }
     };
+    let ajax = ApiClient.ajax;
+    let lockState = { Locked: false, RefreshActive: false };
+    let lockHandler = async request => {
+        calls.locks.push(request);
+        if (request.type === 'POST') lockState = { ...lockState, ...JSON.parse(request.data) };
+        return { ...lockState };
+    };
+    let groupHandler = async request => {
+        calls.groups.push(request);
+        const category = request.type === 'GET' ? request.url.query.Category : JSON.parse(request.data).Category;
+        return { Category: category, Enabled: category === 'talk', State: 'Idle',
+            CompletedRequests: 0, TotalRequests: 0, Id: 'attempt1' };
+    };
+    Object.defineProperty(ApiClient, 'ajax', {
+        get: () => request => request.url.route === 'TuneInFork/SettingsLock' ? lockHandler(request)
+            : request.url.route === 'TuneInFork/RefreshTuneIn/Categories'
+                ? (calls.batches++, Promise.all(['local', 'music', 'language', 'location', 'talk', 'sports', 'podcast', 'presets']
+                    .map(category => groupHandler({ type: 'GET', url: { route: 'TuneInFork/RefreshTuneIn/Category', query: { Category: category } } }))))
+            : request.url.route.startsWith('TuneInFork/RefreshTuneIn/Category') ? groupHandler(request) : ajax(request),
+        set: handler => { ajax = handler; }
+    });
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'MediaBrowser.Plugins.TuneIn',
         'Configuration', 'configPage.js'), 'utf8'), {
         define: (dependencies, factory) => {
@@ -82,17 +111,20 @@ function harness(config) {
         },
         document: { createElement: tag => new Element(tag) },
         ApiClient,
+        setTimeout(callback) { timers.push(callback); return timers.length; },
+        clearTimeout() {},
         Dashboard: { processPluginConfigurationUpdateResult() {} }
     });
-    return { instance: new View(view), view, calls, ApiClient };
+    return { instance: new View(view), view, calls, ApiClient, timers, setLockHandler(handler) { lockHandler = handler; },
+        setGroupHandler(handler) { groupHandler = handler; } };
 }
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const html = () => fs.readFileSync(path.join(__dirname, '..', 'MediaBrowser.Plugins.TuneIn',
     'Configuration', 'configPage.html'), 'utf8');
 
-test('settings expose native read-only status without scheduling controls or automatic log retrieval', async () => {
-    assert.doesNotMatch(html(), /data-section="(?:schedules|refresh)"|scheduleControls|refreshGroups/);
+test('settings expose native task status without schedule controls or automatic log retrieval', async () => {
+    assert.doesNotMatch(html(), /data-section="schedules"|scheduleControls/);
     assert.match(html(), /Refresh TuneIn.*enabled TuneIn categories.*other channel providers are not refreshed/);
     const app = harness({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true });
     const requests = [];
@@ -109,7 +141,6 @@ test('settings expose native read-only status without scheduling controls or aut
     await app.instance.onResume();
     assert.equal(requests.length, 2);
     assert.equal(app.calls.saves.length, 1);
-    assert.equal(app.view.all().some(element => /^Refresh (?:Local Radio|Music|By Language|By Location|Talk|Sports|Podcasts|My Favorites)$/.test(element.textContent)), false);
 });
 
 test('failed native task status enables explicit report retrieval and renders error text safely', async () => {
@@ -134,6 +165,71 @@ test('failed native task status enables explicit report retrieval and renders er
     assert.equal(app.view.querySelector('.channelRefreshLog').children.length, 0);
     assert.equal(app.view.querySelector('.channelRefreshLog').hidden, false);
     assert.match(app.view.querySelector('.channelRefreshMessage').textContent, /limited/);
+});
+
+test('running task shows its current category, phase and measured request counts', async () => {
+    const app = harness({});
+    app.ApiClient.ajax = async () => ({
+        State: 'Running', Progress: 35, LastResult: 'NeverRun',
+        Current: { Category: 'music', Phase: 'Discovering selected catalogue pages',
+            CategoryIndex: 2, CategoryCount: 3, StartedRequests: 7, CompletedRequests: 6, CacheHits: 2 }
+    });
+    await app.instance.onResume();
+    const status = app.view.querySelector('.channelRefreshStatus').textContent;
+    assert.equal(app.view.querySelector('.channelRefreshSection').open, true);
+    assert.match(status, /Category: Music \(2 of 3\)/);
+    assert.match(status, /Stage: Discovering selected catalogue pages/);
+    assert.match(status, /completed\/started: 6\/7; cached pages reused: 2/);
+    assert.match(status, /\nStage:.*\nCatalogue requests/);
+    app.ApiClient.ajax = async () => ({
+        State: 'Running', LastResult: 'NeverRun',
+        Current: { Category: 'music', Phase: '<script>Importing</script>',
+            CategoryIndex: 2, CategoryCount: 3, StartedRequests: 7, CompletedRequests: 7, CacheHits: 2 }
+    });
+    await app.view.querySelector('.channelRefreshUpdate').listeners.click();
+    assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /<script>Importing<\/script>/);
+    assert.equal(app.view.querySelector('.channelRefreshStatus').children.length, 0);
+});
+
+test('scheduled refresh shows timeout outcome and baseline estimate', async () => {
+    const app = harness({});
+    app.ApiClient.ajax = async () => ({
+        State: 'Running', LastResult: 'NeverRun', Outcome: 'Running',
+        Current: { Category: 'music', Phase: 'Importing staged section into Emby: 2/8 staged folders requested',
+            CategoryIndex: 2, CategoryCount: 5, StartedRequests: 7, CompletedRequests: 7, CacheHits: 0,
+            EstimatedProgress: 32, EstimatedCompletedRequests: 20, EstimatedRequests: 80 }
+    });
+    await app.instance.onResume();
+    assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Estimated progress: 32% \(20\/80 estimated requests\)/);
+    app.ApiClient.ajax = async () => ({ State: 'Idle', LastResult: 'Failed', FailedAttempt: 'attempt', Outcome: 'TimedOut' });
+    await app.view.querySelector('.channelRefreshUpdate').listeners.click();
+    assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Outcome: TimedOut/);
+});
+
+test('missing or malformed stage is not presented as current progress', async () => {
+    const app = harness({});
+    app.ApiClient.ajax = async () => ({ State: 'Running', LastResult: 'NeverRun' });
+    await app.instance.onResume();
+    assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Current stage unavailable/);
+    app.ApiClient.ajax = async () => ({
+        State: 'Running', LastResult: 'Failed', FailedAttempt: 'old',
+        Current: { Category: 'music', Phase: 'Importing', CategoryIndex: 1, CategoryCount: 1,
+            StartedRequests: 1, CompletedRequests: 2, CacheHits: 0 }
+    });
+    await app.view.querySelector('.channelRefreshUpdate').listeners.click();
+    assert.match(app.view.querySelector('.channelRefreshStatus').textContent, /Unable to load/);
+    assert.equal(app.view.querySelector('.channelRefreshFailure').disabled, true);
+});
+
+test('idle task does not display a stale stage', async () => {
+    const app = harness({});
+    app.ApiClient.ajax = async () => ({
+        State: 'Idle', LastResult: 'Completed',
+        Current: { Category: 'music', Phase: 'Old phase', CategoryIndex: 1, CategoryCount: 1,
+            StartedRequests: 1, CompletedRequests: 1, CacheHits: 0 }
+    });
+    await app.instance.onResume();
+    assert.doesNotMatch(app.view.querySelector('.channelRefreshStatus').textContent, /Old phase|Category: Music/);
 });
 
 test('never-run and successful task statuses disable failed-log retrieval', async () => {
@@ -199,6 +295,8 @@ test('settings preserve native view hooks and labeled inputs', async () => {
     await app.instance.onResume();
     assert.match(html(), /class="inputContainer"[\s\S]*class="txtUsername"[^>]+label=/);
     assert.match(html(), /class="txtLatLon"[^>]+label=/);
+    assert.match(html(), /class="apiRequestInterval"[^>]+label=/);
+    assert.match(html(), /class="refreshTimeout"[^>]+label=/);
 });
 
 test('a late configuration response cannot rebuild or upgrade a hidden settings view', async () => {
@@ -214,15 +312,108 @@ test('a late configuration response cannot rebuild or upgrade a hidden settings 
     assert.equal(app.calls.catalogue.length, 0);
 });
 
-test('four settings sections collapse independently while setup and Save remain accessible', () => {
+test('settings sections and refresh controls start collapsed while Save remains accessible', () => {
     const sections = [...html().matchAll(/<details\b([^>]*)>([\s\S]*?)<\/details>/g)];
-    assert.equal(sections.length, 4);
-    assert.deepEqual(sections.map(section => section[2].match(/<summary>([^<]+)<\/summary>/)[1]),
-        ['Setup and account', 'Radio groups', 'Local Radio coordinates', 'Station selections']);
-    assert.match(sections[0][1], /\bopen\b/);
-    for (const section of sections.slice(1)) assert.doesNotMatch(section[1], /\bopen\b/);
+    assert.equal(sections.length, 5);
+    assert.deepEqual(sections.map(section => section[2].match(/<summary[^>]*>([^<]+)<\/summary>/)[1]),
+        ['Setup and account', 'Radio groups', 'Local Radio coordinates', 'Station selections', 'Refresh TuneIn']);
+    for (const section of sections) assert.doesNotMatch(section[1], /\bopen\b/);
     for (const section of sections) assert.doesNotMatch(section[2], /type="submit"/);
     assert.match(html(), /<button[^>]*type="submit"[^>]*><span>Save configuration<\/span><\/button>/);
+});
+
+test('settings lock and an active refresh prevent edits and saving', async () => {
+    const app = harness({});
+    await app.instance.onResume();
+    const toggle = app.view.querySelector('.settingsLocked');
+    const fields = app.view.querySelector('.configurationFields');
+    const save = app.view.querySelector('.button-submit');
+    assert.equal(toggle.checked, false);
+    assert.equal(fields.disabled, false);
+    toggle.checked = true;
+    await toggle.listeners.change();
+    assert.equal(fields.disabled, true);
+    assert.equal(save.disabled, true);
+    app.view.querySelector('form').listeners.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.calls.saves.length, 0);
+    toggle.checked = false;
+    await toggle.listeners.change();
+    assert.equal(save.disabled, false);
+    app.setLockHandler(async () => ({ Locked: false, RefreshActive: true }));
+    await app.instance.onPause();
+    await app.instance.onResume();
+    assert.equal(fields.disabled, true);
+    assert.equal(save.disabled, true);
+    assert.match(app.view.querySelector('.settingsLockMessage').textContent, /refresh is active/);
+    assert.equal(app.view.querySelector('.channelRefreshSection').open, true);
+});
+
+test('a successful save collapses settings sections', async () => {
+    const app = harness({});
+    const section = new Element('details');
+    section.className = 'tuneInSettingsSection';
+    section.open = true;
+    app.view.appendChild(section);
+    await app.instance.onResume();
+    app.view.querySelector('form').listeners.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(section.open, false);
+});
+
+test('unknown settings lock state fails closed and retries on next view', async () => {
+    const app = harness({});
+    app.setLockHandler(async () => { throw new Error('offline'); });
+    await app.instance.onResume();
+    assert.equal(app.view.querySelector('.button-submit').disabled, true);
+    app.view.querySelector('form').listeners.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.calls.saves.length, 0);
+    app.setLockHandler(async () => ({ Locked: false, RefreshActive: false }));
+    app.instance.onPause();
+    await app.instance.onResume();
+    assert.equal(app.view.querySelector('.button-submit').disabled, false);
+});
+
+test('a late lock-status response cannot undo a newer lock change', async () => {
+    const app = harness({});
+    await app.instance.onResume();
+    let respond;
+    app.setLockHandler(request => request.type === 'GET'
+        ? new Promise(resolve => { respond = resolve; })
+        : Promise.resolve({ Locked: true, RefreshActive: false }));
+    const pending = app.view.querySelector('.channelRefreshUpdate').listeners.click();
+    await settle();
+    const toggle = app.view.querySelector('.settingsLocked');
+    toggle.checked = true;
+    await toggle.listeners.change();
+    respond({ Locked: false, RefreshActive: false });
+    await pending;
+    assert.equal(toggle.checked, true);
+    assert.equal(app.view.querySelector('.button-submit').disabled, true);
+});
+
+test('active refreshes update local status on the open page', async () => {
+    const app = harness({});
+    let active = false;
+    app.setLockHandler(async () => ({ Locked: false, RefreshActive: active }));
+    await app.instance.onResume();
+    active = true;
+    app.timers.shift()();
+    await settle();
+    assert.equal(app.view.querySelector('.button-submit').disabled, true);
+    assert.equal(app.view.querySelector('.channelRefreshSection').open, true);
+    assert.ok(app.calls.batches >= 2);
+});
+
+test('polling stops when the setup page is hidden', async () => {
+    const app = harness({});
+    await app.instance.onResume();
+    const requests = app.calls.locks.length;
+    app.instance.onPause();
+    app.timers.shift()();
+    await settle();
+    assert.equal(app.calls.locks.length, requests);
 });
 
 test('resume and save do not crawl; setup preserves legacy account/coordinates and remains explicitly gated', async () => {
@@ -230,6 +421,7 @@ test('resume and save do not crawl; setup preserves legacy account/coordinates a
     await app.instance.onResume();
     assert.equal(app.calls.catalogue.length, 0);
     assert.equal(app.view.querySelector('.txtUsername').value, 'existing-account');
+    assert.equal(app.view.querySelector('.apiRequestInterval').value, '3');
     assert.equal(app.view.querySelector('.configurationCompleted').checked, false);
     app.view.querySelector('.configurationCompleted').checked = true;
     app.view.querySelector('form').listeners.submit({ preventDefault() {} });
@@ -238,9 +430,98 @@ test('resume and save do not crawl; setup preserves legacy account/coordinates a
     assert.equal(app.calls.saves[0].SchemaVersion, 1);
     assert.equal(app.calls.saves[0].ConfigurationCompleted, true);
     assert.equal(app.calls.saves[0].LatLon, '1,2');
+    assert.equal(app.calls.saves[0].ApiRequestIntervalSeconds, 3);
+    assert.equal(app.calls.saves[0].RefreshTimeoutMinutes, 60);
     assert.equal(app.calls.catalogue.length, 0);
     assert.deepEqual(app.calls.configReads, ['d9314bc3-33e0-4080-88ef-8e7e718524f2']);
     assert.deepEqual(app.calls.configWrites, app.calls.configReads);
+});
+
+test('catalogue request interval is saved and rejects invalid values', async () => {
+    const app = harness({ ApiRequestIntervalSeconds: 5 });
+    await app.instance.onResume();
+    const input = app.view.querySelector('.apiRequestInterval');
+    assert.equal(input.value, '5');
+    for (const value of ['', '0', '31', '1.5', '-1', 'abc']) {
+        input.value = value;
+        app.view.querySelector('form').listeners.submit({ preventDefault() {} });
+        await settle();
+        assert.equal(app.calls.saves.length, 0);
+        assert.match(app.view.querySelector('.status').textContent, /between 1 and 30/);
+    }
+    input.value = '1';
+    app.view.querySelector('form').listeners.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.calls.saves[0].ApiRequestIntervalSeconds, 1);
+});
+
+test('refresh timeout defaults to one hour and rejects invalid values', async () => {
+    const app = harness({});
+    await app.instance.onResume();
+    const timeout = app.view.querySelector('.refreshTimeout');
+    assert.equal(timeout.value, '60');
+    for (const value of ['', '0', '1441', '1.5', '-1', 'abc']) {
+        timeout.value = value;
+        app.view.querySelector('form').listeners.submit({ preventDefault() {} });
+        await settle();
+        assert.equal(app.calls.saves.length, 0);
+        assert.match(app.view.querySelector('.status').textContent, /between 1 and 1440/);
+    }
+    timeout.value = '120';
+    app.view.querySelector('form').listeners.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.calls.saves[0].RefreshTimeoutMinutes, 120);
+});
+
+test('category actions start enabled groups and resume only timed-out attempts', async () => {
+    const app = harness({});
+    await app.instance.onResume();
+    const findButton = text => app.view.all().find(element => element.tag === 'button' && element.textContent === text);
+    assert.equal(findButton('Refresh Music').disabled, true);
+    const talk = findButton('Refresh Talk');
+    assert.equal(talk.disabled, false);
+    await talk.listeners.click();
+    const start = app.calls.groups.find(request => request.type === 'POST');
+    assert.deepEqual(JSON.parse(start.data), { Category: 'talk' });
+    app.setGroupHandler(async request => {
+        const category = request.type === 'GET' ? request.url.query.Category : JSON.parse(request.data).Category;
+        if (request.type === 'POST') app.calls.groups.push(request);
+        return { Category: category, Enabled: category === 'talk', State: category === 'talk' ? 'TimedOut' : 'Idle',
+            Resumable: category === 'talk', CompletedRequests: 0, TotalRequests: 0, Id: 'timed-out-1' };
+    });
+    await app.view.querySelector('.channelRefreshUpdate').listeners.click();
+    assert.equal(findButton('Restart Talk').disabled, false);
+    await findButton('Resume Talk').listeners.click();
+    const resume = app.calls.groups.find(request => request.url.route.endsWith('/Resume'));
+    assert.deepEqual(JSON.parse(resume.data), { Category: 'talk', AttemptId: 'timed-out-1' });
+});
+
+test('category failures and untrusted status details are shown as text without resume', async () => {
+    const app = harness({});
+    app.setGroupHandler(async request => ({
+        Category: request.url.query.Category, Enabled: true,
+        State: request.url.query.Category === 'talk' ? 'Failed' : 'Idle',
+        Phase: request.url.query.Category === 'talk' ? '<script>unsafe</script>' : null,
+        Error: request.url.query.Category === 'talk' ? 'Provider error' : null,
+        CompletedRequests: 1, TotalRequests: 1
+    }));
+    await app.instance.onResume();
+    const group = app.view.querySelector('.refreshGroups');
+    assert.ok(group.all().some(element => element.tag === 'p' && element.textContent.includes('<script>unsafe</script>')));
+    assert.equal(group.all().some(element => element.tag === 'script'), false);
+    assert.equal(group.all().some(element => element.textContent === 'Resume Talk'), false);
+});
+
+test('a timeout without a resumable checkpoint offers restart only', async () => {
+    const app = harness({});
+    app.setGroupHandler(async request => ({
+        Category: request.url.query.Category, Enabled: true,
+        State: request.url.query.Category === 'talk' ? 'TimedOut' : 'Idle',
+        Resumable: false, CompletedRequests: 1, TotalRequests: 1
+    }));
+    await app.instance.onResume();
+    assert.ok(app.view.all().some(element => element.textContent === 'Restart Talk'));
+    assert.equal(app.view.all().some(element => element.textContent === 'Resume Talk'), false);
 });
 
 test('catalogue loads explicitly; remote labels are text and selected stable ancestry is persisted', async () => {

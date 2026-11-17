@@ -7,7 +7,62 @@ features explicitly removed below are not promises of current functionality.
 Superseded prereleases are marked deprecated after the replacement is verified.
 Published assets and original source tags remain unchanged for provenance.
 
-## 1.3.0-fork.13 - category-scoped refresh task
+## 1.3.0-fork.20-rc.1 - consolidated release candidate
+
+- Consolidate the current features, setup, operational limits and testing
+  guidance in README.md. Historical point releases below are deprecated.
+
+## 1.3.0-fork.19 - refresh controls and recovery
+
+- Add a persistent settings lock, collapsed setup sections, category refresh
+  actions, configurable timeout and more detailed refresh status.
+- Estimate request progress from the last successful matching configuration.
+  Timeout recovery reuses bounded catalogue checkpoints and restarts any
+  interrupted Emby category import; oversized checkpoints require restart.
+
+## 1.3.0-fork.18 - alphabet pagination fix
+
+- Preserve TuneIn's unescaped `#` alphabet filter in pagination links while
+  retaining destination and fragment restrictions.
+- Include a safe reason when a catalogue destination is rejected, without
+  exposing its URL or credentials in the refresh task report.
+
+## 1.3.0-fork.17 - staged refresh root fix
+
+- Allow Emby's channel-root query during staged refresh and report swallowed
+  import errors before attempting artwork updates.
+
+## 1.3.0-fork.16 - refresh performance and status
+
+- Discover and stage bounded selected-category results before starting Emby's
+  category import, share identical validated catalogue requests within a task
+  run and briefly after successful refreshes, and record safe discovery/import
+  timing and cache-hit diagnostics. Add an administrator-configurable catalogue
+  request interval, defaulting to three seconds. Respect provider rate-limit
+  responses without assuming that music results establish language or location
+  membership.
+- Show the current category and discovery, import or artwork phase in the
+  dedicated refresh task status without background polling.
+
+## 1.3.0-fork.15 - alphabetic browse refresh fix
+
+- Accept TuneIn's bounded alphabetic station/show filters for **Find by Name**,
+  including encoded `#` and international letters, without relaxing destination
+  or selected-category restrictions. These provider links previously failed Music
+  refreshes. Include safe rejected-parameter details in the task's main error
+  message when Emby omits inner exceptions from its stored report.
+
+## 1.3.0-fork.14 - refresh diagnostics (deprecated)
+
+- Preserve the original refresh exception chain in the native failed-task report,
+  including failures swallowed by host traversal. Identify the category, phase,
+  completed/started catalogue requests and last HTTP status instead of reporting
+  only a generic section failure. Existing administrator-only report limits apply.
+  Rejected catalogue parameter errors identify the parameter and rejection class,
+  length and occurrence count without including its value or URL.
+  This release does not claim to fix the observed refresh failure.
+
+## 1.3.0-fork.13 - category-scoped refresh task (deprecated)
 
 - Add one visible, manually schedulable **Refresh TuneIn** task. It runs only
   enabled TuneIn categories and their saved sub-category selections; the separate

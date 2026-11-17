@@ -24,6 +24,7 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         public PluginConfiguration Value { get; }
         public string Key { get; }
+        public string SettingsKey { get; }
         public ConfigurationSnapshot(PluginConfiguration value)
         {
             var serializer = new XmlSerializer(typeof(PluginConfiguration));
@@ -34,7 +35,13 @@ namespace MediaBrowser.Plugins.TuneIn
                 using (var reader = new StringReader(xml))
                     Value = (PluginConfiguration)serializer.Deserialize(reader);
                 using (var hash = SHA256.Create())
-                    Key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(xml))).Replace("-", "");
+                {
+                    SettingsKey = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(xml))).Replace("-", "");
+                    var navigationXml = Regex.Replace(xml,
+                        @"^[ \t]*<RefreshTimeoutMinutes>.*?</RefreshTimeoutMinutes>\r?\n", "",
+                        RegexOptions.CultureInvariant | RegexOptions.Multiline);
+                    Key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(navigationXml))).Replace("-", "");
+                }
             }
         }
 
@@ -97,6 +104,12 @@ namespace MediaBrowser.Plugins.TuneIn
                 throw new ArgumentException("Enter finite latitude (-90..90), longitude (-180..180), separated by a comma.");
             if ((value.Username ?? "").Length > 128)
                 throw new ArgumentException("TuneIn username exceeds 128 characters.");
+            if (value.ApiRequestIntervalSeconds < PluginConfiguration.MinApiRequestIntervalSeconds
+                || value.ApiRequestIntervalSeconds > PluginConfiguration.MaxApiRequestIntervalSeconds)
+                throw new ArgumentException("TuneIn API request interval must be between 1 and 30 seconds.");
+            if (value.RefreshTimeoutMinutes < PluginConfiguration.MinRefreshTimeoutMinutes
+                || value.RefreshTimeoutMinutes > PluginConfiguration.MaxRefreshTimeoutMinutes)
+                throw new ArgumentException("TuneIn refresh timeout must be between 1 and 1440 minutes.");
             foreach (var category in new[] { "music", "language", "location", "local" })
             {
                 var items = category == "music" ? value.Music : category == "language" ? value.Languages
@@ -113,6 +126,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
     internal sealed class DirectoryRequest
     {
+        private static readonly object LinkDiagnosticKey = new object();
         public string Method { get; set; } = "Browse.ashx";
         public Dictionary<string, string> Parameters { get; } = new Dictionary<string, string>();
         public string Url => "https://opml.radiotime.com/" + Method + "?"
@@ -129,24 +143,65 @@ namespace MediaBrowser.Plugins.TuneIn
         public static DirectoryRequest ParseLink(string value)
         {
             value = HttpUtility.HtmlDecode(value);
-            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
-                || (uri.Scheme != "http" && uri.Scheme != "https") || !uri.IsDefaultPort
-                || uri.UserInfo.Length != 0 || uri.Fragment.Length != 0
-                || !uri.Host.Equals("opml.radiotime.com", StringComparison.OrdinalIgnoreCase)
-                || (uri.AbsolutePath != "/Browse.ashx" && uri.AbsolutePath != "/Tune.ashx"))
-                throw new InvalidDataException("Untrusted catalogue link rejected.");
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+                throw RejectedLink("missing or invalid absolute URL");
+            if (uri.Scheme != "http" && uri.Scheme != "https")
+                throw RejectedLink("unsupported scheme");
+            if (!uri.IsDefaultPort) throw RejectedLink("non-default port");
+            if (uri.UserInfo.Length != 0) throw RejectedLink("credentials in URL");
+            if (!uri.Host.Equals("opml.radiotime.com", StringComparison.OrdinalIgnoreCase))
+                throw RejectedLink("untrusted host");
+            if (uri.AbsolutePath != "/Browse.ashx" && uri.AbsolutePath != "/Tune.ashx")
+                throw RejectedLink("unsupported path");
             var query = HttpUtility.ParseQueryString(uri.Query);
+            var lastParameter = HttpUtility.UrlDecode(uri.Query.Substring(uri.Query.LastIndexOf('&') + 1).TrimStart('?'));
+            // TuneIn emits the # alphabet filter unescaped in some pagination links.
+            var trailingAlphabetHash = uri.Fragment == "#"
+                && (lastParameter == "filter=s:~" || lastParameter == "filter=p:~")
+                && query.GetValues("filter")?.Length == 1;
+            if (uri.Fragment.Length != 0 && !trailingAlphabetHash) throw RejectedLink("URL fragment");
+            if (trailingAlphabetHash) query["filter"] += "#";
             var request = new DirectoryRequest { Method = uri.AbsolutePath.Substring(1) };
             foreach (var key in new[] { "id", "c", "filter", "offset", "pivot", "sid" })
             {
                 var item = query[key];
                 if (item == null) continue;
-                if (!Regex.IsMatch(item, @"^[A-Za-z0-9:,*-]{1,80}$"))
-                    throw new InvalidDataException("Invalid catalogue link parameter.");
+                if (!Regex.IsMatch(item, @"\A[A-Za-z0-9:,*-]{1,80}\z")
+                    && !(key == "filter" && Regex.IsMatch(item,
+                        @"\A[sp]:~[\p{L}\p{Nd}#](?::l[1-9][0-9]{0,9})?\z")))
+                {
+                    var reason = item.Length == 0 ? "empty"
+                        : item.Length > 80 ? "longer than 80 characters"
+                        : item.Any(char.IsControl) ? "contains a control character"
+                        : item.Any(char.IsWhiteSpace) ? "contains whitespace"
+                        : item.Any(character => character > 127) ? "contains non-ASCII characters"
+                        : "contains unsupported punctuation";
+                    var message = "Invalid catalogue link parameter '" + key + "' (" + reason
+                        + "; length " + item.Length.ToString(CultureInfo.InvariantCulture)
+                        + "; occurrences " + (query.GetValues(key)?.Length ?? 0).ToString(CultureInfo.InvariantCulture) + ").";
+                    var error = new InvalidDataException(message);
+                    error.Data[LinkDiagnosticKey] = message;
+                    throw error;
+                }
                 request.Parameters[key] = item;
             }
             if (request.Parameters.Count == 0) throw new InvalidDataException("Empty catalogue link rejected.");
             return request;
+        }
+
+        private static InvalidDataException RejectedLink(string reason)
+        {
+            var message = "Untrusted catalogue link rejected (" + reason + ").";
+            var error = new InvalidDataException(message);
+            error.Data[LinkDiagnosticKey] = message;
+            return error;
+        }
+
+        internal static string LinkDiagnostic(Exception error)
+        {
+            for (; error != null; error = error.InnerException)
+                if (error.Data[LinkDiagnosticKey] is string message) return message;
+            return null;
         }
     }
 
@@ -184,23 +239,34 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly object gate = new object();
         private readonly Dictionary<string, SelectorResult> selectors = new Dictionary<string, SelectorResult>();
         private readonly Dictionary<string, CachedPage> pages = new Dictionary<string, CachedPage>();
+        private readonly Dictionary<string, CachedPage> recentRefreshPages = new Dictionary<string, CachedPage>();
         private readonly Dictionary<string, CancellationTokenSource> categoryChanges = new Dictionary<string, CancellationTokenSource>();
         private readonly AsyncLocal<RefreshContext> refreshContext = new AsyncLocal<RefreshContext>();
+        private readonly AsyncLocal<RefreshRun> refreshRun = new AsyncLocal<RefreshRun>();
+        private RefreshRun activeRefreshRun;
         private int cachedBytes;
+        private int recentRefreshBytes;
+        private long cacheGeneration;
         private readonly SemaphoreSlim throttle = new SemaphoreSlim(1, 1);
         private readonly SafeHttpTransport transport;
         private readonly Func<PluginConfiguration> configuration;
         private readonly Func<DirectoryRequest, CancellationToken, Task<XDocument>> fetch;
+        private readonly Func<DateTime> utcNow;
+        private readonly Func<TimeSpan, CancellationToken, Task> wait;
         private CancellationTokenSource changed = new CancellationTokenSource();
         private string key;
         private DateTime lastRequest;
+        private DateTime nextRequest;
 
         internal TuneInDirectory(Func<PluginConfiguration> configuration = null,
-            Func<DirectoryRequest, CancellationToken, Task<XDocument>> fetch = null, SafeHttpTransport transport = null)
+            Func<DirectoryRequest, CancellationToken, Task<XDocument>> fetch = null, SafeHttpTransport transport = null,
+            Func<DateTime> utcNow = null, Func<TimeSpan, CancellationToken, Task> wait = null)
         {
             this.configuration = configuration ?? (() => Plugin.Instance.Configuration);
             this.fetch = fetch;
             this.transport = transport ?? new SafeHttpTransport();
+            this.utcNow = utcNow ?? (() => DateTime.UtcNow);
+            this.wait = wait ?? Task.Delay;
         }
 
         public void Reset()
@@ -359,10 +425,13 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private void ClearPages()
         {
+            cacheGeneration++;
             foreach (var cancellation in categoryChanges.Values) { cancellation.Cancel(); cancellation.Dispose(); }
             categoryChanges.Clear();
             pages.Clear();
             cachedBytes = 0;
+            recentRefreshPages.Clear();
+            recentRefreshBytes = 0;
         }
 
         public void InvalidateCategory(string category)
@@ -402,12 +471,32 @@ namespace MediaBrowser.Plugins.TuneIn
             CancellationToken categoryToken;
             lock (gate)
             {
+                var activeRun = refreshRun.Value ?? activeRefreshRun;
                 token.ThrowIfCancellationRequested();
                 if (snapshot.Key != key) throw new OperationCanceledException("Configuration changed.");
+                if (refreshContext.Value != null && activeRun != null
+                    && (activeRun.Key != key || activeRun.Generation != cacheGeneration))
+                    throw new OperationCanceledException("TuneIn configuration changed.");
                 if (!refresh && pages.TryGetValue(id, out var cached) && cached.Expires > DateTime.UtcNow)
                 {
                     refreshContext.Value?.Pages.Add(id);
+                    refreshContext.Value?.CacheHit?.Invoke();
                     return ParseCatalogue(cached.Bytes);
+                }
+                var sharedKey = RequestKey(snapshot, "", request);
+                if (!refresh && refreshContext.Value != null && activeRun != null
+                    && activeRun.Pages.TryGetValue(sharedKey, out var shared))
+                {
+                    refreshContext.Value.Pages.Add(id);
+                    refreshContext.Value.CacheHit?.Invoke();
+                    return ParseCatalogue(shared.Bytes);
+                }
+                if (!refresh && refreshContext.Value != null && activeRun != null
+                    && recentRefreshPages.TryGetValue(sharedKey, out var recent) && recent.Expires > utcNow())
+                {
+                    refreshContext.Value.Pages.Add(id);
+                    refreshContext.Value.CacheHit?.Invoke();
+                    return ParseCatalogue(recent.Bytes);
                 }
                 if (refreshContext.Value != null && refreshContext.Value.RequestStarted == null)
                     throw new InvalidOperationException("Emby requested a page outside the bounded group refresh.");
@@ -446,6 +535,18 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
                     else if (refresh)
                         throw new InvalidOperationException("Catalogue cache capacity exceeded; refresh fewer saved selections.");
+                    var run = refreshRun.Value ?? activeRefreshRun;
+                    var sharedKey = RequestKey(snapshot, "", request);
+                    if (run != null && refreshContext.Value != null && !run.Pages.ContainsKey(sharedKey))
+                    {
+                        if (run.Pages.Count < 128 && run.Bytes + bytes.Length <= 8 * 1024 * 1024)
+                        {
+                            run.Pages.Add(sharedKey, new CachedPage { Bytes = bytes, Expires = utcNow().AddMinutes(10) });
+                            run.Bytes += bytes.Length;
+                        }
+                        else
+                            run.PagesTruncated = true;
+                    }
                 }
                 if (refreshContext.Value != null)
                 {
@@ -464,7 +565,9 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public async Task SynchronizeCategoryAsync(string category, int expectedPages, Func<Task> synchronize,
             Action<DirectoryRequest> requestStarted = null, Action<int> statusReceived = null,
-            Action<XDocument> requestCompleted = null, IEnumerable<string> requiredPages = null)
+            Action<XDocument> requestCompleted = null, IEnumerable<string> requiredPages = null,
+            Action cacheHit = null, Action discoveryComplete = null, Action<string> phaseChanged = null,
+            Action<int, int, int, int> importProgress = null)
         {
             var previous = refreshContext.Value;
             var context = new RefreshContext
@@ -472,7 +575,13 @@ namespace MediaBrowser.Plugins.TuneIn
                 Category = category,
                 RequestStarted = requestStarted,
                 StatusReceived = statusReceived,
-                RequestCompleted = requestCompleted
+                RequestCompleted = requestCompleted,
+                ExpectedPages = expectedPages,
+                RequiredPages = requiredPages?.ToArray(),
+                CacheHit = cacheHit,
+                DiscoveryComplete = discoveryComplete,
+                PhaseChanged = phaseChanged,
+                ImportProgress = importProgress
             };
             refreshContext.Value = context;
             try
@@ -480,10 +589,174 @@ namespace MediaBrowser.Plugins.TuneIn
                 await synchronize().ConfigureAwait(false);
                 if (context.Error is OperationCanceledException cancellation) throw cancellation;
                 if (context.Error != null) throw new InvalidOperationException("Emby encountered a failed scoped catalogue request.", context.Error);
-                if (context.Pages.Count < expectedPages || (requiredPages != null && requiredPages.Any(id => !context.Pages.Contains(id))))
-                    throw new InvalidOperationException("Emby did not enumerate all saved starting pages.");
+                VerifyRefreshDiscovery();
             }
             finally { refreshContext.Value = previous; }
+        }
+
+        internal Task WithRefreshRunAsync(Func<Task> action) => WithRefreshRunAsync(action, null);
+
+        internal async Task WithRefreshRunAsync(Func<Task> action, IEnumerable<TuneInRefreshPageCheckpoint> seedPages)
+        {
+            var previous = refreshRun.Value;
+            RefreshRun previousActive;
+            RefreshRun run;
+            Snapshot();
+            lock (gate)
+            {
+                run = new RefreshRun { Key = key, Generation = cacheGeneration };
+                if (seedPages != null) SeedRefreshPages(run, seedPages);
+                previousActive = activeRefreshRun;
+                activeRefreshRun = run;
+                refreshRun.Value = run;
+            }
+            try { await action().ConfigureAwait(false); }
+            finally
+            {
+                refreshRun.Value = previous;
+                lock (gate)
+                    if (ReferenceEquals(activeRefreshRun, run))
+                        activeRefreshRun = previousActive;
+            }
+        }
+
+        internal bool HasRefreshRun
+        {
+            get { lock (gate) return refreshRun.Value != null || activeRefreshRun != null; }
+        }
+
+        internal List<TuneInRefreshPageCheckpoint> CaptureRefreshPages(out bool complete)
+        {
+            RefreshRun run;
+            lock (gate) run = refreshRun.Value ?? activeRefreshRun;
+            if (run == null)
+            {
+                complete = false;
+                return new List<TuneInRefreshPageCheckpoint>();
+            }
+            lock (gate)
+            {
+                complete = !run.PagesTruncated;
+                return run.Pages.Select(pair => new TuneInRefreshPageCheckpoint
+                { Key = pair.Key, Bytes = (byte[])pair.Value.Bytes.Clone() }).ToList();
+            }
+        }
+
+        private static void SeedRefreshPages(RefreshRun run, IEnumerable<TuneInRefreshPageCheckpoint> pages)
+        {
+            var entries = pages.ToArray();
+            if (entries.Length > 128) throw new InvalidDataException("TuneIn resume checkpoint exceeds the page-count limit.");
+            foreach (var page in entries)
+            {
+                if (page == null || page.Bytes == null || page.Bytes.Length == 0 || page.Bytes.Length > 2 * 1024 * 1024
+                    || !Regex.IsMatch(page.Key ?? "", @"^:[A-Za-z0-9+/]{43}=$", RegexOptions.CultureInvariant)
+                    || run.Pages.ContainsKey(page.Key))
+                    throw new InvalidDataException("TuneIn resume checkpoint contains an invalid catalogue page.");
+                run.Bytes += page.Bytes.Length;
+                if (run.Bytes > 8 * 1024 * 1024)
+                    throw new InvalidDataException("TuneIn resume checkpoint exceeds the byte limit.");
+                ParseCatalogue(page.Bytes);
+                run.Pages.Add(page.Key, new CachedPage { Bytes = (byte[])page.Bytes.Clone(), Expires = DateTime.MaxValue });
+            }
+        }
+
+        internal void CommitRefreshRun()
+        {
+            RefreshRun run;
+            lock (gate)
+            {
+                run = refreshRun.Value ?? activeRefreshRun;
+                if (run == null) throw new InvalidOperationException("No refresh run is active.");
+                if (run.Key != key || run.Generation != cacheGeneration)
+                    throw new OperationCanceledException("TuneIn configuration changed.");
+                foreach (var pair in run.Pages)
+                {
+                    if (pair.Value.Expires <= utcNow()) continue;
+                    if (recentRefreshPages.TryGetValue(pair.Key, out var previous))
+                    {
+                        if (previous.Expires >= pair.Value.Expires) continue;
+                        recentRefreshBytes -= previous.Bytes.Length;
+                        recentRefreshPages.Remove(pair.Key);
+                    }
+                    while (recentRefreshPages.Count > 0
+                        && (recentRefreshPages.Count >= 128 || recentRefreshBytes + pair.Value.Bytes.Length > 8 * 1024 * 1024))
+                    {
+                        var oldest = recentRefreshPages.OrderBy(item => item.Value.Expires).First();
+                        recentRefreshBytes -= oldest.Value.Bytes.Length;
+                        recentRefreshPages.Remove(oldest.Key);
+                    }
+                    recentRefreshPages.Add(pair.Key, pair.Value);
+                    recentRefreshBytes += pair.Value.Bytes.Length;
+                }
+            }
+        }
+
+        internal void CompleteRefreshDiscovery()
+        {
+            VerifyRefreshDiscovery();
+            refreshContext.Value.DiscoveryComplete?.Invoke();
+        }
+
+        internal void ReportRefreshPhase(string phase) => refreshContext.Value?.PhaseChanged?.Invoke(phase);
+
+        internal void BeginStagedImport(int stagedFolderCount, IEnumerable<string> completedFolders = null)
+        {
+            var context = refreshContext.Value ?? throw new InvalidOperationException("No scoped refresh is active.");
+            lock (gate)
+            {
+                context.StagedFolderCount = stagedFolderCount;
+                context.ImportFoldersSeen.Clear();
+                context.ImportItemsServed = 0;
+                context.ImportFoldersCompleted.Clear();
+                if (completedFolders != null)
+                    foreach (var folder in completedFolders) context.ImportFoldersCompleted.Add(folder);
+            }
+            ReportImportProgress(context);
+        }
+
+        internal void ReportStagedImport(string folderId, int itemCount)
+        {
+            var context = refreshContext.Value;
+            if (context == null) return;
+            lock (gate)
+            {
+                context.ImportFoldersSeen.Add(folderId);
+                context.ImportItemsServed += itemCount;
+            }
+            ReportImportProgress(context);
+        }
+
+        internal void CompleteStagedImportFolder(string folderId)
+        {
+            var context = refreshContext.Value ?? throw new InvalidOperationException("No scoped refresh is active.");
+            lock (gate) context.ImportFoldersCompleted.Add(folderId);
+            ReportImportProgress(context);
+        }
+
+        private void ReportImportProgress(RefreshContext context)
+        {
+            int total;
+            int requested;
+            int items;
+            int completed;
+            lock (gate)
+            {
+                total = context.StagedFolderCount;
+                requested = context.ImportFoldersSeen.Count;
+                items = context.ImportItemsServed;
+                completed = context.ImportFoldersCompleted.Count;
+            }
+            context.ImportProgress?.Invoke(total, requested, items, completed);
+        }
+
+        internal void VerifyRefreshDiscovery()
+        {
+            var context = refreshContext.Value ?? throw new InvalidOperationException("No scoped refresh is active.");
+            if (context.Error is OperationCanceledException cancellation) throw cancellation;
+            if (context.Error != null) throw new InvalidOperationException("Emby encountered a failed scoped catalogue request.", context.Error);
+            if (context.Pages.Count < context.ExpectedPages
+                || (context.RequiredPages != null && context.RequiredPages.Any(id => !context.Pages.Contains(id))))
+                throw new InvalidOperationException("Emby did not enumerate all saved starting pages.");
         }
 
         public void AssertCategoryRefresh(string category)
@@ -513,10 +786,29 @@ namespace MediaBrowser.Plugins.TuneIn
             public string Category { get; set; }
             public HashSet<string> Pages { get; } = new HashSet<string>();
             public int RequestCount { get; set; }
+            public int ExpectedPages { get; set; }
+            public string[] RequiredPages { get; set; }
             public Exception Error { get; set; }
             public Action<DirectoryRequest> RequestStarted { get; set; }
             public Action<int> StatusReceived { get; set; }
             public Action<XDocument> RequestCompleted { get; set; }
+            public Action CacheHit { get; set; }
+            public Action DiscoveryComplete { get; set; }
+            public Action<string> PhaseChanged { get; set; }
+            public Action<int, int, int, int> ImportProgress { get; set; }
+            public int StagedFolderCount { get; set; }
+            public int ImportItemsServed { get; set; }
+            public HashSet<string> ImportFoldersSeen { get; } = new HashSet<string>();
+            public HashSet<string> ImportFoldersCompleted { get; } = new HashSet<string>();
+        }
+
+        private sealed class RefreshRun
+        {
+            public string Key { get; set; }
+            public long Generation { get; set; }
+            public Dictionary<string, CachedPage> Pages { get; } = new Dictionary<string, CachedPage>();
+            public int Bytes { get; set; }
+            public bool PagesTruncated { get; set; }
         }
 
         public Task<XDocument> FetchAsync(DirectoryRequest request, CancellationToken token, Action<int> statusReceived = null) =>
@@ -526,20 +818,37 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             if (refreshContext.Value != null && !categoryRequest)
                 throw new InvalidOperationException("Emby requested uncached metadata outside the bounded group refresh.");
+            var interval = configuration().ApiRequestIntervalSeconds;
+            if (interval < PluginConfiguration.MinApiRequestIntervalSeconds || interval > PluginConfiguration.MaxApiRequestIntervalSeconds)
+                throw new InvalidOperationException("TuneIn API request interval must be between 1 and 30 seconds.");
             if (fetch != null) return await fetch(request, token).ConfigureAwait(false);
             using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
-                timeout.CancelAfter(TimeSpan.FromSeconds(30));
+                timeout.CancelAfter(TimeSpan.FromSeconds(50 + interval));
                 await throttle.WaitAsync(timeout.Token).ConfigureAwait(false);
                 try
                 {
-                    var delay = TimeSpan.FromMilliseconds(3000) - (DateTime.UtcNow - lastRequest);
-                    if (delay > TimeSpan.Zero) await Task.Delay(delay, timeout.Token).ConfigureAwait(false);
-                    lastRequest = DateTime.UtcNow;
-                    using (var response = await transport.OpenAsync(request.Url, true, timeout.Token, statusReceived).ConfigureAwait(false))
+                    for (var attempt = 0; ; attempt++)
                     {
-                        var bytes = await ReadBoundedAsync(response.Body, 2 * 1024 * 1024, timeout.Token).ConfigureAwait(false);
-                        return ParseCatalogue(bytes);
+                        var earliest = lastRequest.AddSeconds(interval);
+                        if (nextRequest > earliest) earliest = nextRequest;
+                        var delay = earliest - utcNow();
+                        if (delay > TimeSpan.Zero) await wait(delay, timeout.Token).ConfigureAwait(false);
+                        lastRequest = utcNow();
+                        try
+                        {
+                            using (var response = await transport.OpenAsync(request.Url, true, timeout.Token, statusReceived).ConfigureAwait(false))
+                            {
+                                var bytes = await ReadBoundedAsync(response.Body, 2 * 1024 * 1024, timeout.Token).ConfigureAwait(false);
+                                return ParseCatalogue(bytes);
+                            }
+                        }
+                        catch (CatalogueRateLimitException error)
+                        {
+                            var retryAfter = error.RetryAfter ?? TimeSpan.FromSeconds(6 * (attempt + 1));
+                            nextRequest = utcNow().Add(retryAfter);
+                            if (attempt >= 2 || retryAfter > TimeSpan.FromSeconds(20)) throw;
+                        }
                     }
                 }
                 finally { throttle.Release(); }

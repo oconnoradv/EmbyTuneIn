@@ -26,6 +26,8 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly ILogger logger;
         private readonly TuneInDirectory directory;
         private readonly ILibraryManager library;
+        private readonly AsyncLocal<Dictionary<string, ChannelItemResult>> stagedRefresh =
+            new AsyncLocal<Dictionary<string, ChannelItemResult>>();
         private const string ArtworkVersion = "3";
         private const string ArtworkVersionKey = "TuneInForkArtwork";
 
@@ -51,8 +53,67 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public async Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken token)
         {
-            try { return await GetChannelItemsCore(query, token).ConfigureAwait(false); }
+            try
+            {
+                var staged = stagedRefresh.Value;
+                if (staged != null && !string.IsNullOrEmpty(query.FolderId))
+                {
+                    token.ThrowIfCancellationRequested();
+                    var snapshot = directory.Snapshot();
+                    var entry = directory.Resolve(snapshot, query.FolderId);
+                    directory.AssertCategoryRefresh(entry.Category);
+                    if (!staged.TryGetValue(query.FolderId, out var result))
+                        throw new InvalidOperationException("Emby requested a folder outside the staged refresh.");
+                    directory.ReportStagedImport(query.FolderId, result.Items.Count);
+                    return result;
+                }
+                return await GetChannelItemsCore(query, token).ConfigureAwait(false);
+            }
             catch (Exception error) { directory.RecordRefreshFailure(error); throw; }
+        }
+
+        internal async Task SynchronizeStagedAsync(string folder, int depth, Func<Task> synchronizeRoot,
+            CancellationToken token)
+        {
+            var staged = new Dictionary<string, ChannelItemResult>();
+            var folderOrder = new List<string>();
+            var pending = new Queue<(string Id, int Depth)>();
+            pending.Enqueue((folder, 0));
+            long estimatedBytes = 0;
+            while (pending.Count != 0)
+            {
+                token.ThrowIfCancellationRequested();
+                var current = pending.Dequeue();
+                if (staged.ContainsKey(current.Id)) continue;
+                if (staged.Count >= 1000)
+                    throw new InvalidOperationException("Staged refresh exceeded 1000 folders.");
+                var result = await GetChannelItems(new InternalChannelItemQuery { FolderId = current.Id }, token)
+                    .ConfigureAwait(false);
+                estimatedBytes += 128 + current.Id.Length * 2L;
+                foreach (var item in result.Items)
+                {
+                    estimatedBytes += 512 + 2L * ((item.Id?.Length ?? 0) + (item.Name?.Length ?? 0)
+                        + (item.ImageUrl?.Length ?? 0));
+                    if (estimatedBytes > 32 * 1024 * 1024)
+                        throw new InvalidOperationException("Staged refresh exceeded its 32 MiB memory limit.");
+                    if (item.Type == ChannelItemType.Folder && current.Depth < depth)
+                        pending.Enqueue((item.Id, current.Depth + 1));
+                }
+                staged.Add(current.Id, result);
+                folderOrder.Add(current.Id);
+            }
+            directory.CompleteRefreshDiscovery();
+            directory.BeginStagedImport(staged.Count);
+            var previous = stagedRefresh.Value;
+            stagedRefresh.Value = staged;
+            try
+            {
+                await synchronizeRoot().ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                foreach (var folderId in folderOrder)
+                    directory.CompleteStagedImportFolder(folderId);
+            }
+            finally { stagedRefresh.Value = previous; }
         }
 
         private async Task<ChannelItemResult> GetChannelItemsCore(InternalChannelItemQuery query, CancellationToken token)
@@ -227,7 +288,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 var filter = request.Parameters.GetValueOrDefault("filter") ?? "";
                 var tokens = filter.Split(':').Where(s => s.Length > 0 && !Regex.IsMatch(s, @"^l[0-9]+$")).ToList();
                 if (tokens.Any(s => !Regex.IsMatch(s,
-                    @"^(s|p|topic|show|station|popular|topvoted|topclick|random|bit(32|64|128)[*-]?|up-(low|med|hi))$")))
+                    @"\A(s|p|topic|show|station|popular|topvoted|topclick|random|bit(32|64|128)[*-]?|up-(low|med|hi)|~[\p{L}\p{Nd}#])\z")))
                     throw new InvalidDataException("TuneIn returned an unsupported language filter.");
                 request.Parameters["filter"] = string.Join(":", tokens.Concat(new[] { entry.SelectionId }));
             }

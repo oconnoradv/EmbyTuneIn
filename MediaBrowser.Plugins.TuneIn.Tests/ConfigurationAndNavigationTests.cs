@@ -33,6 +33,47 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 TuneInDirectory.ParseCatalogue(Encoding.UTF8.GetBytes(xml)));
         }
 
+        [Fact]
+        public void TimeoutSettingDoesNotInvalidateExistingNavigationIdsButScopesResumeIdentity()
+        {
+            var original = Ready();
+            original.EnableTalk = true;
+            original.NavigationSecret = Convert.ToBase64String(Enumerable.Range(0, 32).Select(value => (byte)value).ToArray());
+            var changedTimeout = Ready();
+            changedTimeout.EnableTalk = true;
+            changedTimeout.NavigationSecret = original.NavigationSecret;
+            changedTimeout.RefreshTimeoutMinutes = 90;
+
+            var originalSnapshot = new ConfigurationSnapshot(original);
+            var changedSnapshot = new ConfigurationSnapshot(changedTimeout);
+
+            var serializer = new System.Xml.Serialization.XmlSerializer(typeof(PluginConfiguration));
+            string serialized;
+            using (var writer = new System.IO.StringWriter(System.Globalization.CultureInfo.InvariantCulture))
+            {
+                serializer.Serialize(writer, original);
+                serialized = writer.ToString();
+            }
+            var timeoutTag = "<RefreshTimeoutMinutes>";
+            var timeoutStart = serialized.IndexOf(timeoutTag, StringComparison.Ordinal);
+            Assert.True(timeoutStart >= 0);
+            var lineStart = serialized.LastIndexOf('\n', timeoutStart) + 1;
+            var lineEnd = serialized.IndexOf('\n', timeoutStart);
+            Assert.True(lineEnd >= timeoutStart);
+            var fork18Xml = serialized.Remove(lineStart, lineEnd + 1 - lineStart);
+            string expectedKey;
+            using (var hash = System.Security.Cryptography.SHA256.Create())
+                expectedKey = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(fork18Xml))).Replace("-", "");
+
+            Assert.Equal(expectedKey, originalSnapshot.Key);
+            Assert.Equal(expectedKey, changedSnapshot.Key);
+            Assert.NotEqual(originalSnapshot.SettingsKey, changedSnapshot.SettingsKey);
+            var directory = new TuneInDirectory(() => original);
+            var id = directory.Register(directory.Snapshot(), new NavigationEntry { Category = "talk", StationId = "s1" });
+            original.RefreshTimeoutMinutes = changedTimeout.RefreshTimeoutMinutes;
+            Assert.Equal("s1", directory.Resolve(directory.Snapshot(), id).StationId);
+        }
+
         [Theory]
         [InlineData("4.9.1.80", false)]
         [InlineData("4.9.1.81", false)]
@@ -129,6 +170,46 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public void CoordinatesAreFiniteRangeCheckedInvariantPairs(string value, bool valid) =>
             Assert.Equal(valid, ConfigurationSnapshot.TryCoordinates(value, out _));
 
+        [Theory]
+        [InlineData(0, false)]
+        [InlineData(1, true)]
+        [InlineData(3, true)]
+        [InlineData(30, true)]
+        [InlineData(31, false)]
+        public void ApiIntervalIsValidatedOnConfigurationSave(int seconds, bool valid)
+        {
+            var config = Ready();
+            config.ApiRequestIntervalSeconds = seconds;
+            if (valid) ConfigurationSnapshot.Validate(config);
+            else Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+        }
+
+        [Theory]
+        [InlineData(0, false)]
+        [InlineData(1, true)]
+        [InlineData(60, true)]
+        [InlineData(1440, true)]
+        [InlineData(1441, false)]
+        public void RefreshTimeoutIsValidatedOnConfigurationSave(int minutes, bool valid)
+        {
+            var config = Ready();
+            config.RefreshTimeoutMinutes = minutes;
+            if (valid) ConfigurationSnapshot.Validate(config);
+            else Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+        }
+
+        [Fact]
+        public void LegacyConfigurationDefaultsToThreeSecondIntervalAndOneHourTimeout()
+        {
+            var serializer = new System.Xml.Serialization.XmlSerializer(typeof(PluginConfiguration));
+            using (var reader = new System.IO.StringReader("<PluginConfiguration><Username>legacy</Username></PluginConfiguration>"))
+            {
+                var config = (PluginConfiguration)serializer.Deserialize(reader);
+                Assert.Equal(3, config.ApiRequestIntervalSeconds);
+                Assert.Equal(60, config.RefreshTimeoutMinutes);
+            }
+        }
+
         [Fact]
         public async Task LocalCoordinatesPersistOnEveryDescendantAndUnrelatedLinksAreRemoved()
         {
@@ -191,6 +272,53 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Throws<System.IO.InvalidDataException>(() => TuneInChannel.ScopedRequest(snapshot, entry,
                 DirectoryRequest.ParseLink("http://opml.radiotime.com/Browse.ashx?id=g22&filter=l122,l999")));
         }
+
+        [Theory]
+        [InlineData("s:~A", "s%3A~A")]
+        [InlineData("s:~#", "s%3A~%23")]
+        [InlineData("s:~É", "s%3A~%C3%89")]
+        [InlineData("p:~湘", "p%3A~%E6%B9%98")]
+        public void AlphabeticCatalogueFiltersAreEncodedAndPreserveLanguageScope(string filter, string encoded)
+        {
+            var link = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=c57941&filter=" + encoded);
+            Assert.Equal(filter, link.Parameters["filter"]);
+            Assert.Contains("filter=" + encoded, link.Url);
+            var scoped = TuneInChannel.ScopedRequest(new ConfigurationSnapshot(Ready()),
+                new NavigationEntry { Category = "language", SelectionId = "l122" }, link);
+            Assert.Equal(filter + ":l122", scoped.Parameters["filter"]);
+        }
+
+        [Theory]
+        [InlineData("s:~#", "s:~#")]
+        [InlineData("p%3A~#", "p:~#")]
+        public void BareHashInFinalAlphabetFilterIsEncodedForPagination(string rawFilter, string expected)
+        {
+            var link = DirectoryRequest.ParseLink(
+                "http://opml.radiotime.com/Browse.ashx?offset=50&id=c57941&filter=" + rawFilter);
+            Assert.Equal(expected, link.Parameters["filter"]);
+            Assert.Equal("50", link.Parameters["offset"]);
+            Assert.Contains("filter=" + Uri.EscapeDataString(expected), link.Url);
+            Assert.DoesNotContain("#", link.Url);
+        }
+
+        [Theory]
+        [InlineData("filter=s:~#private")]
+        [InlineData("filter=s:~&id=c57941#")]
+        [InlineData("filter=s:~&filter=s:~#")]
+        [InlineData("id=c57941#")]
+        public void BareHashNormalizationRejectsOtherFragments(string query) =>
+            Assert.Throws<System.IO.InvalidDataException>(() =>
+                DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?" + query));
+
+        [Theory]
+        [InlineData("filter=s%3A~%26username%3Dsecret")]
+        [InlineData("filter=s%3A~%0A")]
+        [InlineData("filter=s%3A~%2F")]
+        [InlineData("filter=s%3A~AB")]
+        [InlineData("id=s%3A~A")]
+        public void AlphabeticFilterSupportRejectsUnsafeOrUnexpectedParameters(string query) =>
+            Assert.Throws<System.IO.InvalidDataException>(() =>
+                DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=c57941&" + query));
 
         [Theory]
         [InlineData("music", "c424724")]
@@ -512,6 +640,51 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("https://opml.radiotime.com/Browse.ashx?id=r1%26username%3Dsecret")]
         public void CatalogueLinksCannotIntroduceArbitraryTargetsOrParameters(string value) =>
             Assert.Throws<System.IO.InvalidDataException>(() => DirectoryRequest.ParseLink(value));
+
+        [Theory]
+        [InlineData(null, "missing or invalid absolute URL")]
+        [InlineData("ftp://opml.radiotime.com/Browse.ashx?secret=value", "unsupported scheme")]
+        [InlineData("https://opml.radiotime.com:444/Browse.ashx?secret=value", "non-default port")]
+        [InlineData("https://private:secret@opml.radiotime.com/Browse.ashx", "credentials in URL")]
+        [InlineData("https://opml.radiotime.com/Browse.ashx#private", "URL fragment")]
+        [InlineData("https://private.example/Browse.ashx?secret=value", "untrusted host")]
+        [InlineData("https://opml.radiotime.com/private?secret=value", "unsupported path")]
+        public void RejectedCatalogueDestinationsReportOnlySafeReason(string value, string reason)
+        {
+            var error = Assert.Throws<System.IO.InvalidDataException>(() => DirectoryRequest.ParseLink(value));
+            Assert.Equal("Untrusted catalogue link rejected (" + reason + ").", error.Message);
+            Assert.DoesNotContain("private", error.Message);
+            Assert.DoesNotContain("secret", error.Message);
+        }
+
+        [Theory]
+        [InlineData("filter=private%20value", "filter", "contains whitespace", 13, 1)]
+        [InlineData("id=private%26value", "id", "contains unsupported punctuation", 13, 1)]
+        [InlineData("sid=", "sid", "empty", 0, 1)]
+        [InlineData("offset=1&offset=2%2F", "offset", "contains unsupported punctuation", 4, 2)]
+        [InlineData("pivot=%C3%A9", "pivot", "contains non-ASCII characters", 1, 1)]
+        [InlineData("c=%01", "c", "contains a control character", 1, 1)]
+        public void RejectedCatalogueParameterDiagnosticsDoNotExposeValues(string query, string key, string reason, int length, int occurrences)
+        {
+            var error = Assert.Throws<System.IO.InvalidDataException>(() =>
+                DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?" + query));
+            Assert.Contains("'" + key + "'", error.Message);
+            Assert.Contains(reason, error.Message);
+            Assert.Contains("length " + length, error.Message);
+            Assert.Contains("occurrences " + occurrences, error.Message);
+            Assert.DoesNotContain("private", error.Message);
+            Assert.DoesNotContain("radiotime.com", error.Message);
+        }
+
+        [Fact]
+        public void RejectedOverlongCatalogueParameterReportsOnlyLength()
+        {
+            var value = new string('x', 81);
+            var error = Assert.Throws<System.IO.InvalidDataException>(() =>
+                DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?filter=" + value));
+            Assert.Contains("'filter' (longer than 80 characters; length 81; occurrences 1)", error.Message);
+            Assert.DoesNotContain(value, error.Message);
+        }
 
         [Fact]
         public void MetadataEndpointsRequireAdministratorAndRelayRequiresLocalServer()

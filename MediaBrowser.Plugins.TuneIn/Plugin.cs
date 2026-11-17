@@ -29,10 +29,12 @@ namespace MediaBrowser.Plugins.TuneIn
                 throw new NotSupportedException("TuneIn requires Emby Server 4.9.1.90+ or patched beta 4.9.2.7+.");
             Instance = this;
             RefreshState = new TuneInRefreshStateStore(Path.Combine(applicationPaths.DataPath, "tunein-fork-refresh.xml"));
+            SettingsLock = new TuneInSettingsLockStore(Path.Combine(applicationPaths.DataPath, "tunein-fork-settings-lock.xml"));
             TuneInRefresh.Instance.UseHistoryStore(RefreshState);
         }
 
         internal TuneInRefreshStateStore RefreshState { get; }
+        internal TuneInSettingsLockStore SettingsLock { get; }
 
         internal static bool SupportsServerVersion(Version version) =>
             version != null && version >= new Version(4, 9, 1, 90)
@@ -40,9 +42,12 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public override void UpdateConfiguration(BasePluginConfiguration configuration)
         {
-            ConfigurationSnapshot.Validate((PluginConfiguration)configuration);
-            base.UpdateConfiguration(configuration);
-            TuneInDirectory.Instance.Reset();
+            TuneInRefresh.Instance.UpdateConfiguration(() => SettingsLock.IsLocked, () =>
+            {
+                ConfigurationSnapshot.Validate((PluginConfiguration)configuration);
+                base.UpdateConfiguration(configuration);
+                TuneInDirectory.Instance.Reset();
+            });
         }
 
         public IEnumerable<PluginPageInfo> GetPages()

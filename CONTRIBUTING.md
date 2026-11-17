@@ -7,7 +7,7 @@ No upstream pull request or merge is created by building or publishing this fork
 ## Versioning and independent identity
 
 Upstream currently declares assembly/file version `1.2.8.0`. The fork's new
-configuration/refresh functionality uses SemVer `1.3.0-fork.13`: the prerelease
+configuration/refresh functionality uses SemVer `1.3.0-fork.20-rc.1`: the prerelease
 suffix identifies a fork test candidate, not an official upstream release.
 The `.csproj` `<Version>` is the source of truth. The SDK derives assembly/file
 version `1.3.0.0`; informational version includes the exact source commit.
@@ -91,15 +91,19 @@ Do not alter station logos when migrating bundled root/group artwork.
 Keep legacy refresh history and schedule/trigger backups in the independent state
 file, not the signed station configuration. Keep one visible **Refresh TuneIn**
 scheduled task, with no default trigger, limited to enabled categories and saved
-selections. Do not reintroduce per-group task registrations, schedule-suppression
-settings or mutation APIs. The one-time startup
+selections. Category refresh actions may use admin-only plugin APIs, but do not
+reintroduce per-group task registrations or schedule-suppression settings. The one-time startup
 migration may undo recorded plugin suppression of the exact built-in task, restoring
 saved/native triggers only while its schedule is empty and preserving administrator
 edits. Failed migration must retain state, attempt rollback and log errors.
 Ordinary configuration Save must never change schedules. The built-in task's
 read-only description and native result must not be modified or fabricated.
-Settings reads the dedicated TuneIn task status only on open/manual update, without
-polling. Retrieving its native failed-task report requires an explicit click and administrator access;
+Keep scheduled discovery bounded and complete before Emby imports a section;
+do not infer language/location membership from station identity or music alone.
+Reuse only equivalent scoped catalogue responses, enforce the configured pacing
+and provider retry delays, and treat Emby's import as non-transactional.
+Settings may poll local status while open, without contacting TuneIn or starting
+a refresh. Retrieving its native failed-task report requires an explicit click and administrator access;
 bound it, reject stale attempts and render private error details as plain text.
 Do not implement `IHasChangeEvent` or queue the global task on install/update/Save:
 configuration invalidation must stay local. Existing host triggers are independent.
@@ -109,7 +113,7 @@ folder artwork, custom images and stable playback IDs when removing group worker
 ## Upstream review checklist
 
 Prepare the PR from the tested feature branch in `oconnoradv/EmbyTuneIn` to
-`MediaBrowser/TuneIn:master`. The fork's `master` contains the consolidated
+`MediaBrowser/TuneIn:master`. The fork's `main` contains the consolidated
 squash-merged implementation.
 Fetch the latest upstream `master` and inspect the comparison before submission;
 do not force-push, discard work or merge upstream changes without reviewing them.
