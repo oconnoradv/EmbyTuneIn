@@ -7,26 +7,68 @@ official upstream release or a claim of production runtime certification.
 The fork uses its own plugin ID, DLL, configuration file and dashboard/API
 namespace so an upstream update does not replace it.
 
-## Features
+## Consolidated fixes and enhancements
 
-- Choose from Local Radio, Music, By Language, By Location, Talk, Sports,
-  Podcasts and Favorites. Enable only the groups and saved selections you want;
-  browsing stays disabled until explicitly configured and saved.
-- Browse TuneIn's language, music and geographic selectors on demand. Add multiple
-  local areas or optional coordinates. Language music folders honor both the
-  selected language and saved music types; Talk and Sports honor their switches.
-  Selection restrictions carry through navigation, pagination, playback and artwork.
-- Run or schedule one **Refresh TuneIn** task for enabled groups, or refresh
-  individual groups from Settings. Staged discovery, bounded caching, configurable
-  request pacing and progress estimates reduce redundant work and clarify progress.
-- Lock Settings against accidental changes; saves are also blocked during
-  plugin-tracked refreshes. The lock defaults to off for a new installation.
-- Play supported streams through a protected local relay. Recognized required
-  pre-roll plays before one working live alternative; differing audio formats
-  are decoded to a consistent output for the transition.
-- Use distinct group artwork, protected station artwork and native Emby settings,
-  schedules and task history. The fork does not start a global refresh on install,
-  update or Save.
+The following summarizes the fork's changes from the upstream 1.2.8.0 baseline;
+it describes current behavior, not every intermediate implementation.
+
+### Playback and browsing fixes
+
+- **Pre-roll handoff:** Recognized required ads play through before a live
+  alternative opens, rather than stopping while playback appears active. Separate
+  decoding gives ad and live audio one consistent format; live alternatives remain
+  fallbacks. Stations without pre-roll retain compressed passthrough.
+- **Provider compatibility:** Support legacy radio responses with LF-only headers,
+  repeated advisory ICY fields or identity transfer encoding, without relaxing
+  framing or network checks. Fix relay HTTP 500s from an unset response factory
+  and release streams when response creation fails.
+- **Alphabetical pagination:** Accept bounded station/show name filters, including
+  international letters. Normalize TuneIn's unescaped trailing `#` in the
+  recognized alphabet filter to `%23`, preventing rejected links and failed
+  refreshes without allowing arbitrary URL fragments.
+- **Selections and identity:** Configuration-first browsing offers eight groups,
+  lazy language/music/location selectors, multiple local areas and optional
+  coordinates. Signed navigation enforces saved selections and group switches
+  through descendants, pagination, playback and artwork; disabled or stale items
+  cannot bypass those scopes. An independent plugin identity prevents upstream
+  updates from replacing the fork.
+
+### Refresh and interface fixes
+
+- **Scoped refresh:** One schedulable TuneIn-only task and individual Settings
+  actions refresh enabled groups and selections, including descendant pages.
+  Staged discovery, bounded cache reuse, configurable request pacing and
+  rate-limit handling reduce repeated work. Staged root requests are accepted,
+  and swallowed import failures are reported before artwork updates.
+- **Timeouts and diagnostics:** A configurable timeout defaults to one hour;
+  eligible timed-out discovery can resume from a bounded checkpoint. Status
+  distinguishes timeout, cancellation and error, reports stages and request
+  counts, and uses matching successful runs for progress estimates. Failed-task
+  reports retain useful error context without exposing rejected URL values.
+- **Settings and schedules:** Correct Emby checkbox labels, view lifecycle and
+  stale page/controller behavior. Sections collapse after Save; an initially
+  unlocked settings lock and active plugin refreshes prevent accidental saves.
+  Install, update and Save do not request a global refresh. A one-time migration
+  restores previously suppressed host schedules without overwriting later edits.
+- **Artwork:** Add distinct group and library artwork and protected station logos;
+  preserve previously migrated or custom primary images and stable playback IDs.
+
+### Security and release safeguards
+
+- **Host CVE:** For [CVE-2025-64113](https://nvd.nist.gov/vuln/detail/CVE-2025-64113),
+  reject affected Emby Server versions and require patched stable 4.9.1.90+ or
+  compatible beta 4.9.2.7+. The NuGet advisory was withdrawn because the flaw is
+  in the server, not the reference package; installing this plugin does **not**
+  patch Emby Server.
+- **Untrusted data:** Validate bounded OPML and fixed-host catalogue requests;
+  use administrator-only selectors and diagnostics, signed navigation, text-only
+  rendering and protected local playback/artwork relays. Public-DNS pinning,
+  redirect restrictions, bounded playlists and image validation reduce SSRF and
+  unsafe-content risks. Remove unused, unversioned parser sources rather than
+  attributing an unverified CVE to them.
+- **Release integrity:** Lock dependencies and include build, test, analyzer,
+  advisory and CodeQL gates, plus an SBOM, checksums and exact-source evidence.
+  These safeguards do not replace host updates or real Emby testing.
 
 ## Requirements and installation
 
