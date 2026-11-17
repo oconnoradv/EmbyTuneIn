@@ -92,8 +92,10 @@ async function main() {
     const dirty = run('git', ['status', '--porcelain'], true);
     if (release && dirty) throw new Error('Commit all source changes before building a release.');
     const revision = run('git', ['rev-parse', 'HEAD'], true);
+    if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error('Invalid source revision.');
+    process.env.SourceRevisionId = revision;
     run(dotnet, ['restore', 'MediaBrowser.Plugins.TuneIn.sln', '--locked-mode', '-v', 'quiet']);
-    run(dotnet, ['build', 'MediaBrowser.Plugins.TuneIn.sln', '-c', 'Release', '--no-restore', '--nologo', '-v', 'quiet']);
+    run(dotnet, ['build', 'MediaBrowser.Plugins.TuneIn.sln', '-c', 'Release', '--no-restore', '-t:Rebuild', '--nologo', '-v', 'quiet']);
     run(dotnet, ['format', 'MediaBrowser.Plugins.TuneIn.sln', 'whitespace', '--no-restore', '--verify-no-changes', '--verbosity', 'quiet']);
     run(dotnet, ['format', 'MediaBrowser.Plugins.TuneIn.sln', 'analyzers', '--no-restore', '--verify-no-changes', '--severity', 'warn', '--verbosity', 'quiet']);
     const testResult = run(dotnet, ['test', 'MediaBrowser.Plugins.TuneIn.sln', '-c', 'Release',
