@@ -235,5 +235,6 @@ does not replace real Emby testing or establish future advisory status.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development and upstream-review
 guidance, [SECURITY.md](SECURITY.md) for the security model and
-[CHANGELOG.md](CHANGELOG.md) for historical changes. All older prereleases are
-deprecated; their published assets and source tags remain available for provenance.
+[CHANGELOG.md](CHANGELOG.md) for the consolidated RC1 release changes. Obsolete
+development releases, their assets and development tags are retired; upstream
+commit history and the current RC1 release are preserved.
