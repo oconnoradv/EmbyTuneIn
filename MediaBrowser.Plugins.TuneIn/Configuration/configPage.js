@@ -144,7 +144,7 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
     }
 
     function editing(instance) {
-        var disabled = !instance.config || instance.saving;
+        var disabled = !instance.config || instance.saving || instance.refreshBusy;
         instance.view.querySelector('.configurationFields').disabled = disabled;
         instance.view.querySelector('.button-submit').disabled = disabled;
     }
@@ -153,8 +153,20 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         event.preventDefault();
         var instance = this;
         var epoch = instance.viewEpoch;
-        if (!instance.config || instance.saving) return false;
+        if (!instance.config || instance.saving || instance.refreshBusy) return false;
         var config = instance.config;
+        var limits = [
+            ['.requestInterval', 'ApiRequestIntervalSeconds', 3, 60],
+            ['.refreshTimeout', 'RefreshTimeoutMinutes', 1, 180],
+            ['.cacheMinutes', 'CatalogueCacheMinutes', 1, 120]
+        ];
+        if (limits.some(function (limit) {
+            var value = instance.view.querySelector(limit[0]).value;
+            return !/^\d+$/.test(value) || Number(value) < limit[2] || Number(value) > limit[3];
+        })) {
+            message(instance, 'Use whole numbers: request interval 3..60 seconds, timeout 1..180 minutes, cache lifetime 1..120 minutes.');
+            return false;
+        }
         var coordinates = instance.view.querySelector('.txtLatLon').value.trim();
         var useCoordinates = instance.view.querySelector('.useCoordinates').checked;
         var parts = coordinates.split(',');
@@ -169,6 +181,7 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         config.Username = instance.view.querySelector('.txtUsername').value.trim() || null;
         config.LatLon = coordinates || null;
         config.UseCoordinates = useCoordinates;
+        limits.forEach(function (limit) { config[limit[1]] = Number(instance.view.querySelector(limit[0]).value); });
         categories.forEach(function (spec) {
             config[spec[0]] = instance.view.querySelector('[data-category="' + spec[0] + '"]').checked;
         });
@@ -182,7 +195,7 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         }).catch(function (error) {
             if (epoch !== instance.viewEpoch) return;
             console.error('Unable to save TuneIn configuration.', error);
-            message(instance, 'Configuration was not saved. Check validation, connectivity and administrator access, then retry.');
+            message(instance, 'Save did not complete. Check refresh status, validation, connectivity and administrator access; reopen settings before retrying.');
         }).then(function () {
             if (epoch !== instance.viewEpoch) return;
             instance.saving = false;
@@ -197,6 +210,38 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         view.querySelector('form').addEventListener('submit', onSubmit.bind(this));
         view.addEventListener('viewshow', onResume.bind(this));
         view.addEventListener('viewbeforehide', onPause.bind(this));
+        view.querySelector('.checkRefresh').addEventListener('click', checkRefresh.bind(this));
+    }
+
+    function checkRefresh() {
+        var instance = this;
+        var epoch = instance.viewEpoch;
+        var control = instance.view.querySelector('.checkRefresh');
+        var output = instance.view.querySelector('.refreshStatus');
+        control.disabled = true;
+        output.textContent = 'Checking local refresh status...';
+        return ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('TuneIn/Refresh/Status'), dataType: 'json' }).then(function (data) {
+            if (epoch !== instance.viewEpoch) return;
+            instance.refreshBusy = !!data.Busy;
+            editing(instance);
+            output.textContent = data.State + (data.Category ? ' - ' + data.Category : '')
+                + (data.Phase ? ': ' + data.Phase : '') + '. Categories imported: '
+                + data.CategoriesCompleted + '/' + data.CategoriesTotal
+                + '. Requests completed/started: ' + data.RequestsCompleted + '/' + data.RequestsStarted
+                + '; cache hits: ' + data.CacheHits + '. Staged folders served to Emby: '
+                + data.ImportFoldersServed + '/' + data.ImportFoldersTotal + '.'
+                + (data.LastHttpStatus == null ? '' : ' Last HTTP response: ' + data.LastHttpStatus + '.')
+                + (data.Busy ? ' Work is active or draining; saving is unavailable. Check again after it stops.' : '')
+                + (data.Resumable ? ' A compatible checkpoint is available for the next run.' : '')
+                + (data.ImportMayHavePartiallyApplied ? ' Native import may have partially applied.' : '')
+                + (data.ErrorCode ? ' Diagnostic: ' + data.ErrorCode + '.' : '');
+        }).catch(function (error) {
+            if (epoch !== instance.viewEpoch) return;
+            console.error('Unable to read TuneIn refresh status.', error);
+            output.textContent = 'Unable to read refresh status. Check administrator access and connectivity, then try again.';
+        }).then(function () {
+            if (epoch === instance.viewEpoch) control.disabled = false;
+        });
     }
 
     function onResume() {
@@ -204,6 +249,9 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
         var epoch = instance.viewEpoch = (instance.viewEpoch || 0) + 1;
         instance.config = null;
         instance.saving = false;
+        instance.refreshBusy = false;
+        instance.view.querySelector('.checkRefresh').disabled = false;
+        instance.view.querySelector('.refreshStatus').textContent = 'Status has not been checked.';
         instance.loadingConfig = true;
         editing(instance);
         loading.show();
@@ -215,6 +263,9 @@ define(['loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby
             view.querySelector('.txtLatLon').value = config.LatLon || '';
             view.querySelector('.useCoordinates').checked = !!config.UseCoordinates;
             view.querySelector('.configurationCompleted').checked = config.SchemaVersion === 1 && !!config.ConfigurationCompleted;
+            view.querySelector('.requestInterval').value = config.ApiRequestIntervalSeconds == null ? 3 : config.ApiRequestIntervalSeconds;
+            view.querySelector('.refreshTimeout').value = config.RefreshTimeoutMinutes == null ? 20 : config.RefreshTimeoutMinutes;
+            view.querySelector('.cacheMinutes').value = config.CatalogueCacheMinutes == null ? 15 : config.CatalogueCacheMinutes;
             var list = view.querySelector('.categories');
             list.textContent = '';
             categories.forEach(function (spec) {

@@ -17,11 +17,12 @@ using MediaBrowser.Model.Logging;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
-    public class TuneInChannel : IChannel, IRequiresMediaInfoCallback, IHasCacheKey
+    public class TuneInChannel : IChannel, IRequiresMediaInfoCallback, IHasChannelFeatures
     {
         private readonly IHttpClient _httpClient;
         private readonly ILogger _logger;
         private readonly TuneInDirectory directory;
+        private readonly AsyncLocal<TuneInStagedImport> stagedImport = new AsyncLocal<TuneInStagedImport>();
 
         public TuneInChannel(IHttpClient httpClient, ILogManager logManager, IApplicationHost appHost)
             : this(TuneInRequests.Directory(httpClient, appHost), httpClient, logManager.GetLogger(typeof(TuneInChannel).Name))
@@ -36,11 +37,26 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         public string DataVersion => "47";
+        public ChannelFeatures Features => new ChannelFeatures { ShowRootFoldersAtTopLevel = false };
         public string Description => "Listen to online radio, find streaming music radio and streaming talk radio with TuneIn.";
         public bool IsEnabledFor(string userId) => true;
 
         public Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken cancellationToken) =>
-            new TuneInBrowsing(directory, GetDefaultImages).GetItemsAsync(query.FolderId, cancellationToken);
+            stagedImport.Value == null
+                ? new TuneInBrowsing(directory, GetDefaultImages).GetItemsAsync(query.FolderId, cancellationToken)
+                : Task.FromResult(stagedImport.Value.Read(query.FolderId, cancellationToken));
+
+        internal async Task ImportAsync(TuneInStagedImport staged, Func<Task> import)
+        {
+            var previous = stagedImport.Value;
+            stagedImport.Value = staged;
+            try
+            {
+                await import().ConfigureAwait(false);
+                staged.Verify();
+            }
+            finally { stagedImport.Value = previous; }
+        }
 
         private Task<HttpResponseInfo> SendRequest(HttpRequestOptions options, string method) =>
             TuneInRequests.SendAsync(_httpClient, options, method);
@@ -213,21 +229,6 @@ namespace MediaBrowser.Plugins.TuneIn
         public string Name
         {
             get { return "TuneIn"; }
-        }
-
-        public InternalChannelFeatures GetChannelFeatures()
-        {
-            return new InternalChannelFeatures
-            {
-                ContentTypes = new List<ChannelMediaContentType>
-                {
-                    ChannelMediaContentType.Song
-                },
-                MediaTypes = new List<ChannelMediaType>
-                {
-                    ChannelMediaType.Audio
-                }
-            };
         }
 
         public string HomePageUrl

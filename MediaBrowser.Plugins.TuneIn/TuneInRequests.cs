@@ -10,9 +10,24 @@ namespace MediaBrowser.Plugins.TuneIn
     internal static class TuneInRequests
     {
         private static readonly object Gate = new object();
-        private static readonly SemaphoreSlim Throttle = new SemaphoreSlim(1, 1);
-        private static DateTime lastRequest;
+        private static readonly TuneInRequestPacer Pacer = new TuneInRequestPacer();
         private static TuneInDirectory directory;
+        private static TuneInRefresh refresh;
+
+        internal static TuneInRefresh Refresh(IHttpClient client, IApplicationHost host)
+        {
+            lock (Gate) return refresh ?? (refresh = new TuneInRefresh(Directory(client, host),
+                new TuneInRefreshStore(Plugin.Instance.RefreshStatePath)));
+        }
+
+        internal static void UpdateConfiguration(Action update)
+        {
+            lock (Gate)
+            {
+                if (refresh == null) update();
+                else refresh.UpdateConfiguration(update);
+            }
+        }
 
         internal static TuneInDirectory Directory(IHttpClient client, IApplicationHost host)
         {
@@ -27,6 +42,9 @@ namespace MediaBrowser.Plugins.TuneIn
                     { Url = outbound.Url, CancellationToken = token }, "GET").ConfigureAwait(false))
                     using (var memory = new MemoryStream())
                     {
+                        directory.ReportHttpResponse((int)response.StatusCode);
+                        if ((int)response.StatusCode != 200)
+                            throw new InvalidDataException("TuneIn catalogue returned HTTP " + (int)response.StatusCode + ".");
                         var buffer = new byte[8192];
                         int count;
                         while ((count = await response.Content.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false)) != 0)
@@ -39,18 +57,11 @@ namespace MediaBrowser.Plugins.TuneIn
                 }));
         }
 
-        internal static async Task<HttpResponseInfo> SendAsync(IHttpClient client, HttpRequestOptions options, string method)
+        internal static Task<HttpResponseInfo> SendAsync(IHttpClient client, HttpRequestOptions options, string method)
         {
-            await Throttle.WaitAsync(options.CancellationToken).ConfigureAwait(false);
-            try
-            {
-                var delay = lastRequest.AddMilliseconds(3000) - DateTime.UtcNow;
-                if (delay > TimeSpan.Zero) await Task.Delay(delay, options.CancellationToken).ConfigureAwait(false);
-                lastRequest = DateTime.UtcNow;
-                options.BufferContent = true;
-                return await client.SendAsync(options, method).ConfigureAwait(false);
-            }
-            finally { Throttle.Release(); }
+            options.BufferContent = true;
+            return Pacer.SendAsync(() => client.SendAsync(options, method),
+                Plugin.Instance?.Configuration.ApiRequestIntervalSeconds ?? 3, options.CancellationToken);
         }
     }
 }

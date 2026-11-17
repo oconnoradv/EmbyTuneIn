@@ -80,7 +80,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 }).ToList();
             if (entry.Category == "language")
             {
-                var languages = await directory.SelectAsync("language", null, false, token).ConfigureAwait(false);
+                var languages = await directory.SelectAsync("language", null, directory.IsRefreshSession, token).ConfigureAwait(false);
                 if (!languages.Items.Any(i => i.Id == entry.SelectionId))
                     throw new InvalidOperationException("Selected TuneIn language is unavailable; load the language selector again.");
             }

@@ -29,11 +29,28 @@
             <h2>Saved selections</h2>
             <p>Music, language and location categories require enabled saved selections. Local Radio combines all saved cities/regions and optional coordinates. Load root or expand a branch to choose labels; no automatic catalogue crawl or playback is started.</p>
             <div class="selectors"></div>
+            <h2>Refresh limits</h2>
+            <div class="inputContainer">
+                <input type="number" is="emby-input" class="requestInterval" label="Minimum request interval (seconds):" min="3" max="60" step="1" required />
+            </div>
+            <div class="inputContainer">
+                <input type="number" is="emby-input" class="refreshTimeout" label="Refresh timeout (minutes):" min="1" max="180" step="1" required />
+            </div>
+            <div class="inputContainer">
+                <input type="number" is="emby-input" class="cacheMinutes" label="Catalogue cache lifetime (minutes):" min="1" max="120" step="1" required />
+            </div>
             </fieldset>
             <br />
             <div>
                 <button is="emby-button" type="submit" class="raised button-submit block" disabled><span>Save</span></button>
             </div>
         </form>
+        <div class="auto-center">
+            <h2>Refresh TuneIn</h2>
+            <p>Run or cancel Refresh TuneIn in Emby's Scheduled Tasks. It imports only enabled categories and saved selections; it has no default schedule. Saving does not start a refresh or change schedules.</p>
+            <button is="emby-button" type="button" class="raised checkRefresh"><span>Check refresh status</span></button>
+            <p class="refreshStatus" role="status" aria-live="polite">Status has not been checked.</p>
+            <p>After cancellation, timeout or server interruption, the next run reuses a compatible checkpoint within the cache lifetime. Interrupted native imports may have partially applied and are replayed. If background work is still draining, wait before running again or saving settings.</p>
+        </div>
     </div>
 </div>

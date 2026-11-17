@@ -249,6 +249,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 
         private sealed class TestCryptoProvider : ICryptoProvider
         {
+            public Guid GetMD5(string value) => new Guid(MD5.HashData(Encoding.UTF8.GetBytes(value)));
+            public async Task<byte[]> ComputeMD5Async(Stream stream, CancellationToken token) =>
+                await MD5.HashDataAsync(stream, token);
             public Guid GetMD5(ReadOnlySpan<char> value) => new Guid(MD5.HashData(Encoding.UTF8.GetBytes(value.ToString())));
             public byte[] ComputeMD5(Stream stream) { using (var hash = MD5.Create()) return hash.ComputeHash(stream); }
             public ReadOnlySpan<byte> ComputeMD5(ReadOnlySpan<byte> value) => MD5.HashData(value);

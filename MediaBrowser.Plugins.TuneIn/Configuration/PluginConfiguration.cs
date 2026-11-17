@@ -24,6 +24,9 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public bool EnablePodcasts { get; set; }
         public bool EnableFavorites { get; set; }
         public bool UseCoordinates { get; set; }
+        public int ApiRequestIntervalSeconds { get; set; } = 3;
+        public int RefreshTimeoutMinutes { get; set; } = 20;
+        public int CatalogueCacheMinutes { get; set; } = 15;
         public List<CatalogSelection> Languages { get; set; } = new List<CatalogSelection>();
         public List<CatalogSelection> Locations { get; set; } = new List<CatalogSelection>();
         public List<CatalogSelection> Music { get; set; } = new List<CatalogSelection>();

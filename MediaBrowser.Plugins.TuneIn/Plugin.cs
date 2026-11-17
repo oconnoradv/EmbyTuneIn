@@ -20,7 +20,10 @@ namespace MediaBrowser.Plugins.TuneIn
             : base(applicationPaths, xmlSerializer)
         {
             Instance = this;
+            RefreshStatePath = Path.Combine(applicationPaths.PluginConfigurationsPath, "TuneIn.refresh.xml");
         }
+
+        internal string RefreshStatePath { get; }
 
         public IEnumerable<PluginPageInfo> GetPages()
         {
@@ -44,8 +47,11 @@ namespace MediaBrowser.Plugins.TuneIn
             var value = (PluginConfiguration)configuration;
             ConfigurationSnapshot.Validate(value);
             // The signing key is server-owned; clients cannot replace it when saving settings.
-            value.NavigationSecret = Configuration.NavigationSecret;
-            base.UpdateConfiguration(value);
+            TuneInRequests.UpdateConfiguration(() =>
+            {
+                value.NavigationSecret = Configuration.NavigationSecret;
+                base.UpdateConfiguration(value);
+            });
         }
 
         private Guid _id = new Guid("10b82431-f939-4507-a8e2-9509dd3fd6ae");

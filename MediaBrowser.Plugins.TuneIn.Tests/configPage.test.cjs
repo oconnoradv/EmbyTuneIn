@@ -10,6 +10,88 @@ const configDir = path.join(__dirname, '..', 'MediaBrowser.Plugins.TuneIn', 'Con
 const pluginId = '10b82431-f939-4507-a8e2-9509dd3fd6ae';
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+test('refresh limits load and save using native controls with server-compatible defaults', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ ApiRequestIntervalSeconds: 7, RefreshTimeoutMinutes: 45, CatalogueCacheMinutes: 30 });
+    await visit;
+    assert.equal(app.elements['.requestInterval'].value, 7);
+    assert.equal(app.elements['.refreshTimeout'].value, 45);
+    assert.equal(app.elements['.cacheMinutes'].value, 30);
+    app.elements['.requestInterval'].value = '8';
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 8);
+    assert.equal(app.writes[0].config.RefreshTimeoutMinutes, 45);
+    assert.equal(app.writes[0].config.CatalogueCacheMinutes, 30);
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /is="emby-input" class="requestInterval"[^>]+min="3" max="60"/);
+    assert.match(html, /is="emby-input" class="refreshTimeout"[^>]+min="1" max="180"/);
+    assert.match(html, /is="emby-input" class="cacheMinutes"[^>]+min="1" max="120"/);
+});
+
+test('invalid refresh limits block saving without contacting TuneIn', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    for (const value of ['2', '61', '3.5', '', 'NaN']) {
+        app.elements['.requestInterval'].value = value;
+        app.formHandlers.submit({ preventDefault() {} });
+    }
+    assert.equal(app.writes.length, 0);
+    assert.equal(app.selectors.length, 0);
+    assert.match(app.elements['.status'].textContent, /whole numbers/);
+});
+
+test('diagnostics are explicit local reads, render plain text and guard saves while work drains', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    assert.equal(app.selectors.length, 0);
+    const read = app.elements['.checkRefresh'].handlers.click();
+    assert.equal(app.selectors[0].options.url.route, 'TuneIn/Refresh/Status');
+    app.selectors[0].resolve({
+        State: 'TimedOut', Category: '<img src=x onerror=alert(1)>', Phase: 'Discovering', Busy: true,
+        CategoriesCompleted: 0, CategoriesTotal: 1, RequestsCompleted: 1, RequestsStarted: 2,
+        CacheHits: 0, ImportFoldersServed: 0, ImportFoldersTotal: 0
+    });
+    await read;
+    assert.equal(app.elements['.configurationFields'].disabled, true);
+    assert.equal(app.elements['.button-submit'].disabled, true);
+    assert.match(app.elements['.refreshStatus'].textContent, /<img src=x onerror=alert\(1\)>/);
+    assert.equal(app.elements['.refreshStatus'].childNodes.length, 0);
+    app.formHandlers.submit({ preventDefault() {} });
+    assert.equal(app.writes.length, 0);
+    const second = app.elements['.checkRefresh'].handlers.click();
+    app.selectors[1].resolve({ State: 'TimedOut', Busy: false, Resumable: true });
+    await second;
+    assert.equal(app.elements['.button-submit'].disabled, false);
+    assert.match(app.elements['.refreshStatus'].textContent, /compatible checkpoint/);
+});
+
+test('stale status responses cannot disable a later visit and failed reads allow retry', async () => {
+    const app = harness();
+    const first = app.instance.onResume();
+    app.reads[0].resolve({});
+    await first;
+    const status = app.elements['.checkRefresh'].handlers.click();
+    app.instance.onPause();
+    const second = app.instance.onResume();
+    app.reads[1].resolve({});
+    await second;
+    app.selectors[0].resolve({ State: 'Running', Busy: true });
+    await status;
+    assert.equal(app.elements['.configurationFields'].disabled, false);
+    assert.equal(app.elements['.refreshStatus'].textContent, 'Status has not been checked.');
+    const failed = app.elements['.checkRefresh'].handlers.click();
+    app.selectors[1].reject(new Error('offline'));
+    await failed;
+    assert.equal(app.elements['.checkRefresh'].disabled, false);
+    assert.match(app.elements['.refreshStatus'].textContent, /Unable to read refresh status/);
+});
+
 function deferred() {
     let resolve, reject;
     const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
@@ -43,7 +125,8 @@ function harness() {
     const form = { addEventListener: (event, handler) => { formHandlers[event] = handler; } };
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon };
     for (const name of ['.useCoordinates', '.configurationCompleted', '.categories', '.selectors',
-        '.configurationFields', '.button-submit', '.status']) elements[name] = new Element();
+        '.configurationFields', '.button-submit', '.status', '.requestInterval', '.refreshTimeout', '.cacheMinutes',
+        '.checkRefresh', '.refreshStatus']) elements[name] = new Element();
     const enhanced = [];
     const view = {
         addEventListener(event, handler) { handlers[event] = handler; },

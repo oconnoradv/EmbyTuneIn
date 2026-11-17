@@ -86,6 +86,10 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public static void Validate(PluginConfiguration value)
         {
+            if (value.ApiRequestIntervalSeconds < 3 || value.ApiRequestIntervalSeconds > 60
+                || value.RefreshTimeoutMinutes < 1 || value.RefreshTimeoutMinutes > 180
+                || value.CatalogueCacheMinutes < 1 || value.CatalogueCacheMinutes > 120)
+                throw new ArgumentException("TuneIn pacing must be 3..60 seconds, refresh timeout 1..180 minutes, and cache lifetime 1..120 minutes.");
             if (value.SchemaVersion != 1 && (value.ConfigurationCompleted || value.SchemaVersion != 0))
                 throw new ArgumentException("Unsupported TuneIn configuration schema.");
             if (value.UseCoordinates && !TryCoordinates(value.LatLon, out _))
@@ -184,6 +188,8 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Func<DirectoryRequest, CancellationToken, Task<XDocument>> fetch;
         private string key;
         private int selectorCharacters;
+        private readonly SemaphoreSlim providerOwner = new SemaphoreSlim(1, 1);
+        private readonly AsyncLocal<TuneInCatalogueSession> refreshSession = new AsyncLocal<TuneInCatalogueSession>();
 
         internal TuneInDirectory(Func<PluginConfiguration> configuration,
             Func<DirectoryRequest, CancellationToken, Task<XDocument>> fetch)
@@ -313,10 +319,35 @@ namespace MediaBrowser.Plugins.TuneIn
         public async Task<XDocument> FetchAsync(ConfigurationSnapshot snapshot, DirectoryRequest request, CancellationToken token)
         {
             CheckCurrent(snapshot, token);
-            var document = await fetch(request, token).ConfigureAwait(false);
-            CheckCurrent(snapshot, token);
-            return document;
+            var session = refreshSession.Value;
+            return session == null
+                ? await FetchOwnedAsync(snapshot, request, token).ConfigureAwait(false)
+                : await session.FetchAsync(request, () => FetchOwnedAsync(snapshot, request, token), token).ConfigureAwait(false);
         }
+
+        private async Task<XDocument> FetchOwnedAsync(ConfigurationSnapshot snapshot, DirectoryRequest request, CancellationToken token)
+        {
+            await providerOwner.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                CheckCurrent(snapshot, token);
+                var document = await fetch(request, token).ConfigureAwait(false);
+                CheckCurrent(snapshot, token);
+                return document;
+            }
+            finally { providerOwner.Release(); }
+        }
+
+        internal async Task WithRefreshSessionAsync(TuneInCatalogueSession session, Func<Task> execute)
+        {
+            var previous = refreshSession.Value;
+            refreshSession.Value = session;
+            try { await execute().ConfigureAwait(false); }
+            finally { refreshSession.Value = previous; }
+        }
+
+        internal bool IsRefreshSession => refreshSession.Value != null;
+        internal void ReportHttpResponse(int status) => refreshSession.Value?.ReportHttpResponse(status);
 
         public async Task<SelectorResult> SelectAsync(string category, string parent, bool refresh, CancellationToken token)
         {
