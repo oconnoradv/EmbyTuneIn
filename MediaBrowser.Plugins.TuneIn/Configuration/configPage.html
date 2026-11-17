@@ -2,19 +2,37 @@
     <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
 
         <form class="auto-center">
+            <p class="status" role="status" aria-live="polite"></p>
+            <fieldset class="configurationFields" disabled>
+            <legend>Configured browsing</legend>
+            <p>Enable browsing and choose categories before opening TuneIn. Existing username and coordinates are retained, but do not enable browsing automatically.</p>
+            <label class="emby-checkbox-label">
+                <input type="checkbox" is="emby-checkbox" class="configurationCompleted" />
+                <span>Enable configured browsing after saving</span>
+            </label>
+            <h2>Categories</h2>
+            <div class="categories"></div>
+            <h2>Favorites and local coordinates</h2>
             <div class="inputContainer">
-                <input type="text" is="emby-input" class="txtUsername" label="Your Tune In username:" />
+                <input type="text" is="emby-input" class="txtUsername" label="Your Tune In username:" maxlength="128" />
             </div>
+            <label class="emby-checkbox-label">
+                <input type="checkbox" is="emby-checkbox" class="useCoordinates" />
+                <span>Use coordinates for Local Radio (optional)</span>
+            </label>
             <div class="inputContainer">
                 <input type="text" is="emby-input" class="txtLatLon" label="Your LatLon:" />
                 <div class="fieldDescription">
                     Your LatLon can be found at <a is="emby-linkbutton" class="button-link" target="_blank" href="https://www.latlong.net">https://www.latlong.net</a>.
                 </div>
             </div>
-
+            <h2>Saved selections</h2>
+            <p>Music, language and location categories require enabled saved selections. Local Radio combines all saved cities/regions and optional coordinates. Load root or expand a branch to choose labels; no automatic catalogue crawl or playback is started.</p>
+            <div class="selectors"></div>
+            </fieldset>
             <br />
             <div>
-                <button is="emby-button" type="submit" class="raised button-submit block"><span>Save</span></button>
+                <button is="emby-button" type="submit" class="raised button-submit block" disabled><span>Save</span></button>
             </div>
         </form>
     </div>
