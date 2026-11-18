@@ -156,7 +156,7 @@ namespace MediaBrowser.Plugins.TuneIn
             var query = HttpUtility.ParseQueryString(uri.Query);
             var lastParameter = HttpUtility.UrlDecode(uri.Query.Substring(uri.Query.LastIndexOf('&') + 1).TrimStart('?'));
             // TuneIn emits the # alphabet filter unescaped in some pagination links.
-            var trailingAlphabetHash = uri.Fragment == "#"
+            var trailingAlphabetHash = uri.AbsolutePath == "/Browse.ashx" && uri.Fragment == "#"
                 && (lastParameter == "filter=s:~" || lastParameter == "filter=p:~")
                 && query.GetValues("filter")?.Length == 1;
             if (uri.Fragment.Length != 0 && !trailingAlphabetHash) throw RejectedLink("URL fragment");

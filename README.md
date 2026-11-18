@@ -231,6 +231,18 @@ error; do not share full stream URLs, account details, coordinates or XML.
 
 ## Build and release verification
 
+Run the focused browsing/pagination regressions with the .NET 8 SDK:
+
+```powershell
+dotnet test .\MediaBrowser.Plugins.TuneIn.Tests\MediaBrowser.Plugins.TuneIn.Tests.csproj --filter "FullyQualifiedName~BrowsePaginationTests|FullyQualifiedName~Alphabetic|FullyQualifiedName~BareHash"
+```
+
+These tests follow provider OPML links through the channel's signed browsing API
+with an injected catalogue transport; they do not contact TuneIn. They verify
+that final `filter=s:~#` and `filter=p:~#` pagination values send the hash as `%23`,
+preserve already encoded and international alphabet filters, and retain the
+maintenance branch's rejection of untrusted destinations and other fragments.
+
 From a clean checkout with a patched .NET 8 SDK, Node 24, GitHub CLI and
 FFmpeg available:
 
