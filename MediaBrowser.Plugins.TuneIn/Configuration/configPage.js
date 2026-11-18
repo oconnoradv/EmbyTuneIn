@@ -84,7 +84,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             ? Number(code) : undefined;
     }
 
-    function createSelector(instance, spec) {
+    function createSelector(instance, spec, openByDefault) {
         var epoch = instance.viewEpoch;
         var collapsible = spec[0] !== 'local';
         var section = document.createElement(collapsible ? 'details' : 'section');
@@ -94,7 +94,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (collapsible) {
             section.className = 'tuneInSection';
             heading.className = 'tuneInSectionLabel';
-            section.open = true;
+            section.open = openByDefault;
             bindDisclosure(heading);
         }
         var saved = document.createElement('div');
@@ -496,6 +496,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.localSource').value = config.LocalRadioSource ||
                 (ambiguous ? '' : config.UseCoordinates ? 'coordinates' : hasRegions ? 'regions' : '');
             view.querySelector('.configurationCompleted').checked = config.SchemaVersion === 1 && !!config.ConfigurationCompleted;
+            var openByDefault = config.SchemaVersion !== 1;
+            view.querySelector('.categoriesSummary').parentNode.open = openByDefault;
+            view.querySelector('.localSummary').parentNode.open = openByDefault;
             var list = view.querySelector('.categories');
             list.textContent = '';
             categories.forEach(function (spec) {
@@ -510,7 +513,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             var localPicker = view.querySelector('.localSelector');
             localPicker.textContent = '';
             selectors.forEach(function (spec) {
-                (spec[0] === 'local' ? localPicker : pickerList).appendChild(createSelector(instance, spec));
+                (spec[0] === 'local' ? localPicker : pickerList).appendChild(createSelector(instance, spec, openByDefault));
             });
             $(view).trigger('create');
             message(instance, browsingStatus(config) + (ambiguous && config.EnableLocalRadio ?

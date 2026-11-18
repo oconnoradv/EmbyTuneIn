@@ -555,6 +555,26 @@ test('opening collapsed Catalogue refresh gets fresh category status before allo
     assert.equal(sports.childNodes[1].disabled, false);
 });
 
+test('returning to saved settings opens the Control Panel with the category sections collapsed', async () => {
+    const app = harness();
+    const sections = () => [app.elements['.categoriesSection'], app.elements['.localSection'],
+        ...app.elements['.selectors'].childNodes];
+    const first = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: false });
+    await first;
+    for (const section of sections()) {
+        assert.equal(section.open, false);
+        section.childNodes[0].handlers.click({ preventDefault() {} });
+        assert.equal(section.open, true);
+    }
+    app.instance.onPause();
+    const second = app.instance.onResume();
+    app.reads[1].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    await second;
+    assert.ok(sections().every(section => section.open === false));
+    assert.equal(app.selectors.length, 0);
+});
+
 test('settings lock protects pending edits and saves without blocking catalogue refresh', async () => {
     const app = harness(true);
     app.elements['.tuneInRefresh'].open = true;

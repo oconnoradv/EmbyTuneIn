@@ -13,6 +13,23 @@
             outline: 2px solid currentColor;
             outline-offset: 2px;
         }
+        .tuneInRefresh .refreshCancel {
+            background: transparent;
+            color: inherit;
+            border: 1px solid currentColor;
+            border-radius: .25em;
+            font: inherit;
+            padding: .5em .75em;
+            cursor: pointer;
+        }
+        .tuneInRefresh .refreshCancel:focus-visible {
+            outline: 2px solid currentColor;
+            outline-offset: 2px;
+        }
+        .tuneInRefresh .refreshCancel:disabled {
+            opacity: .5;
+            cursor: default;
+        }
         .tuneInRefreshCategories {
             list-style: none;
             margin: .75em 0;
@@ -98,11 +115,11 @@
             <div class="inputContainer">
                 <input type="text" is="emby-input" class="txtUsername" label="Your TuneIn username:" maxlength="128" />
             </div>
-            <details class="tuneInSection" open>
+            <details class="tuneInSection">
                 <summary class="categoriesSummary">Categories</summary>
                 <div class="categories"></div>
             </details>
-            <details class="tuneInSection" open>
+            <details class="tuneInSection">
                 <summary class="localSummary">Local Radio</summary>
                 <div class="selectContainer">
                     <select is="emby-select" class="localSource" label="Local Radio source:">
@@ -135,7 +152,7 @@
             <p class="refreshStatus" role="status">Reading refresh status...</p>
             <p class="refreshError" role="alert"></p>
             <button is="emby-button" type="button" class="raised refreshStart" disabled>Refresh all enabled categories</button>
-            <button is="emby-button" type="button" class="emby-button refreshCancel" disabled>Cancel refresh</button>
+            <button type="button" class="refreshCancel" disabled>Cancel refresh</button>
             <p class="refreshCategoryNote" role="status"></p>
             <ul class="tuneInRefreshCategories" aria-label="Category refresh status"></ul>
         </details>
