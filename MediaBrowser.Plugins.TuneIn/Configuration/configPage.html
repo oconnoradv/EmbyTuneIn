@@ -8,6 +8,61 @@
         .tuneInLoginRow > div {
             min-width: 0;
         }
+        .tuneInLockToggle {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            gap: .65em;
+            min-block-size: 2.75rem;
+            cursor: pointer;
+        }
+        .tuneInLockToggle .settingsLocked {
+            position: absolute;
+            opacity: 0;
+        }
+        .tuneInLockTrack {
+            display: flex;
+            align-items: center;
+            box-sizing: border-box;
+            inline-size: 2.5em;
+            block-size: 1.4em;
+            flex: none;
+            padding-inline: .15em;
+            border: 2px solid currentColor;
+            border-radius: 1em;
+        }
+        .tuneInLockTrack::before {
+            content: '';
+            inline-size: .85em;
+            block-size: .85em;
+            border-radius: 50%;
+            background: currentColor;
+        }
+        .settingsLocked:checked + .tuneInLockTrack {
+            justify-content: flex-end;
+            background: Highlight;
+            color: HighlightText;
+            border-color: Highlight;
+        }
+        .settingsLocked:focus-visible + .tuneInLockTrack {
+            outline: 2px solid currentColor;
+            outline-offset: 3px;
+        }
+        .settingsLocked:checked:focus-visible + .tuneInLockTrack {
+            outline-color: Highlight;
+        }
+        .settingsLocked:disabled + .tuneInLockTrack {
+            opacity: .6;
+        }
+        @media (forced-colors: active) {
+            .tuneInLockTrack, .tuneInLockTrack::before {
+                forced-color-adjust: none;
+            }
+            .tuneInLockTrack {
+                color: CanvasText;
+                background: Canvas;
+            }
+        }
         .tuneInApiIntervalRow {
             display: flex;
             align-items: center;
@@ -168,8 +223,9 @@
                     </div>
                 </div>
             </fieldset>
-            <label class="emby-checkbox-label">
-                <input type="checkbox" is="emby-checkbox" role="switch" class="settingsLocked" aria-describedby="tuneInLockStatus" disabled />
+            <label class="tuneInLockToggle">
+                <input type="checkbox" role="switch" class="settingsLocked" aria-describedby="tuneInLockStatus" disabled />
+                <span class="tuneInLockTrack" aria-hidden="true"></span>
                 <span>Lock settings</span>
             </label>
             <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>

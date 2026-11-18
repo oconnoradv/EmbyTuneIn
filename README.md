@@ -87,7 +87,9 @@ sharing.
 
 Use **Lock settings** at the top of the TuneIn page to prevent accidental
 edits and saves. The lock persists on the server across browser sessions and
-restarts. Turning it on does not save pending edits or stop catalog refresh.
+restarts. **Save** turns the switch on after the configuration is successfully
+saved. Turn it off to edit again. Turning it on manually does not save pending
+edits or stop catalog refresh.
 Only administrators can configure schedules, start or cancel a run, or read
 progress. Leaving the page stops status polling, not the server run. The plugin
 owns these schedules and doesn't register, edit, or trigger any Emby Scheduled Tasks.

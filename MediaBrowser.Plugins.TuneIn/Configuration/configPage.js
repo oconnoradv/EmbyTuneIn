@@ -227,10 +227,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.button-submit').disabled = disabled;
         instance.refreshCategoryRows.forEach(function (row) { row.schedule.disabled = disabled; });
         var toggle = instance.view.querySelector('.settingsLocked');
-        toggle.disabled = typeof instance.settingsLocked !== 'boolean' || !!instance.lockChanging || instance.saving;
+        toggle.disabled = typeof instance.settingsLocked !== 'boolean' || !!instance.lockChanging || !!instance.saving;
         toggle.checked = instance.lockChanging ? instance.lockRequested : instance.settingsLocked === true;
         var note = instance.view.querySelector('.settingsLockStatus');
-        var text = instance.lockError || (instance.lockChanging ? 'Updating settings lock...' :
+        var text = instance.lockError || (instance.saving ? 'Saving and locking settings...' :
+            instance.lockChanging ? 'Updating settings lock...' :
             instance.settingsLocked === true ? 'Settings are locked. Unlock to make changes.' :
             instance.settingsLocked === false ? 'Settings are unlocked.' : 'Reading settings lock...');
         if (note.textContent !== text) note.textContent = text;
@@ -245,13 +246,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.lockError = '';
         instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
         editing(instance);
-        return ApiClient.ajax({
-            type: 'POST', dataType: 'json', contentType: 'application/json',
-            url: ApiClient.getUrl('TuneIn/SettingsLock'),
-            data: JSON.stringify({ Locked: instance.lockRequested })
-        }).then(function (result) {
-            if (typeof result.Locked !== 'boolean') throw new Error('Missing TuneIn lock state.');
-            if (epoch === instance.viewEpoch) instance.settingsLocked = result.Locked;
+        return writeSettingsLock(instance.lockRequested).then(function (locked) {
+            if (epoch === instance.viewEpoch) instance.settingsLocked = locked;
         }).catch(function () {
             if (epoch !== instance.viewEpoch) return;
             instance.settingsLocked = undefined;
@@ -264,9 +260,20 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         });
     }
 
+    function writeSettingsLock(locked) {
+        return ApiClient.ajax({
+            type: 'POST', dataType: 'json', contentType: 'application/json',
+            url: ApiClient.getUrl('TuneIn/SettingsLock'),
+            data: JSON.stringify({ Locked: locked })
+        }).then(function (result) {
+            if (result.Locked !== locked) throw new Error('TuneIn did not confirm the requested lock state.');
+            return result.Locked;
+        });
+    }
+
     function renderRefresh(instance, status) {
         instance.refreshBusy = !!status.Busy;
-        if (typeof status.SettingsLocked === 'boolean' && !instance.lockChanging) {
+        if (typeof status.SettingsLocked === 'boolean' && !instance.lockChanging && !instance.saving) {
             instance.settingsLocked = status.SettingsLocked;
             instance.lockError = '';
         }
@@ -539,23 +546,33 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             config[spec[0]] = instance.view.querySelector('[data-category="' + spec[0] + '"]').checked;
         });
         instance.saving = true;
+        instance.lockError = '';
         refreshControls(instance, instance.refreshAvailable);
         loading.show();
         ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
-            if (epoch !== instance.viewEpoch) return;
-            Dashboard.processPluginConfigurationUpdateResult(result);
-            message(instance, 'Configuration saved. ' + browsingStatus(config) + ' No catalog crawl was started.');
-        }).catch(function (error) {
+            return writeSettingsLock(true).then(function () {
+                instance.settingsLocked = true;
+                if (epoch !== instance.viewEpoch) return;
+                Dashboard.processPluginConfigurationUpdateResult(result);
+                message(instance, 'Configuration saved and locked. ' + browsingStatus(config) + ' No catalog crawl was started.');
+            }, function (error) {
+                instance.settingsLocked = undefined;
+                console.error('Unable to lock TuneIn settings after saving.', error);
+                if (epoch !== instance.viewEpoch) return;
+                instance.lockError = 'Could not confirm the settings lock. Checking the server again.';
+                message(instance, 'Configuration saved, but the settings lock could not be confirmed. Check the switch before leaving.');
+            });
+        }, function (error) {
             if (epoch !== instance.viewEpoch) return;
             console.error('Unable to save TuneIn configuration.', error);
             message(instance, 'Configuration was not saved. Check the settings lock, validation, connectivity and administrator access, then retry.');
-        }).then(function () {
-            if (epoch !== instance.viewEpoch) return;
+        }).finally(function () {
             instance.saving = false;
+            if (!instance.refreshVisible) return;
             instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
             refreshControls(instance, false);
-            pollStatus(instance, epoch);
-            loading.hide();
+            pollStatus(instance, instance.viewEpoch);
+            if (epoch === instance.viewEpoch) loading.hide();
         });
         return false;
     }
@@ -614,7 +631,6 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.config = null;
         instance.settingsLocked = undefined;
         instance.lockError = '';
-        instance.saving = false;
         instance.loadingConfig = true;
         editing(instance);
         refreshControls(instance, false);
@@ -690,7 +706,6 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         this.refreshLogAction = null;
         if (this.loadingConfig || this.saving) {
             this.loadingConfig = false;
-            this.saving = false;
             loading.hide();
         }
         if (BaseView.prototype.onPause) return BaseView.prototype.onPause.apply(this, arguments);

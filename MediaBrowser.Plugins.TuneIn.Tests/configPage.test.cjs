@@ -37,7 +37,7 @@ class Element {
     descendants() { return this.childNodes.flatMap(child => [child, ...child.descendants()]); }
 }
 
-function harness(manualStatus = false) {
+function harness(manualStatus = false, manualSave = false) {
     const handlers = {};
     const formHandlers = {};
     const username = new Element('input');
@@ -79,6 +79,7 @@ function harness(manualStatus = false) {
     const locks = [];
     const timers = new Map();
     let timerId = 0;
+    let serverLocked = false;
     const loader = { shown: 0, hidden: 0, show() { this.shown++; }, hide() { this.hidden++; } };
     const ApiClient = {
         getPluginConfiguration(id) {
@@ -88,16 +89,27 @@ function harness(manualStatus = false) {
             return request.promise;
         },
         updatePluginConfiguration(id, config) {
+            if (manualSave) {
+                const request = deferred();
+                writes.push({ id, config, ...request });
+                return request.promise;
+            }
             writes.push({ id, config });
             return Promise.resolve('saved');
         },
         getUrl(route, params) { return { route, params }; },
         ajax(options) {
             const request = deferred();
-            if (options.url.route === 'TuneIn/SettingsLock') locks.push({ options, ...request });
+            if (options.url.route === 'TuneIn/SettingsLock') {
+                locks.push({ options, ...request });
+                if (!manualStatus) {
+                    serverLocked = JSON.parse(options.data).Locked;
+                    request.resolve({ Locked: serverLocked });
+                }
+            }
             else if (options.url.route.startsWith('TuneIn/Refresh/')) {
                 refresh.push({ options, ...request });
-                if (!manualStatus && options.type === 'GET') request.resolve({ SettingsLocked: false });
+                if (!manualStatus && options.type === 'GET') request.resolve({ SettingsLocked: serverLocked });
             } else selectors.push({ options, ...request });
             return request.promise;
         }
@@ -278,6 +290,11 @@ test('API request interval validates and saves the shared catalog pacing setting
         assert.match(app.elements['.status'].textContent, /whole number from 1 to 30/);
     }
     for (const value of [1, 30]) {
+        const toggle = app.elements['.settingsLocked'];
+        if (toggle.checked) {
+            toggle.checked = false;
+            await toggle.handlers.change();
+        }
         app.requestInterval.value = String(value);
         app.formHandlers.submit({ preventDefault() {} });
         assert.equal(app.writes.at(-1).config.ApiRequestIntervalSeconds, value);
@@ -766,3 +783,41 @@ test('a failed lock write leaves edits blocked until the server confirms the sta
     assert.equal(toggle.disabled, false);
     assert.equal(app.elements['.button-submit'].disabled, true);
 });
+
+for (const outcome of ['locked', 'save failed', 'lock unconfirmed']) {
+    test(`save turns on the lock only after configuration is persisted (${outcome})`, async () => {
+        const app = harness(true, true);
+        const visit = app.instance.onResume();
+        app.reads[0].resolve({});
+        app.refresh[0].resolve({ SettingsLocked: false });
+        await visit;
+        const toggle = app.elements['.settingsLocked'];
+        const save = app.elements['.button-submit'];
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes.length, 1);
+        assert.equal(app.locks.length, 0);
+        assert.equal(toggle.checked, false);
+        assert.equal(save.disabled, true);
+        if (outcome === 'save failed') {
+            app.writes[0].reject(new Error('save failed'));
+            await settle();
+            assert.equal(app.locks.length, 0);
+            assert.match(app.elements['.status'].textContent, /Configuration was not saved/);
+        } else {
+            app.writes[0].resolve('saved');
+            await settle();
+            assert.deepEqual(JSON.parse(app.locks[0].options.data), { Locked: true });
+            assert.equal(toggle.disabled, true);
+            assert.equal(toggle.checked, false);
+            if (outcome === 'locked') app.locks[0].resolve({ Locked: true });
+            else app.locks[0].reject(new Error('response lost'));
+            await settle();
+            assert.equal(toggle.checked, outcome === 'locked');
+            assert.match(app.elements['.status'].textContent, outcome === 'locked' ?
+                /saved and locked/ : /saved, but the settings lock could not be confirmed/);
+        }
+        app.refresh[1].resolve({ SettingsLocked: outcome === 'locked' });
+        await settle();
+        assert.equal(save.disabled, outcome === 'locked');
+    });
+}
