@@ -11,7 +11,7 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         internal int StatusCode { get; }
         internal TuneInProviderResponseException(int statusCode)
-            : base("TuneIn catalogue returned HTTP " + statusCode + ".") { StatusCode = statusCode; }
+            : base("TuneIn catalog returned HTTP " + statusCode + ".") { StatusCode = statusCode; }
     }
 
     internal static class TuneInRequests
@@ -30,7 +30,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     outbound.Parameters["formats"] = "mp3,aac";
                     outbound.Parameters["serial"] = host.SystemId;
                     using (var response = await SendAsync(client, new HttpRequestOptions
-                    { Url = outbound.Url, CancellationToken = token, ThrowOnErrorResponse = false }, "GET").ConfigureAwait(false))
+                    { Url = outbound.Url, CancellationToken = token, ThrowOnErrorResponse = false }, "GET",
+                        Plugin.Instance.Configuration.ApiRequestIntervalSeconds).ConfigureAwait(false))
                     using (var memory = new MemoryStream())
                     {
                         if ((int)response.StatusCode != 200)
@@ -39,7 +40,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         int count;
                         while ((count = await response.Content.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false)) != 0)
                         {
-                            if (memory.Length + count > 2 * 1024 * 1024) throw new InvalidDataException("TuneIn catalogue exceeds limit.");
+                            if (memory.Length + count > 2 * 1024 * 1024) throw new InvalidDataException("TuneIn catalog exceeds limit.");
                             memory.Write(buffer, 0, count);
                         }
                         return TuneInDirectory.ParseCatalogue(memory.ToArray());
@@ -47,10 +48,11 @@ namespace MediaBrowser.Plugins.TuneIn
                 }));
         }
 
-        internal static Task<HttpResponseInfo> SendAsync(IHttpClient client, HttpRequestOptions options, string method)
+        internal static Task<HttpResponseInfo> SendAsync(IHttpClient client, HttpRequestOptions options, string method,
+            int intervalSeconds)
         {
             options.BufferContent = true;
-            return Pacer.SendAsync(() => client.SendAsync(options, method), 3, options.CancellationToken);
+            return Pacer.SendAsync(() => client.SendAsync(options, method), intervalSeconds, options.CancellationToken);
         }
     }
 }

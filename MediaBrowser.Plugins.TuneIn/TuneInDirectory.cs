@@ -18,27 +18,40 @@ namespace MediaBrowser.Plugins.TuneIn
 {
     internal sealed class ConfigurationSnapshot
     {
+        private static readonly XmlSerializer Serializer = new XmlSerializer(typeof(PluginConfiguration));
+        private static readonly XmlSerializer ScopeSerializer = CreateScopeSerializer();
+        private static readonly string[] CategoryKeys = { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
+        private static readonly int[] ScheduleHours = { 6, 12, 24, 168 };
         public PluginConfiguration Value { get; }
         public string Key { get; }
 
         public ConfigurationSnapshot(PluginConfiguration value)
         {
-            var serializer = new XmlSerializer(typeof(PluginConfiguration));
             using (var writer = new StringWriter(CultureInfo.InvariantCulture))
             {
-                serializer.Serialize(writer, value);
-                var xml = writer.ToString();
-                using (var reader = new StringReader(xml))
-                    Value = (PluginConfiguration)serializer.Deserialize(reader);
+                Serializer.Serialize(writer, value);
+                using (var reader = new StringReader(writer.ToString()))
+                    Value = (PluginConfiguration)Serializer.Deserialize(reader);
+                writer.GetStringBuilder().Clear();
+                ScopeSerializer.Serialize(writer, Value);
                 using (var hash = SHA256.Create())
-                    Key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(xml))).Replace("-", "");
+                    Key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(writer.ToString()))).Replace("-", "");
             }
+        }
+
+        private static XmlSerializer CreateScopeSerializer()
+        {
+            var overrides = new XmlAttributeOverrides();
+            overrides.Add(typeof(PluginConfiguration), nameof(PluginConfiguration.RefreshSchedules), new XmlAttributes { XmlIgnore = true });
+            overrides.Add(typeof(PluginConfiguration), nameof(PluginConfiguration.ApiRequestIntervalSeconds), new XmlAttributes { XmlIgnore = true });
+            return new XmlSerializer(typeof(PluginConfiguration), overrides);
         }
 
         public bool Ready => Value.ConfigurationCompleted && Value.SchemaVersion == 1;
         public string LocalSource => Value.EnableLocalRadio ? ResolveLocalSource(Value) : null;
-        public IEnumerable<string> Categories => new[] { "local", "music", "language", "location",
-            "talk", "sports", "podcast", "presets" }.Where(Enabled);
+        public IEnumerable<string> Categories => CategoryKeys.Where(Enabled);
+        internal static bool ValidSchedule(CategoryRefreshSchedule schedule) =>
+            schedule != null && CategoryKeys.Contains(schedule.Category) && ScheduleHours.Contains(schedule.IntervalHours);
 
         public bool Enabled(string category)
         {
@@ -100,6 +113,12 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             if (value.SchemaVersion != 1 && (value.ConfigurationCompleted || value.SchemaVersion != 0))
                 throw new ArgumentException("Unsupported TuneIn configuration schema.");
+            if (value.ApiRequestIntervalSeconds < 3 || value.ApiRequestIntervalSeconds > 60)
+                throw new ArgumentException("TuneIn API request interval must be between 3 and 60 seconds.");
+            var schedules = value.RefreshSchedules;
+            if (schedules != null && (schedules.Count > CategoryKeys.Length || schedules.Any(schedule => !ValidSchedule(schedule))
+                || schedules.Select(schedule => schedule.Category).Distinct(StringComparer.Ordinal).Count() != schedules.Count))
+                throw new ArgumentException("Invalid TuneIn category refresh schedule.");
             if (value.EnableLocalRadio && ResolveLocalSource(value) == null)
                 throw new ArgumentException("Choose one Local Radio source: enabled regions or valid coordinates.");
             if ((value.Username ?? "").Length > 128)
@@ -140,14 +159,14 @@ namespace MediaBrowser.Plugins.TuneIn
                 || (uri.Scheme != "http" && uri.Scheme != "https") || !uri.IsDefaultPort
                 || uri.UserInfo.Length != 0 || !uri.Host.Equals("opml.radiotime.com", StringComparison.OrdinalIgnoreCase)
                 || (uri.AbsolutePath != "/Browse.ashx" && uri.AbsolutePath != "/Tune.ashx"))
-                throw new InvalidDataException("Untrusted TuneIn catalogue link.");
+                throw new InvalidDataException("Untrusted TuneIn catalog link.");
             var query = HttpUtility.ParseQueryString(uri.Query);
             var last = HttpUtility.UrlDecode(uri.Query.Substring(uri.Query.LastIndexOf('&') + 1).TrimStart('?'));
             var region = ConfigurationSnapshot.ValidId(query["id"], "location") && query.GetValues("id")?.Length == 1;
             var alphabetHash = uri.AbsolutePath == "/Browse.ashx"
                 && (uri.Fragment == "#" || region && uri.Fragment == "#:country")
                 && (last == "filter=s:~" || last == "filter=p:~") && query.GetValues("filter")?.Length == 1;
-            if (uri.Fragment.Length != 0 && !alphabetHash) throw new InvalidDataException("Invalid catalogue fragment.");
+            if (uri.Fragment.Length != 0 && !alphabetHash) throw new InvalidDataException("Invalid catalog fragment.");
             if (alphabetHash) query["filter"] += uri.Fragment;
             var request = new DirectoryRequest { Method = uri.AbsolutePath.Substring(1) };
             foreach (var key in new[] { "id", "c", "filter", "offset", "pivot", "sid" })
@@ -157,10 +176,10 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (query.GetValues(key).Length != 1 || (!Regex.IsMatch(item, @"\A[A-Za-z0-9:,*-]{1,80}\z")
                     && !(key == "filter" && Regex.IsMatch(item, @"\A[sp]:~[\p{L}\p{Nd}#](?::l[1-9][0-9]{0,9})?\z"))
                     && !(key == "filter" && region && Regex.IsMatch(item, @"\A[sp]:~[\p{L}\p{Nd}#]:country\z"))))
-                    throw new InvalidDataException("Invalid catalogue link parameter: " + key);
+                    throw new InvalidDataException("Invalid catalog link parameter: " + key);
                 request.Parameters[key] = item;
             }
-            if (request.Parameters.Count == 0) throw new InvalidDataException("Empty catalogue link.");
+            if (request.Parameters.Count == 0) throw new InvalidDataException("Empty catalog link.");
             return request;
         }
     }
@@ -431,7 +450,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal static XDocument ParseCatalogue(byte[] bytes)
         {
-            if (bytes.Length > 2 * 1024 * 1024) throw new InvalidDataException("TuneIn catalogue exceeds limit.");
+            if (bytes.Length > 2 * 1024 * 1024) throw new InvalidDataException("TuneIn catalog exceeds limit.");
             using (var stream = new MemoryStream(bytes))
             using (var reader = XmlReader.Create(stream, new XmlReaderSettings
             { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 2 * 1024 * 1024 }))
@@ -442,7 +461,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     || (document.Root.Element("head")?.Element("status") is XElement status && status.Value != "200")
                     || document.Descendants().Any(e => e.Ancestors().Take(33).Count() > 32)
                     || document.Root.Element("body").Descendants().Any(e => e.Name != "outline"))
-                    throw new InvalidDataException("TuneIn returned an invalid OPML catalogue.");
+                    throw new InvalidDataException("TuneIn returned an invalid OPML catalog.");
                 return document;
             }
         }

@@ -38,6 +38,15 @@
             opacity: .5;
             cursor: default;
         }
+        .tuneInRefresh .refreshFailureLog {
+            box-sizing: border-box;
+            max-height: 20rem;
+            overflow: auto;
+            padding: .75em;
+            border: 1px solid currentColor;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
         .tuneInRefreshCategories {
             list-style: none;
             margin: .75em 0;
@@ -50,6 +59,12 @@
             flex-wrap: wrap;
             gap: .25em 1em;
             padding-block: .35em;
+        }
+        .tuneInRefreshCategoryActions {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: .5em;
         }
         .tuneInSelectors .tuneInSelectorWindow {
             box-sizing: border-box;
@@ -136,8 +151,12 @@
             <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
             <p class="status" role="status" aria-live="polite"></p>
             <fieldset class="configurationFields" disabled>
-            <legend>Configured browsing</legend>
+            <legend>Catalog browsing</legend>
             <p>Enable browsing and choose categories before opening TuneIn. Existing username and coordinates are retained, but do not enable browsing automatically.</p>
+            <div class="inputContainer">
+                <input type="number" is="emby-input" class="apiRequestIntervalSeconds" label="API request interval (seconds):" min="3" max="60" step="1" required />
+                <div class="fieldDescription">Minimum delay between TuneIn API requests. TuneIn retry delays are always honored.</div>
+            </div>
             <label class="emby-checkbox-label">
                 <input type="checkbox" is="emby-checkbox" class="configurationCompleted" />
                 <span>Enable configured browsing after saving</span>
@@ -159,13 +178,18 @@
                 <button is="emby-button" type="submit" class="raised button-submit block" disabled><span>Save</span></button>
             </div>
         </form>
-        <details class="auto-center tuneInSection tuneInRefresh">
-            <summary class="refreshSummary">Catalogue refresh</summary>
-            <p>Checks the saved TuneIn scopes and imports changed categories into Emby. Save browsing changes before starting.</p>
+        <details class="auto-center tuneInSection tuneInRefresh" open>
+            <summary class="refreshSummary">Catalog Refresh</summary>
+            <p>Checks the saved TuneIn categories and updates the Emby library when needed.</p>
+            <p class="fieldDescription">Choose a refresh interval next to a category, then select Save above. Off keeps that category manual only.</p>
             <p class="refreshStatus" role="status">Reading refresh status...</p>
             <p class="refreshError" role="alert"></p>
             <button is="emby-button" type="button" class="raised refreshStart" disabled>Refresh all enabled categories</button>
             <button type="button" class="refreshCancel" disabled>Cancel refresh</button>
+            <button is="emby-button" type="button" class="raised refreshLogButton" disabled>Retrieve refresh log</button>
+            <p class="refreshLogMessage" role="status"></p>
+            <p class="fieldDescription">The latest failed refresh report is capped at 64 KB and may contain private server details. Redact it before sharing.</p>
+            <pre class="refreshFailureLog" aria-label="Latest failed refresh report" tabindex="0" hidden></pre>
             <p class="refreshCategoryNote" role="status"></p>
             <ul class="tuneInRefreshCategories" aria-label="Category refresh status"></ul>
         </details>

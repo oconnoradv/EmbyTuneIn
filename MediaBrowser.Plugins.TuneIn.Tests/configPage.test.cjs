@@ -40,12 +40,15 @@ function harness(manualStatus = false) {
     const formHandlers = {};
     const username = new Element('input');
     const latLon = new Element('input');
+    const requestInterval = new Element('input');
     const form = { addEventListener: (event, handler) => { formHandlers[event] = handler; } };
-    const elements = { form, '.txtUsername': username, '.txtLatLon': latLon };
+    const elements = { form, '.txtUsername': username, '.txtLatLon': latLon,
+        '.apiRequestIntervalSeconds': requestInterval };
     for (const name of ['.localSource', '.configurationCompleted', '.categories', '.selectors',
         '.loginFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
-        '.refreshStart', '.refreshCancel', '.localSelector', '.tuneInRefreshCategories',
-        '.refreshCategoryNote', '.settingsLocked', '.settingsLockStatus']) elements[name] = new Element();
+        '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
+        '.localSelector', '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
+        '.settingsLockStatus']) elements[name] = new Element();
     for (const [section, summary, open] of [
         ['.categoriesSection', '.categoriesSummary', true],
         ['.localSection', '.localSummary', true],
@@ -117,7 +120,7 @@ function harness(manualStatus = false) {
         clearTimeout(id) { timers.delete(id); }
     });
 
-    return { instance: new PluginView(view), username, latLon, formHandlers, reads, writes, notices, errors, loader,
+    return { instance: new PluginView(view), username, latLon, requestInterval, formHandlers, reads, writes, notices, errors, loader,
         elements, selectors, enhanced, calls, handlers, refresh, locks, timers };
 }
 
@@ -224,6 +227,7 @@ test('native view lifecycle loads labeled upstream settings on each visit', asyn
     await first;
     assert.equal(app.username.value, 'listener');
     assert.equal(app.latLon.value, '1,2');
+    assert.equal(String(app.requestInterval.value), '3');
     app.instance.onPause('away');
     const second = app.instance.onResume();
     app.reads[1].resolve({ Username: null, LatLon: null });
@@ -254,7 +258,24 @@ test('save retains unrelated configuration and converts empty fields to null', a
     assert.equal(app.writes[0].config.Other, 42);
     assert.equal(app.writes[0].config.SchemaVersion, 1);
     assert.equal(app.writes[0].config.ConfigurationCompleted, false);
+    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 3);
     assert.deepEqual(app.notices, ['saved']);
+});
+
+test('API request interval validates and saves the shared catalog pacing setting', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ ApiRequestIntervalSeconds: 12 });
+    await visit;
+    assert.equal(app.requestInterval.value, 12);
+    app.requestInterval.value = '2';
+    app.formHandlers.submit({ preventDefault() {} });
+    assert.equal(app.writes.length, 0);
+    assert.match(app.elements['.status'].textContent, /whole number from 3 to 60/);
+    app.requestInterval.value = '60';
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 60);
 });
 
 test('navigation discards stale loads without hiding the next visit loader', async () => {
@@ -485,6 +506,34 @@ test('idle polling is slower, refresh actions are explicit, and old polls cannot
     assert.equal(app.refresh.length, 5);
 });
 
+test('refresh report is retrievable only after the latest run fails and clears when a new run starts', async () => {
+    const app = harness(true);
+    app.elements['.tuneInRefresh'].open = true;
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    const failed = { State: 'Error', Busy: false, FinishedUtc: '2025-01-02T03:04:05Z',
+        Categories: [{ Category: 'talk', Name: 'Talk', State: 'Failed' }] };
+    app.refresh[0].resolve(failed);
+    await settle();
+    const button = app.elements['.refreshLogButton'];
+    assert.equal(button.disabled, false);
+    const retrieval = button.handlers.click();
+    assert.equal(app.refresh[1].options.url.route, 'TuneIn/Refresh/Log');
+    app.refresh[1].resolve({ Text: 'Error: provider unavailable', Truncated: false,
+        FinishedUtc: failed.FinishedUtc });
+    await retrieval;
+    assert.equal(app.elements['.refreshFailureLog'].textContent, 'Error: provider unavailable');
+    assert.equal(app.elements['.refreshFailureLog'].hidden, false);
+
+    [...app.timers.values()][0].handler();
+    assert.equal(app.refresh[2].options.url.route, 'TuneIn/Refresh/Status');
+    app.refresh[2].resolve({ State: 'Running', Busy: true, Phase: 'Discovering' });
+    await settle();
+    assert.equal(button.disabled, true);
+    assert.equal(app.elements['.refreshFailureLog'].hidden, true);
+});
+
 test('collapsing browsing settings, including Music genres, keeps choices and does not start provider requests', async () => {
     const app = harness();
     const visit = app.instance.onResume();
@@ -507,13 +556,14 @@ test('collapsing browsing settings, including Music genres, keeps choices and do
     assert.ok(app.elements['.categories'].descendants().some(item => item.checked));
 });
 
-test('opening collapsed Catalogue refresh gets fresh category status before allowing a scoped refresh', async () => {
+test('Catalog Refresh opens by default and can collapse and reopen with fresh status', async () => {
     const app = harness(true);
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    assert.match(html, /<details class="[^"]*\btuneInRefresh">/);
+    assert.match(html, /<details class="[^"]*\btuneInRefresh" open>/);
     const visit = app.instance.onResume();
     const section = app.elements['.tuneInRefresh'];
     const list = app.elements['.tuneInRefreshCategories'];
+    const control = row => row.childNodes[1].childNodes[0];
     app.reads[0].resolve({});
     await visit;
     app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
@@ -531,15 +581,15 @@ test('opening collapsed Catalogue refresh gets fresh category status before allo
     const [talk, sports] = list.childNodes;
     assert.match(talk.textContent, /Talk.*Unchanged/);
     assert.match(sports.textContent, /Sports.*reconciliation needed/);
-    assert.equal(talk.childNodes[1].disabled, true);
-    assert.equal(sports.childNodes[1].disabled, false);
-    const action = sports.childNodes[1].handlers.click();
+    assert.equal(control(talk).disabled, true);
+    assert.equal(control(sports).disabled, false);
+    const action = control(sports).handlers.click();
     assert.equal(app.refresh[2].options.type, 'POST');
     assert.equal(app.refresh[2].options.url.route, 'TuneIn/Refresh/Start');
     assert.equal(app.refresh[2].options.url.params.Category, 'sports');
     app.refresh[2].resolve({ State: 'Running', Busy: true, Categories: categories });
     await action;
-    assert.equal(sports.childNodes[1].disabled, true);
+    assert.equal(control(sports).disabled, true);
     section.open = false;
     section.handlers.toggle();
     app.refresh[3].resolve({ State: 'Completed', Categories: categories });
@@ -547,12 +597,34 @@ test('opening collapsed Catalogue refresh gets fresh category status before allo
     section.open = true;
     section.handlers.toggle();
     assert.equal(app.refresh[4].options.url.route, 'TuneIn/Refresh/Status');
-    assert.equal(sports.childNodes[1].disabled, true);
+    assert.equal(control(sports).disabled, true);
     app.refresh[4].resolve({ State: 'Completed', Categories: [categories[0], { ...categories[1], State: 'Imported' }] });
     await settle();
     assert.equal(list.childNodes[1], sports);
     assert.match(sports.textContent, /Sports.*Imported/);
-    assert.equal(sports.childNodes[1].disabled, false);
+    assert.equal(control(sports).disabled, false);
+});
+
+test('category interval dropdowns restore saved values and save changes without starting a refresh', async () => {
+    const app = harness(true);
+    app.elements['.tuneInRefresh'].open = true;
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ RefreshSchedules: [{ Category: 'talk', IntervalHours: 24 }] });
+    app.refresh[0].resolve({ SettingsLocked: false, Categories: [
+        { Category: 'talk', Name: 'Talk' }, { Category: 'sports', Name: 'Sports' }] });
+    await visit;
+    const [talk, sports] = app.elements['.tuneInRefreshCategories'].childNodes
+        .map(row => row.childNodes[1].childNodes[1]);
+    assert.equal(talk.attributes['aria-label'], 'Talk refresh interval');
+    assert.equal(talk.value, '24');
+    assert.equal(sports.value, '0');
+    talk.value = '0';
+    talk.handlers.change();
+    sports.value = '12';
+    sports.handlers.change();
+    app.formHandlers.submit({ preventDefault() {} });
+    assert.equal(JSON.stringify(app.writes[0].config.RefreshSchedules), '[{"Category":"sports","IntervalHours":12}]');
+    assert.ok(app.refresh.every(request => request.options.type === 'GET'));
 });
 
 test('returning to saved settings opens the Control Panel with the category sections collapsed', async () => {
@@ -575,7 +647,7 @@ test('returning to saved settings opens the Control Panel with the category sect
     assert.equal(app.selectors.length, 0);
 });
 
-test('settings lock protects pending edits and saves without blocking catalogue refresh', async () => {
+test('settings lock protects pending edits and saves without blocking catalog refresh', async () => {
     const app = harness(true);
     app.elements['.tuneInRefresh'].open = true;
     const toggle = app.elements['.settingsLocked'];

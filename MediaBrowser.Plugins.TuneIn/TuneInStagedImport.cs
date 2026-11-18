@@ -70,7 +70,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     estimatedBytes += 256 + 2L * ((item.Id?.Length ?? 0) + (item.Name?.Length ?? 0)
                         + (item.ImageUrl?.Length ?? 0));
                     if (itemCount > MaxItems || estimatedBytes > MaxEstimatedBytes)
-                        throw new InvalidOperationException("TuneIn discovery exceeded its bounded catalogue limit.");
+                        throw new InvalidOperationException("TuneIn discovery exceeded its bounded catalog limit.");
                     if (item.Type == ChannelItemType.Folder)
                     {
                         if (current.Value >= 8)
@@ -127,6 +127,40 @@ namespace MediaBrowser.Plugins.TuneIn
                 return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(canonical))).Replace("-", "");
         }
 
+        internal static TuneInStagedImport ForChannel(IEnumerable<ChannelItemInfo> roots,
+            IEnumerable<TuneInCategorySnapshot> categories, CancellationToken token,
+            Action<int, int> report, Action validate)
+        {
+            var staged = new TuneInStagedImport(token, report, validate);
+            var rootItems = roots.ToList();
+            staged.folders.Add(string.Empty, new ChannelItemResult { Items = rootItems });
+            foreach (var category in categories)
+            {
+                if (!rootItems.Any(root => root.Id == category.RootId))
+                    throw new InvalidOperationException("The saved TuneIn category does not match the channel root.");
+                foreach (var folder in category.Folders)
+                    staged.folders.Add(folder.Id, RestoreFolder(folder));
+            }
+            if (rootItems.Any(root => !staged.folders.ContainsKey(root.Id)) ||
+                staged.folders.Values.SelectMany(folder => folder.Items).Any(item =>
+                    item.Type == ChannelItemType.Folder && !staged.folders.ContainsKey(item.Id)))
+                throw new InvalidOperationException("The staged TuneIn channel is incomplete.");
+            return staged;
+        }
+
+        internal static ChannelItemResult RestoreFolder(TuneInFolderSnapshot folder) => new ChannelItemResult
+        {
+            Items = folder.Items.Select(item => new ChannelItemInfo
+            {
+                Id = item.Id,
+                Name = item.Name,
+                Type = (ChannelItemType)Enum.Parse(typeof(ChannelItemType), item.Type),
+                ContentType = (ChannelMediaContentType)Enum.Parse(typeof(ChannelMediaContentType), item.ContentType),
+                MediaType = (ChannelMediaType)Enum.Parse(typeof(ChannelMediaType), item.MediaType),
+                ImageUrl = item.ImageUrl
+            }).ToList()
+        };
+
         internal ChannelItemResult Read(string folder, CancellationToken queryToken)
         {
             lock (gate)
@@ -136,11 +170,10 @@ namespace MediaBrowser.Plugins.TuneIn
                     token.ThrowIfCancellationRequested();
                     queryToken.ThrowIfCancellationRequested();
                     validate?.Invoke();
-                    if (string.IsNullOrEmpty(folder))
-                        return new ChannelItemResult { Items = new List<ChannelItemInfo> { Root } };
-                    if (!folders.TryGetValue(folder, out var result))
-                        throw new InvalidOperationException("Emby requested a folder outside the staged TuneIn category.");
-                    served.Add(folder);
+                    var key = folder ?? string.Empty;
+                    if (!folders.TryGetValue(key, out var result))
+                        throw new InvalidOperationException("Emby requested a folder outside the staged TuneIn channel.");
+                    served.Add(key);
                     report?.Invoke(folders.Count, served.Count);
                     return new ChannelItemResult { Items = result.Items.ToList() };
                 }

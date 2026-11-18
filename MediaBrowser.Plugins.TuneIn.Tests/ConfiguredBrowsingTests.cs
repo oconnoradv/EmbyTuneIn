@@ -51,7 +51,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task LegacyConfigurationAndChannelRootNeverCrawlTheCatalogue()
+        public async Task LegacyConfigurationAndChannelRootNeverCrawlTheCatalog()
         {
             var config = new PluginConfiguration { Username = "legacy", LatLon = "10,20", EnableTalk = true };
             var calls = 0;
@@ -287,7 +287,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             BaseExtensions.CryptographyProvider = new TestCryptoProvider();
             var config = Ready();
             config.EnableTalk = true;
-            var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("Unexpected catalogue request."));
+            var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("Unexpected catalog request."));
             var id = directory.Register(directory.Snapshot(), new NavigationEntry { Category = "talk", StationId = "s1" });
             var client = new Mock<IHttpClient>(MockBehavior.Strict);
             string requested = null;
@@ -379,6 +379,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public void InvalidAdminConfigurationIsRejectedServerSide()
         {
             var config = Ready();
+            Assert.Equal(3, new PluginConfiguration().ApiRequestIntervalSeconds);
+            config.ApiRequestIntervalSeconds = 2;
+            Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+            config.ApiRequestIntervalSeconds = 61;
+            Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+            config.ApiRequestIntervalSeconds = 60;
+            ConfigurationSnapshot.Validate(config);
             config.Languages.Add(Selection("r1"));
             Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
             config.Languages.Clear();

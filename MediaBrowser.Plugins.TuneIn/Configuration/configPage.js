@@ -225,6 +225,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.loginFields').disabled = disabled;
         instance.view.querySelector('.configurationFields').disabled = disabled;
         instance.view.querySelector('.button-submit').disabled = disabled;
+        instance.refreshCategoryRows.forEach(function (row) { row.schedule.disabled = disabled; });
         var toggle = instance.view.querySelector('.settingsLocked');
         toggle.disabled = typeof instance.settingsLocked !== 'boolean' || !!instance.lockChanging || instance.saving;
         toggle.checked = instance.lockChanging ? instance.lockRequested : instance.settingsLocked === true;
@@ -269,6 +270,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             instance.settingsLocked = status.SettingsLocked;
             instance.lockError = '';
         }
+        var previousStatus = instance.refreshStatus;
         instance.refreshStatus = status;
         var category = ({ local: 'Local Radio', music: 'Music', language: 'By Language', location: 'By Location',
             talk: 'Talk', sports: 'Sports', podcast: 'Podcasts', presets: 'My Favorites' })[status.Category];
@@ -281,6 +283,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (status.ImportMayHavePartiallyApplied && status.Phase !== 'Importing')
             description += '. An interrupted import may have changed Emby metadata.';
         instance.view.querySelector('.refreshStatus').textContent = description;
+        if (status.State !== 'Error' || !previousStatus || status.FinishedUtc !== previousStatus.FinishedUtc) {
+            instance.view.querySelector('.refreshFailureLog').textContent = '';
+            instance.view.querySelector('.refreshFailureLog').hidden = true;
+            instance.view.querySelector('.refreshLogMessage').textContent = '';
+        }
         if (instance.refreshSection.open) renderCategoryRefresh(instance, status);
         refreshControls(instance, true);
     }
@@ -304,10 +311,27 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 var caption = document.createElement('span');
                 var control = button('Refresh', function () { return doRefresh(instance, 'Start', item.Category); });
                 control.setAttribute('aria-label', 'Refresh ' + item.Name);
+                var actions = document.createElement('div');
+                actions.className = 'tuneInRefreshCategoryActions';
+                var schedule = document.createElement('select');
+                schedule.setAttribute('aria-label', item.Name + ' refresh interval');
+                [['0', 'Schedule: Off'], ['6', 'Every 6 hours'], ['12', 'Every 12 hours'],
+                    ['24', 'Daily'], ['168', 'Weekly']].forEach(function (choice) {
+                    var option = document.createElement('option');
+                    option.value = choice[0];
+                    option.textContent = choice[1];
+                    schedule.appendChild(option);
+                });
+                schedule.value = String(instance.refreshSchedules.get(item.Category) || 0);
+                schedule.addEventListener('change', function () {
+                    if (!editingBlocked(instance)) instance.refreshSchedules.set(item.Category, Number(schedule.value));
+                });
                 row.appendChild(caption);
-                row.appendChild(control);
+                actions.appendChild(control);
+                actions.appendChild(schedule);
+                row.appendChild(actions);
                 list.appendChild(row);
-                rows.set(item.Category, { caption: caption, control: control });
+                rows.set(item.Category, { caption: caption, control: control, schedule: schedule });
             });
             $(list).trigger('create');
         }
@@ -325,10 +349,49 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshAvailable = available;
         instance.view.querySelector('.refreshStart').disabled = cannotStart || !status || !(status.Categories || []).length;
         instance.view.querySelector('.refreshCancel').disabled = !available || !instance.refreshBusy || !!instance.refreshAction;
+        instance.view.querySelector('.refreshLogButton').disabled = !available || !status || status.State !== 'Error'
+            || status.Busy || !status.FinishedUtc || !!instance.refreshAction || !!instance.refreshLogAction;
         instance.refreshCategoryRows.forEach(function (row, category) {
             row.control.disabled = cannotStart || !!(status && status.DirtyCategory && status.DirtyCategory !== category);
         });
         editing(instance);
+    }
+
+    function retrieveRefreshLog(instance) {
+        if (!instance.refreshVisible || instance.refreshLogAction || !instance.refreshAvailable) return;
+        var control = instance.view.querySelector('.refreshLogButton');
+        if (control.disabled) return;
+        var epoch = instance.viewEpoch;
+        var generation = instance.refreshGeneration || 0;
+        var finishedUtc = instance.refreshStatus.FinishedUtc;
+        var requestToken = {};
+        instance.refreshLogAction = requestToken;
+        instance.view.querySelector('.refreshLogMessage').textContent = 'Retrieving the latest failed refresh report...';
+        refreshControls(instance, instance.refreshAvailable);
+        return ApiClient.ajax({
+            type: 'GET', dataType: 'json', url: ApiClient.getUrl('TuneIn/Refresh/Log')
+        }).then(function (result) {
+            if (epoch !== instance.viewEpoch || generation !== (instance.refreshGeneration || 0)
+                || !instance.refreshVisible || !instance.refreshStatus || instance.refreshStatus.State !== 'Error'
+                || instance.refreshStatus.FinishedUtc !== finishedUtc || result.FinishedUtc !== finishedUtc) return;
+            var report = instance.view.querySelector('.refreshFailureLog');
+            report.textContent = result.Text || '';
+            report.hidden = false;
+            instance.view.querySelector('.refreshLogMessage').textContent = result.Truncated
+                ? 'Refresh report retrieved; it was truncated to 64 KB.'
+                : 'Refresh report retrieved.';
+        }).catch(function () {
+            if (epoch === instance.viewEpoch && generation === (instance.refreshGeneration || 0)
+                && instance.refreshStatus && instance.refreshStatus.State === 'Error'
+                && instance.refreshStatus.FinishedUtc === finishedUtc)
+                instance.view.querySelector('.refreshLogMessage').textContent =
+                    'Could not retrieve the latest refresh report. Check refresh status and try again.';
+        }).then(function () {
+            if (instance.refreshLogAction === requestToken) {
+                instance.refreshLogAction = false;
+                if (epoch === instance.viewEpoch) refreshControls(instance, instance.refreshAvailable);
+            }
+        });
     }
 
     function scheduleStatus(instance, epoch) {
@@ -372,6 +435,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var epoch = instance.viewEpoch;
         instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
         instance.refreshAction = true;
+        instance.view.querySelector('.refreshFailureLog').textContent = '';
+        instance.view.querySelector('.refreshFailureLog').hidden = true;
+        instance.view.querySelector('.refreshLogMessage').textContent = '';
         refreshControls(instance, false);
         instance.view.querySelector('.refreshError').textContent = '';
         return ApiClient.ajax({
@@ -397,6 +463,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (editingBlocked(instance)) return false;
         var config = instance.config;
         var coordinates = instance.view.querySelector('.txtLatLon').value.trim();
+        var requestInterval = String(instance.view.querySelector('.apiRequestIntervalSeconds').value || '').trim();
+        if (!/^[0-9]+$/.test(requestInterval) || Number(requestInterval) < 3 || Number(requestInterval) > 60) {
+            message(instance, 'Use a whole number from 3 to 60 for the API request interval.');
+            return false;
+        }
         var localEnabled = instance.view.querySelector('[data-category="EnableLocalRadio"]').checked;
         var source = instance.view.querySelector('.localSource').value;
         var useCoordinates = localEnabled && source === 'coordinates';
@@ -417,6 +488,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         config.ConfigurationCompleted = instance.view.querySelector('.configurationCompleted').checked;
         config.Username = instance.view.querySelector('.txtUsername').value.trim() || null;
         config.LatLon = coordinates || null;
+        config.ApiRequestIntervalSeconds = Number(requestInterval);
+        config.RefreshSchedules = Array.from(instance.refreshSchedules)
+            .filter(function (entry) { return entry[1] > 0; })
+            .map(function (entry) { return { Category: entry[0], IntervalHours: entry[1] }; });
         config.UseCoordinates = useCoordinates;
         config.LocalRadioSource = source || null;
         categories.forEach(function (spec) {
@@ -428,7 +503,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
             if (epoch !== instance.viewEpoch) return;
             Dashboard.processPluginConfigurationUpdateResult(result);
-            message(instance, 'Configuration saved. ' + browsingStatus(config) + ' No catalogue crawl was started.');
+            message(instance, 'Configuration saved. ' + browsingStatus(config) + ' No catalog crawl was started.');
         }).catch(function (error) {
             if (epoch !== instance.viewEpoch) return;
             console.error('Unable to save TuneIn configuration.', error);
@@ -449,6 +524,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var instance = this;
         instance.refreshSection = view.querySelector('.tuneInRefresh');
         instance.refreshCategoryRows = new Map();
+        instance.refreshSchedules = new Map();
         ['.categoriesSummary', '.localSummary', '.refreshSummary'].forEach(function (selector) {
             bindDisclosure(view.querySelector(selector));
         });
@@ -464,6 +540,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         view.querySelector('form').addEventListener('submit', onSubmit.bind(this));
         view.querySelector('.refreshStart').addEventListener('click', function () { return doRefresh(instance, 'Start'); });
         view.querySelector('.refreshCancel').addEventListener('click', function () { return doRefresh(instance, 'Cancel'); });
+        view.querySelector('.refreshLogButton').addEventListener('click', function () { return retrieveRefreshLog(instance); });
     }
 
     Object.assign(View.prototype, BaseView.prototype);
@@ -475,6 +552,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshVisible = true;
         instance.view.querySelector('.refreshStatus').textContent = 'Reading refresh status...';
         instance.view.querySelector('.refreshError').textContent = '';
+        instance.view.querySelector('.refreshFailureLog').textContent = '';
+        instance.view.querySelector('.refreshFailureLog').hidden = true;
+        instance.view.querySelector('.refreshLogMessage').textContent = '';
+        instance.refreshLogAction = null;
         instance.config = null;
         instance.settingsLocked = undefined;
         instance.lockError = '';
@@ -487,9 +568,17 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
             if (epoch !== instance.viewEpoch) return;
             instance.config = config;
+            instance.refreshSchedules = new Map((config.RefreshSchedules || []).map(function (schedule) {
+                return [schedule.Category, schedule.IntervalHours];
+            }));
+            instance.refreshCategoryRows.forEach(function (row, category) {
+                row.schedule.value = String(instance.refreshSchedules.get(category) || 0);
+            });
             var view = instance.view;
             view.querySelector('.txtUsername').value = config.Username || '';
             view.querySelector('.txtLatLon').value = config.LatLon || '';
+            view.querySelector('.apiRequestIntervalSeconds').value =
+                config.ApiRequestIntervalSeconds == null ? 3 : config.ApiRequestIntervalSeconds;
             var hasRegions = (config.LocalCities || []).some(function (item) {
                 return item && item.Enabled !== false && /^r[1-9][0-9]{0,9}$/.test(item.Id);
             });
@@ -537,6 +626,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         this.viewEpoch = (this.viewEpoch || 0) + 1;
         this.refreshVisible = false;
         clearTimeout(this.refreshTimer);
+        this.view.querySelector('.refreshFailureLog').textContent = '';
+        this.view.querySelector('.refreshFailureLog').hidden = true;
+        this.view.querySelector('.refreshLogMessage').textContent = '';
+        this.refreshLogAction = null;
         if (this.loadingConfig || this.saving) {
             this.loadingConfig = false;
             this.saving = false;

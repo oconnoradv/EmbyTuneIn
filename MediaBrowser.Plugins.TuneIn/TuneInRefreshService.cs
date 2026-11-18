@@ -14,6 +14,10 @@ namespace MediaBrowser.Plugins.TuneIn
     [Authenticated(Roles = "Admin")]
     public sealed class GetTuneInRefreshStatus : IReturn<TuneInRefreshStatus> { }
 
+    [Route("/TuneIn/Refresh/Log", "GET")]
+    [Authenticated(Roles = "Admin")]
+    public sealed class GetTuneInRefreshFailureLog : IReturn<TuneInRefreshFailureLog> { }
+
     [Route("/TuneIn/Refresh/Start", "POST")]
     [Authenticated(Roles = "Admin")]
     public sealed class StartTuneInRefresh : IReturn<TuneInRefreshStatus>
@@ -55,6 +59,12 @@ namespace MediaBrowser.Plugins.TuneIn
             var status = refresh.Status();
             status.SettingsLocked = Plugin.Instance.SettingsLock.IsLocked;
             return status;
+        }
+
+        public TuneInRefreshFailureLog Get(GetTuneInRefreshFailureLog request)
+        {
+            EnsureAdmin();
+            return refresh.GetFailureLog();
         }
 
         public TuneInRefreshStatus Post(StartTuneInRefresh request)
@@ -114,7 +124,7 @@ namespace MediaBrowser.Plugins.TuneIn
             coordinator?.Dispose();
         }
 
-        private static TuneInRefresh GetShared(IHttpClient client, IApplicationHost host, IApplicationPaths paths,
+        internal static TuneInRefresh GetShared(IHttpClient client, IApplicationHost host, IApplicationPaths paths,
             IChannelManager manager, ILogManager logManager)
         {
             lock (SharedGate)
@@ -128,7 +138,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         channel.GetRefreshChannelItems(folder, session, strict, token),
                     (channel, staged, folder, token) =>
                         channel.ImportAsync(staged,
-                            () => manager.RefreshChannelContent(channel, 8, folder, token)),
+                            () => manager.RefreshChannelContent(channel, 9, null, token)),
                     logManager.GetLogger(typeof(TuneInRefreshService).Name),
                     updateArtwork: (channel, folder, token) => channel.UpdateCategoryArtwork(folder, token));
                 return shared;

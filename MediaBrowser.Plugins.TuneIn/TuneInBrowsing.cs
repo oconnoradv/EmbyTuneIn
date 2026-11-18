@@ -32,7 +32,7 @@ namespace MediaBrowser.Plugins.TuneIn
             if (string.IsNullOrEmpty(folderId))
             {
                 foreach (var category in snapshot.Categories)
-                    items.Add(Folder(snapshot, new NavigationEntry { Category = category, Name = CategoryName(category) }));
+                    items.Add(CategoryRoot(snapshot, category));
             }
             else
             {
@@ -59,6 +59,9 @@ namespace MediaBrowser.Plugins.TuneIn
             directory.CheckCurrent(snapshot, token);
             return new ChannelItemResult { Items = items };
         }
+
+        internal ChannelItemInfo CategoryRoot(ConfigurationSnapshot snapshot, string category) =>
+            Folder(snapshot, new NavigationEntry { Category = category, Name = CategoryName(category) });
 
         private ChannelItemInfo Folder(ConfigurationSnapshot snapshot, NavigationEntry entry) => new ChannelItemInfo
         {

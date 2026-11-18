@@ -87,6 +87,9 @@ namespace MediaBrowser.Plugins.TuneIn
             bool strict, CancellationToken token) =>
             new TuneInBrowsing(directory, GetDefaultImages).GetItemsAsync(folder, token, session);
 
+        internal ChannelItemInfo GetCategoryRoot(ConfigurationSnapshot snapshot, string category) =>
+            new TuneInBrowsing(directory, GetDefaultImages).CategoryRoot(snapshot, category);
+
         internal async Task ImportAsync(TuneInStagedImport staged, Func<Task> import)
         {
             var previous = stagedImport.Value;
@@ -155,7 +158,7 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInCategoryArtwork.Url(serverHost.GetLocalApiUrl(System.Net.IPAddress.Loopback), category);
 
         private Task<HttpResponseInfo> SendRequest(HttpRequestOptions options, string method) =>
-            TuneInRequests.SendAsync(_httpClient, options, method);
+            TuneInRequests.SendAsync(_httpClient, options, method, directory.Snapshot().Value.ApiRequestIntervalSeconds);
 
         public async Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id, CancellationToken cancellationToken)
         {

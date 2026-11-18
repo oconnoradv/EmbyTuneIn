@@ -13,6 +13,8 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public String Username { get; set; }
         public String LatLon { get; set; }
         public string NavigationSecret { get; set; } = CreateSecret();
+        public int ApiRequestIntervalSeconds { get; set; } = 3;
+        public List<CategoryRefreshSchedule> RefreshSchedules { get; set; } = new List<CategoryRefreshSchedule>();
         public int SchemaVersion { get; set; }
         public bool ConfigurationCompleted { get; set; }
         public bool EnableLocalRadio { get; set; }
@@ -36,6 +38,12 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
             using (var random = RandomNumberGenerator.Create()) random.GetBytes(bytes);
             return Convert.ToBase64String(bytes);
         }
+    }
+
+    public class CategoryRefreshSchedule
+    {
+        public string Category { get; set; }
+        public int IntervalHours { get; set; }
     }
 
     public class CatalogSelection

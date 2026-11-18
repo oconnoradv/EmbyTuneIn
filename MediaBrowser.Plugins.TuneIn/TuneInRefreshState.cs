@@ -52,6 +52,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public DateTime StartedUtc { get; set; }
         public List<TuneInCategorySnapshot> Categories { get; set; } = new List<TuneInCategorySnapshot>();
         public string DirtyCategory { get; set; }
+        public bool FullChannelImported { get; set; }
     }
 
     internal sealed class TuneInRefreshStore
@@ -191,7 +192,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
             lock (gate)
                 if (strictBudget && pages.Count >= MaxPages && !pages.ContainsKey(key))
-                    throw new InvalidDataException("TuneIn refresh exceeds its 128-page catalogue limit.");
+                    throw new InvalidDataException("TuneIn refresh exceeds its 128-page catalog limit.");
             requested?.Invoke(false);
             XDocument document;
             try { document = await fetch().ConfigureAwait(false); }
@@ -215,7 +216,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 var otherBytes = pages.Where(pair => pair.Key != key).Sum(pair => (long)pair.Value.Bytes.Length);
                 if (pages.Count >= MaxPages && !pages.ContainsKey(key) || otherBytes + bytes.Length > MaxBytes)
-                    throw new InvalidDataException("TuneIn refresh exceeds its 128-page / 8 MiB catalogue limit.");
+                    throw new InvalidDataException("TuneIn refresh exceeds its 128-page / 8 MiB catalog limit.");
                 pages[key] = new TuneInCachedPage { Key = key, Bytes = bytes, SavedUtc = clock() };
             }
             completed?.Invoke();
