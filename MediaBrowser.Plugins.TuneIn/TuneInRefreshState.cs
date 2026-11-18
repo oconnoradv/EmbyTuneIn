@@ -174,7 +174,7 @@ namespace MediaBrowser.Plugins.TuneIn
             this.completed = completed;
             this.received = received;
             this.strictBudget = strictBudget;
-            rateLimitRetriesRemaining = retryRateLimit ? 1 : 0;
+            rateLimitRetriesRemaining = retryRateLimit ? 3 : 0;
             foreach (var page in cached ?? Enumerable.Empty<TuneInCachedPage>())
                 if (Fresh(page)) pages[page.Key] = page;
         }
@@ -214,7 +214,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 catch (TuneInProviderResponseException failure)
                 {
                     received?.Invoke(failure.StatusCode);
-                    if (failure.StatusCode != 429 || Interlocked.Exchange(ref rateLimitRetriesRemaining, 0) == 0)
+                    if (failure.StatusCode != 429 || Interlocked.Decrement(ref rateLimitRetriesRemaining) < 0)
                         throw;
                 }
             }

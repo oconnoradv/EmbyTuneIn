@@ -396,10 +396,113 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             }
 
         [Theory]
-        [InlineData("45", 45, false)]
-        [InlineData("invalid", 30, true)]
-        [InlineData(null, 30, false)]
-        public async Task RefreshRetriesOneRateLimitedPageAfterCooldown(string retryAfter, int seconds, bool persistent)
+        [InlineData("0", 3, 30, 12)]
+        [InlineData("240", 3, 240, 12)]
+        [InlineData("invalid", 30, 30, 30)]
+        public async Task RateLimitsAdaptCataloguePacingWithoutChangingPlaybackInterval(
+            string retryAfter, int interval, int firstCooldown, int learnedInterval)
+        {
+            var now = new DateTime(2026, 11, 18, 8, 0, 0, DateTimeKind.Utc);
+            var start = now;
+            var pacer = new TuneInRequestPacer(() => now, (duration, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                now += duration;
+                return Task.CompletedTask;
+            });
+            Task<HttpResponseInfo> Limited() => Task.FromResult(new HttpResponseInfo
+            {
+                StatusCode = (HttpStatusCode)429,
+                Headers = new Dictionary<string, string> { ["Retry-After"] = retryAfter }
+            });
+            Task<HttpResponseInfo> Success() => Task.FromResult(new HttpResponseInfo { StatusCode = HttpStatusCode.OK });
+            using var first = await pacer.SendAsync(Limited, interval, CancellationToken.None, catalogueRequest: true);
+            using var second = await pacer.SendAsync(Limited, interval, CancellationToken.None, catalogueRequest: true);
+            Assert.Equal(start.AddSeconds(firstCooldown), now);
+            using var recovered = await pacer.SendAsync(Success, interval, CancellationToken.None, catalogueRequest: true);
+            Assert.Equal(start.AddSeconds(firstCooldown + Math.Max(60, firstCooldown)), now);
+            var recoveredAt = now;
+            using var later = await pacer.SendAsync(Success, interval, CancellationToken.None, catalogueRequest: true);
+            Assert.Equal(recoveredAt.AddSeconds(learnedInterval), now);
+            var laterAt = now;
+            using var playback = await pacer.SendAsync(Success, 3, CancellationToken.None);
+            Assert.Equal(laterAt.AddSeconds(learnedInterval), now);
+            var playbackAt = now;
+            using var nextPlayback = await pacer.SendAsync(Success, 3, CancellationToken.None);
+            Assert.Equal(playbackAt.AddSeconds(3), now);
+            using var limitedAgain = await pacer.SendAsync(Limited, interval, CancellationToken.None, catalogueRequest: true);
+            var limitedAt = now;
+            using var resetCooldown = await pacer.SendAsync(Success, interval, CancellationToken.None, catalogueRequest: true);
+            Assert.Equal(limitedAt.AddSeconds(firstCooldown), now);
+        }
+
+        [Fact]
+        public async Task CancellingRateLimitCooldownDoesNotSendAnotherRequest()
+        {
+            var now = DateTime.UtcNow;
+            using var cancelled = new CancellationTokenSource();
+            var pacer = new TuneInRequestPacer(() => now, (_, token) =>
+            {
+                cancelled.Cancel();
+                token.ThrowIfCancellationRequested();
+                return Task.CompletedTask;
+            });
+            using var first = await pacer.SendAsync(() => Task.FromResult(new HttpResponseInfo
+            { StatusCode = (HttpStatusCode)429 }), 3, CancellationToken.None, catalogueRequest: true);
+            var sent = false;
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pacer.SendAsync(() =>
+            {
+                sent = true;
+                return Task.FromResult(new HttpResponseInfo { StatusCode = HttpStatusCode.OK });
+            }, 3, cancelled.Token, catalogueRequest: true));
+            Assert.False(sent);
+        }
+
+        [Fact]
+        public async Task RateLimitRetryBudgetIsSharedAcrossPagesAndDoesNotRetryOtherErrors()
+        {
+            var session = new TuneInCatalogueSession(null, TimeSpan.FromMinutes(15), () => DateTime.UtcNow,
+                retryRateLimit: true);
+            for (var page = 0; page < 3; page++)
+            {
+                var request = new DirectoryRequest();
+                request.Parameters["id"] = "page" + page;
+                var attempts = 0;
+                await session.FetchAsync(request, () =>
+                {
+                    if (++attempts == 1) throw new TuneInProviderResponseException(429);
+                    return Task.FromResult(XDocument.Parse("<opml><body/></opml>"));
+                }, CancellationToken.None);
+                Assert.Equal(2, attempts);
+            }
+            var finalAttempts = 0;
+            var error = await Assert.ThrowsAsync<TuneInProviderResponseException>(() =>
+                session.FetchAsync(new DirectoryRequest(), () =>
+                {
+                    finalAttempts++;
+                    throw new TuneInProviderResponseException(429);
+                }, CancellationToken.None));
+            Assert.Equal(429, error.StatusCode);
+            Assert.Equal(1, finalAttempts);
+            var otherSession = new TuneInCatalogueSession(null, TimeSpan.FromMinutes(15), () => DateTime.UtcNow,
+                retryRateLimit: true);
+            var otherAttempts = 0;
+            var other = await Assert.ThrowsAsync<TuneInProviderResponseException>(() =>
+                otherSession.FetchAsync(new DirectoryRequest(), () =>
+                {
+                    otherAttempts++;
+                    throw new TuneInProviderResponseException(503);
+                }, CancellationToken.None));
+            Assert.Equal(503, other.StatusCode);
+            Assert.Equal(1, otherAttempts);
+        }
+
+        [Theory]
+        [InlineData("45", 45, false, 1)]
+        [InlineData("invalid", 30, true, 4)]
+        [InlineData(null, 30, false, 2)]
+        public async Task RefreshRetriesRateLimitedPageWithinRunBudget(
+            string retryAfter, int seconds, bool persistent, int limitedAttempts)
         {
             var now = new DateTime(2026, 11, 18, 8, 0, 0, DateTimeKind.Utc);
             var pacer = new TuneInRequestPacer(() => now, (delay, token) =>
@@ -422,7 +525,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         sportAttempts.Add(now);
                         return Task.FromResult(new HttpResponseInfo
                         {
-                            StatusCode = sportAttempts.Count == 1 || persistent ? (HttpStatusCode)429 : HttpStatusCode.OK,
+                            StatusCode = sportAttempts.Count <= limitedAttempts ? (HttpStatusCode)429 : HttpStatusCode.OK,
                             Headers = retryAfter == null ? null : new Dictionary<string, string> { ["Retry-After"] = retryAfter }
                         });
                     }, 3, token, catalogueRequest: true);
@@ -447,13 +550,16 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     }, null, clock: () => now);
                 refresh.Start();
                 await WaitUntilIdle(refresh);
-                Assert.Equal(2, sportAttempts.Count);
+                Assert.Equal(persistent ? 4 : limitedAttempts + 1, sportAttempts.Count);
                 Assert.Equal(TimeSpan.FromSeconds(seconds), sportAttempts[1] - sportAttempts[0]);
+                if (limitedAttempts > 1)
+                    Assert.Equal(TimeSpan.FromSeconds(60), sportAttempts[2] - sportAttempts[1]);
                 var status = refresh.Status();
-                Assert.Equal(3, status.RequestsStarted);
+                Assert.Equal(sportAttempts.Count + 1, status.RequestsStarted);
                 Assert.Equal(429, status.LastHttpStatus);
                 if (persistent)
                 {
+                    Assert.Equal(TimeSpan.FromSeconds(120), sportAttempts[3] - sportAttempts[2]);
                     Assert.Equal("Error", status.State);
                     Assert.Contains("rate limit reached", status.Phase);
                     Assert.Null(store.Read());

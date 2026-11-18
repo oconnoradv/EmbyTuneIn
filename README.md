@@ -74,10 +74,16 @@ aren't replayed after downtime. Scheduled and manual runs never overlap.
 In **Catalog browsing**, set the minimum API request interval from 1 to 30
 seconds; the default is 3 seconds, and TuneIn's retry delays are always honored.
 Previously saved intervals above 30 seconds are treated as 30 seconds.
-If TuneIn returns HTTP 429 during discovery, the refresh can retry one request
-after `Retry-After` (or a 30-second cooldown if no valid header is supplied).
-If TuneIn still rate-limits the run, no partial catalog is imported. Wait before
-retrying; a slower API request interval can reduce repeat rate limiting.
+If TuneIn returns HTTP 429 during discovery, the refresh retries the affected page
+with a shared budget of three retries for the entire run. Consecutive rate limits
+impose cooldowns of 30, 60, then 120 seconds; a longer `Retry-After` takes precedence.
+Each catalogue rate limit also doubles the effective catalogue request interval,
+up to 30 seconds. This learned minimum lasts until the server restarts, does not
+change saved settings, and does not increase ordinary playback request intervals.
+Successful catalogue responses reset the consecutive cooldown, not the learned pace.
+Cancellation and the overall 20-minute refresh timeout still apply during waits.
+If the retry budget is exhausted, no partial catalog is imported. Wait before
+retrying; adaptation cannot guarantee acceptance by TuneIn or bypass its limits.
 If the run succeeds after retrying, the status labels the earlier HTTP 429 as
 recovered and confirms that the refresh completed normally.
 

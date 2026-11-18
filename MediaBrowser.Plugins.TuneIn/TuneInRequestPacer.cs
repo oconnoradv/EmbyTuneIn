@@ -15,6 +15,8 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Func<TimeSpan, CancellationToken, Task> delay;
         private DateTime nextRequestUtc;
         private DateTime lastRequestUtc;
+        private int catalogueIntervalSeconds;
+        private int consecutiveCatalogueRateLimits;
 
         internal TuneInRequestPacer(Func<DateTime> clock = null,
             Func<TimeSpan, CancellationToken, Task> delay = null)
@@ -31,7 +33,8 @@ namespace MediaBrowser.Plugins.TuneIn
             try
             {
                 var interval = TimeSpan.FromSeconds(Math.Min(PluginConfiguration.MaxApiRequestIntervalSeconds,
-                    Math.Max(PluginConfiguration.MinApiRequestIntervalSeconds, intervalSeconds)));
+                    Math.Max(PluginConfiguration.MinApiRequestIntervalSeconds,
+                        Math.Max(intervalSeconds, catalogueRequest ? catalogueIntervalSeconds : 0))));
                 var earliest = lastRequestUtc == default(DateTime) ? clock() : lastRequestUtc + interval;
                 if (earliest > nextRequestUtc) nextRequestUtc = earliest;
                 while (true)
@@ -52,12 +55,21 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     var retryAfter = response.Headers?.FirstOrDefault(pair =>
                         pair.Key.Equals("Retry-After", StringComparison.OrdinalIgnoreCase)).Value;
-                    var retryAt = RetryAt(retryAfter, clock());
-                    if (catalogueRequest && (int)response.StatusCode == 429 && !retryAt.HasValue)
-                        retryAt = clock().AddSeconds(30);
+                    var now = clock();
+                    var retryAt = RetryAt(retryAfter, now);
+                    if (catalogueRequest && (int)response.StatusCode == 429)
+                    {
+                        catalogueIntervalSeconds = Math.Min(PluginConfiguration.MaxApiRequestIntervalSeconds,
+                            (int)interval.TotalSeconds * 2);
+                        consecutiveCatalogueRateLimits = Math.Min(3, consecutiveCatalogueRateLimits + 1);
+                        var cooldown = now.AddSeconds(30 * (1 << (consecutiveCatalogueRateLimits - 1)));
+                        if (!retryAt.HasValue || retryAt.Value < cooldown) retryAt = cooldown;
+                    }
                     if (retryAt.HasValue && retryAt.Value > nextRequestUtc)
                         nextRequestUtc = retryAt.Value;
                 }
+                else if (catalogueRequest && (int)response.StatusCode == 200)
+                    consecutiveCatalogueRateLimits = 0;
                 return response;
             }
             finally { owner.Release(); }
