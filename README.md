@@ -105,6 +105,8 @@ Incomplete discovery blocks the import, and unchanged catalogs skip import
 unless the library needs reconciliation.
 The error report identifies the category where discovery stopped, which can
 differ from the requested category when building or repairing the baseline.
+Music discovery follows verified TuneIn genre aliases (such as Metal) for
+station and show pagination, but rejects page links into unrelated genres.
 
 The first refresh after upgrading from an earlier RC1 rebuilds all enabled
 categories, even if you start it from one category. During the Emby import,

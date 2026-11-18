@@ -65,29 +65,35 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData("g3", "c57935")]
-        [InlineData("g19", "c57951")]
-        [InlineData("g22", "c57954")]
-        public async Task LegacyGenrePaginationFollowsItsCanonicalMusicCategory(string genre, string category)
+        [InlineData("g3", "c57935", "26", "s", "nextStations")]
+        [InlineData("g19", "c57951", "26", "s", "nextStations")]
+        [InlineData("g22", "c57954", "26", "s", "nextStations")]
+        [InlineData("g373", "c100002519", "26", "s", "nextStations")]
+        [InlineData("g373", "c100002519", "6", "p", "nextShows")]
+        public async Task LegacyGenrePaginationFollowsItsCanonicalMusicCategory(
+            string genre, string category, string offset, string filter, string key)
         {
-            var url = "https://opml.radiotime.com/Browse.ashx?offset=26&id=" + category + "&filter=s";
-            var request = await BrowseProviderLink(url, musicId: genre);
+            var url = $"https://opml.radiotime.com/Browse.ashx?offset={offset}&id={category}&filter={filter}";
+            var request = await BrowseProviderLink(url, musicId: genre, key: key);
             var query = HttpUtility.ParseQueryString(new Uri(request).Query);
             Assert.Equal(category, query["id"]);
-            Assert.Equal("26", query["offset"]);
+            Assert.Equal(offset, query["offset"]);
+            Assert.Equal(filter, query["filter"]);
         }
 
         [Theory]
-        [InlineData("offset=26&id=c57954&filter=s")]
-        [InlineData("id=c57951&filter=s")]
-        public async Task LegacyGenrePaginationRejectsUnrelatedIdsAndNonPageLinks(string query)
+        [InlineData("g19", "offset=26&id=c57954&filter=s")]
+        [InlineData("g19", "id=c57951&filter=s")]
+        [InlineData("g19", "offset=26&id=c100002519&filter=s")]
+        public async Task LegacyGenrePaginationRejectsUnrelatedIdsAndNonPageLinks(string genre, string query)
         {
             var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
-                BrowseProviderLink("https://opml.radiotime.com/Browse.ashx?" + query, musicId: "g19"));
+                BrowseProviderLink("https://opml.radiotime.com/Browse.ashx?" + query, musicId: genre));
             Assert.Contains("pagination escaped", error.Message);
         }
 
-        private static async Task<string> BrowseProviderLink(string url, bool location = false, string musicId = "c57941")
+        private static async Task<string> BrowseProviderLink(string url, bool location = false,
+            string musicId = "c57941", string key = "nextStations")
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true,
                 EnableLocation = location, EnableMusic = !location };
@@ -99,7 +105,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 {
                     requestedUrl = request.Url;
                     var xml = calls++ == 0
-                        ? "<opml><body><outline type='link' key='nextStations' text='More Stations' url='"
+                        ? $"<opml><body><outline type='link' key='{key}' text='More' url='"
                             + url.Replace("&", "&amp;") + "'/></body></opml>"
                         : "<opml><body/></opml>";
                     return Task.FromResult(XDocument.Parse(xml));

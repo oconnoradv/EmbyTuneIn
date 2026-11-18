@@ -167,6 +167,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 case "g3": return to == "c57935";
                 case "g19": return to == "c57951";
                 case "g22": return to == "c57954";
+                case "g373": return to == "c100002519";
                 default: return false;
             }
         }
