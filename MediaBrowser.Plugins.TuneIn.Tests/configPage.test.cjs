@@ -149,6 +149,53 @@ test('first activation opens and loads Language and Location even when native cl
     }
 });
 
+test('an open selector retries a transient first failure once without a second click', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    const root = app.elements['.selectors'].childNodes[1].childNodes.find(node => node.tagName === 'details');
+    const loading = open(root);
+    app.selectors[0].reject({ status: 503 });
+    await settle();
+    assert.match(root.textContent, /Still loading choices/);
+    assert.equal(root.descendants().some(node => node.textContent === 'Retry' && node.tagName === 'button'), false);
+    assert.equal(open(root), loading);
+    assert.equal(app.selectors.length, 1);
+    const [timer] = app.timers.values();
+    timer.handler();
+    await settle();
+    assert.equal(app.selectors.length, 2);
+    assert.deepEqual(app.selectors[1].options, app.selectors[0].options);
+    app.selectors[1].resolve({ Items: [{ Id: 'r101218', Name: 'North America', CanExpand: true }] });
+    await loading;
+    assert.match(root.textContent, /North America/);
+    assert.equal(app.errors.length, 0);
+});
+
+test('selector retry is bounded and does not send requests after leaving settings', async () => {
+    for (const leave of [false, true]) {
+        const app = harness();
+        const visit = app.instance.onResume();
+        app.reads[0].resolve({});
+        await visit;
+        const root = app.elements['.selectors'].childNodes[0].childNodes.find(node => node.tagName === 'details');
+        const loading = open(root);
+        app.selectors[0].reject({ response: { status: 502 } });
+        await settle();
+        if (leave) app.instance.onPause();
+        const [timer] = app.timers.values();
+        timer.handler();
+        await settle();
+        assert.equal(app.selectors.length, leave ? 1 : 2);
+        if (!leave) app.selectors[1].reject({ status: 502 });
+        await loading;
+        assert.equal(app.errors.length, leave ? 0 : 1);
+        assert.equal(root.descendants().some(node => node.textContent === 'Retry' && node.tagName === 'button'), !leave);
+        if (!leave) assert.match(root.textContent, /HTTP 502/);
+    }
+});
+
 test('native view lifecycle loads labeled upstream settings on each visit', async () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /data-controller="__plugin\/tuneinjs"/);

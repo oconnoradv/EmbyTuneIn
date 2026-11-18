@@ -63,6 +63,15 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         $(container).trigger('create');
     }
 
+    function selectorStatus(error) {
+        if (!error) return undefined;
+        var code = error.status;
+        if (code == null) code = error.statusCode;
+        if (code == null && error.response) code = error.response.status;
+        return (typeof code === 'number' || typeof code === 'string' && /^\d{3}$/.test(code))
+            ? Number(code) : undefined;
+    }
+
     function createSelector(instance, spec) {
         var epoch = instance.viewEpoch;
         var section = document.createElement('section');
@@ -117,9 +126,21 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 if (pending) return pending;
                 status.textContent = 'Loading choices...';
                 results.textContent = '';
-                if (!requests.has(parent)) requests.set(parent, ApiClient.ajax({
-                    type: 'GET', dataType: 'json',
-                    url: ApiClient.getUrl('TuneIn/Selectors', { Category: spec[0], Parent: parent })
+                function fetchChoices() {
+                    return ApiClient.ajax({
+                        type: 'GET', dataType: 'json',
+                        url: ApiClient.getUrl('TuneIn/Selectors', { Category: spec[0], Parent: parent })
+                    });
+                }
+                if (!requests.has(parent)) requests.set(parent, fetchChoices().catch(function (error) {
+                    var code = selectorStatus(error);
+                    if ([0, 408, 500, 502, 503, 504].indexOf(code) === -1 ||
+                        epoch !== instance.viewEpoch || !details.open) throw error;
+                    status.textContent = 'Still loading choices. Trying again...';
+                    return new Promise(function (resolve) { setTimeout(resolve, 1000); }).then(function () {
+                        if (epoch !== instance.viewEpoch || !details.open) throw error;
+                        return fetchChoices();
+                    });
                 }).then(function (data) {
                     if (!data || !Array.isArray(data.Items)) throw new Error('Invalid selector response.');
                     return data;
@@ -151,7 +172,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     requests.delete(parent);
                     if (epoch !== instance.viewEpoch) return;
                     console.error('Unable to load TuneIn selector.', error);
-                    status.textContent = 'Could not load choices from TuneIn.';
+                    var code = selectorStatus(error);
+                    status.textContent = 'Could not load choices from TuneIn' +
+                        (code ? ' (HTTP ' + code + ')' : '') + '. Retry this branch.';
                     var retry = document.createElement('li');
                     retry.appendChild(button('Retry', load));
                     results.appendChild(retry);

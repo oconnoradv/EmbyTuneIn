@@ -25,7 +25,8 @@ row to save it without expanding it. By Language follows TuneIn's group links
 for the selected language; those groups aren't extra language selections.
 Saved paths stay visible and can be individually enabled or removed. Selectors
 do not resolve streams or recursively crawl the catalogue; a failed branch can
-be retried without losing saved choices. An incomplete branch is marked.
+be retried without losing saved choices. An open branch automatically retries
+once after a temporary request failure. An incomplete branch is marked.
 
 Coordinates must be finite decimal latitude and longitude separated by a comma,
 within -90..90 and -180..180 respectively. The server validates and normalizes
