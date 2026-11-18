@@ -2,8 +2,27 @@
     <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
 
         <form class="auto-center">
+            <p class="status" role="status" aria-live="polite"></p>
+            <fieldset class="configurationFields" disabled>
+            <legend>Configured browsing</legend>
+            <p>Enable browsing and choose categories before opening TuneIn. Existing username and coordinates are retained, but do not enable browsing automatically.</p>
+            <label class="emby-checkbox-label">
+                <input type="checkbox" is="emby-checkbox" class="configurationCompleted" />
+                <span>Enable configured browsing after saving</span>
+            </label>
+            <h2>Categories</h2>
+            <div class="categories"></div>
+            <h2>Favorites and Local Radio</h2>
             <div class="inputContainer">
-                <input type="text" is="emby-input" class="txtUsername" label="Your Tune In username:" />
+                <input type="text" is="emby-input" class="txtUsername" label="Your Tune In username:" maxlength="128" />
+            </div>
+            <div class="selectContainer">
+                <select is="emby-select" class="localSource" label="Local Radio source:">
+                    <option value="">Choose a source</option>
+                    <option value="regions">Saved cities and regions</option>
+                    <option value="coordinates">Coordinates</option>
+                </select>
+                <div class="fieldDescription">When Local Radio is enabled, choose one source. Switching sources keeps your saved regions and coordinate text.</div>
             </div>
             <div class="inputContainer">
                 <input type="text" is="emby-input" class="txtLatLon" label="Your LatLon:" />
@@ -11,10 +30,13 @@
                     Your LatLon can be found at <a is="emby-linkbutton" class="button-link" target="_blank" href="https://www.latlong.net">https://www.latlong.net</a>.
                 </div>
             </div>
-
+            <h2>Saved selections</h2>
+            <p>Music, By Language, and By Location require enabled saved selections. Open a selector to see its choices, then expand a branch or add a selection.</p>
+            <div class="selectors"></div>
+            </fieldset>
             <br />
             <div>
-                <button is="emby-button" type="submit" class="raised button-submit block"><span>Save</span></button>
+                <button is="emby-button" type="submit" class="raised button-submit block" disabled><span>Save</span></button>
             </div>
         </form>
     </div>

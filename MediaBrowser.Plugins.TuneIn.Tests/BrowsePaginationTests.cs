@@ -1,17 +1,11 @@
 using System;
-using System.IO;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
-using MediaBrowser.Common;
-using MediaBrowser.Common.Configuration;
-using MediaBrowser.Common.Net;
 using MediaBrowser.Controller.Channels;
-using MediaBrowser.Model.Logging;
-using MediaBrowser.Model.Serialization;
 using MediaBrowser.Plugins.TuneIn.Configuration;
-using Moq;
+using System.Xml.Linq;
+using System.IO;
 using Xunit;
 
 namespace MediaBrowser.Plugins.TuneIn.Tests
@@ -29,7 +23,6 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var url = scheme + "://opml.radiotime.com/Browse.ashx?offset=26&id=c57941&filter=" + filter;
             var request = await BrowseProviderLink(url);
 
-            Assert.Equal(url.Substring(0, url.Length - 1) + "%23", request);
             Assert.Equal("", new Uri(request).Fragment);
             Assert.Equal(HttpUtility.UrlDecode(filter),
                 HttpUtility.ParseQueryString(new Uri(request).Query)["filter"]);
@@ -40,53 +33,60 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("https://opml.radiotime.com/Browse.ashx?filter=p%3A~%23&id=c57941&offset=26")]
         [InlineData("http://opml.radiotime.com/Browse.ashx?offset=26&id=c57941&filter=s:~A")]
         [InlineData("http://opml.radiotime.com/Browse.ashx?offset=26&id=c57941&filter=s:~%C3%89")]
+        public async Task ValidEncodedFiltersArePreserved(string url)
+        {
+            Assert.Equal(HttpUtility.ParseQueryString(new Uri(url).Query)["filter"],
+                HttpUtility.ParseQueryString(new Uri(await BrowseProviderLink(url)).Query)["filter"]);
+        }
+
+        [Theory]
         [InlineData("http://opml.radiotime.com/Browse.ashx?offset=26&id=c57941&filter=s:~#section")]
         [InlineData("http://opml.radiotime.com/Browse.ashx?filter=s:~&id=c57941#")]
         [InlineData("http://opml.radiotime.com/Browse.ashx?filter=s:~&filter=s:~#")]
         [InlineData("http://example.com/Browse.ashx?filter=s:~#")]
         [InlineData("http://opml.radiotime.com/Tune.ashx?filter=s:~#")]
-        public async Task OtherProviderLinksAreUnchanged(string url)
+        [InlineData("http://opml.radiotime.com/Browse.ashx?offset=26&id=c57941&filter=s:~#:country")]
+        [InlineData("http://opml.radiotime.com/Browse.ashx?offset=26&id=r100016&filter=s:~#:country&c=music")]
+        public void UnusableLinksAreNotFollowed(string url)
         {
-            Assert.Equal(url, await BrowseProviderLink(url));
+            Assert.Throws<InvalidDataException>(() => DirectoryRequest.ParseLink(url));
         }
 
-        private static async Task<string> BrowseProviderLink(string url)
+        [Theory]
+        [InlineData("s:~#:country", "s:~#:country")]
+        [InlineData("s:~#", "s:~#")]
+        [InlineData("s:~A:country", "s:~A:country")]
+        [InlineData("s:~%23%3Acountry", "s:~#:country")]
+        public async Task LocationFollowsProviderNameIndex(string filter, string expected)
         {
-            var paths = new Mock<IApplicationPaths>();
-            paths.SetupGet(p => p.PluginConfigurationsPath)
-                .Returns(Path.Combine(Path.GetTempPath(), "tunein-tests-" + Guid.NewGuid().ToString("N")));
-            var serializer = new Mock<IXmlSerializer>();
-            serializer.Setup(s => s.DeserializeFromFile(typeof(PluginConfiguration), It.IsAny<string>()))
-                .Returns(new PluginConfiguration());
-            var plugin = new Plugin(paths.Object, serializer.Object);
-            plugin.SetAttributes(typeof(Plugin).Assembly.Location, paths.Object.PluginConfigurationsPath,
-                new Version(1, 2, 8, 0));
+            var request = await BrowseProviderLink("https://opml.radiotime.com/Browse.ashx?offset=26&id=r100016&filter=" + filter, true);
+            Assert.Equal(expected, HttpUtility.ParseQueryString(new Uri(request).Query)["filter"]);
+            Assert.Equal("", new Uri(request).Fragment);
+        }
 
-            var logger = new Mock<ILogManager>();
-            logger.Setup(m => m.GetLogger(It.IsAny<string>())).Returns(Mock.Of<ILogger>());
-            var appHost = new Mock<IApplicationHost>();
-            appHost.SetupGet(h => h.SystemId).Returns("test");
-            var client = new Mock<IHttpClient>();
+        private static async Task<string> BrowseProviderLink(string url, bool location = false)
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true,
+                EnableLocation = location, EnableMusic = !location };
+            if (location) config.Locations.Add(new CatalogSelection { Id = "r100016", Enabled = true });
+            else config.Music.Add(new CatalogSelection { Id = "c57941", Enabled = true });
             var calls = 0;
             string requestedUrl = null;
-            client.Setup(c => c.SendAsync(It.IsAny<HttpRequestOptions>(), "GET"))
-                .Returns((HttpRequestOptions options, string method) =>
+            var directory = new TuneInDirectory(() => config, (request, token) =>
                 {
-                    requestedUrl = options.Url;
+                    requestedUrl = request.Url;
                     var xml = calls++ == 0
-                        ? "<opml><body><outline type='link' text='More Stations' url='"
+                        ? "<opml><body><outline type='link' key='nextStations' text='More Stations' url='"
                             + url.Replace("&", "&amp;") + "'/></body></opml>"
                         : "<opml><body/></opml>";
-                    return Task.FromResult(new HttpResponseInfo
-                    {
-                        Content = new MemoryStream(Encoding.UTF8.GetBytes(xml))
-                    });
+                    return Task.FromResult(XDocument.Parse(xml));
                 });
 
-            var channel = new TuneInChannel(client.Object, logger.Object, appHost.Object);
+            var channel = new TuneInChannel(directory);
+            var snapshot = directory.Snapshot();
             var page = await channel.GetChannelItems(new InternalChannelItemQuery
             {
-                FolderId = "subcat_http://opml.radiotime.com/Browse.ashx?id=c57941"
+                FolderId = directory.Register(snapshot, Assert.Single(TuneInBrowsing.StartingEntries(snapshot, location ? "location" : "music")))
             }, CancellationToken.None);
             var next = Assert.Single(page.Items);
             await channel.GetChannelItems(new InternalChannelItemQuery
