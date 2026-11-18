@@ -35,6 +35,22 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         private static readonly CancellationToken Token = CancellationToken.None;
 
         [Fact]
+        public void SettingsAreRegisteredInAdvancedAndRemainTheMainPluginPage()
+        {
+            var plugin = new Plugin(Mock.Of<MediaBrowser.Common.Configuration.IApplicationPaths>(),
+                Mock.Of<MediaBrowser.Model.Serialization.IXmlSerializer>());
+            var pages = plugin.GetPages().ToList();
+            var settings = Assert.Single(pages, page => page.EnableInMainMenu);
+            Assert.Equal("tunein", settings.Name);
+            Assert.Equal("TuneIn", settings.DisplayName);
+            Assert.Equal("advanced", settings.MenuSection);
+            Assert.True(settings.IsMainConfigPage);
+            Assert.False(settings.EnableInUserMenu);
+            Assert.EndsWith(".Configuration.configPage.html", settings.EmbeddedResourcePath);
+            Assert.False(pages.Single(page => page.Name == "tuneinjs").EnableInMainMenu);
+        }
+
+        [Fact]
         public async Task LegacyConfigurationAndChannelRootNeverCrawlTheCatalogue()
         {
             var config = new PluginConfiguration { Username = "legacy", LatLon = "10,20", EnableTalk = true };

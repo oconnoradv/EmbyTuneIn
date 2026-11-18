@@ -29,7 +29,13 @@ namespace MediaBrowser.Plugins.TuneIn
                 new PluginPageInfo
                 {
                     Name = "tunein",
-                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html"
+                    DisplayName = "TuneIn",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html",
+                    IsMainConfigPage = true,
+                    EnableInMainMenu = true,
+                    EnableInUserMenu = false,
+                    MenuSection = "advanced",
+                    MenuIcon = "radio"
                 },
                 new PluginPageInfo
                 {

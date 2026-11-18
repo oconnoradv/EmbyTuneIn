@@ -6,8 +6,9 @@ crawl the TuneIn catalogue.
 
 ## Configure browsing
 
-As an Emby administrator, open the TuneIn plugin settings, enable **configured
-browsing after saving**, choose the categories to expose, and save.
+As an Emby administrator, open **Advanced → TuneIn** (also available from
+**Plugins → TuneIn → Settings**), enable **configured browsing after saving**,
+choose the categories to expose, and save.
 
 - **Music**, **By Language**, and **By Location** require at least one enabled
   saved selection.
@@ -18,8 +19,9 @@ browsing after saving**, choose the categories to expose, and save.
 - **Talk**, **Sports**, and **Podcasts** have independent switches.
 - **My Favorites** requires a TuneIn username.
 
-Open a selector and expand its branches to load choices on demand; use **Add**
-to save a choice without expanding it. By Language follows TuneIn's group links
+Open a selector and expand its branches to load choices on the first click.
+Choices appear in a fixed-height scrolling panel; use **Add** on the right of a
+row to save it without expanding it. By Language follows TuneIn's group links
 for the selected language; those groups aren't extra language selections.
 Saved paths stay visible and can be individually enabled or removed. Selectors
 do not resolve streams or recursively crawl the catalogue; a failed branch can

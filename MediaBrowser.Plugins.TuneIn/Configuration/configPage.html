@@ -1,4 +1,58 @@
 ﻿<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/tuneinjs" data-title="TuneIn">
+    <style>
+        .selectors .tuneInSelectorWindow {
+            box-sizing: border-box;
+            height: 24rem;
+            max-height: 60vh;
+            width: 100%;
+            overflow-y: auto;
+            overscroll-behavior-y: contain;
+            padding: .5em;
+            border: 1px solid currentColor;
+        }
+        .selectors .tuneInSelectorResults {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+        }
+        .selectors .tuneInSelectorBranch {
+            padding-inline-start: 1em;
+        }
+        .selectors .tuneInSelectorStatus {
+            margin: .5em 0;
+        }
+        .selectors .tuneInSelectorStatus:empty {
+            display: none;
+        }
+        .selectors .tuneInSelectorRow {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: start;
+            position: relative;
+            min-height: 3em;
+        }
+        .selectors .tuneInSelectorRow > details {
+            grid-area: 1 / 1 / auto / -1;
+            min-width: 0;
+        }
+        .selectors .tuneInSelectorRow > details > summary {
+            margin-inline-end: 5.5em;
+        }
+        .selectors .tuneInSelectorRow > span,
+        .selectors summary {
+            padding: .75em .25em;
+            overflow-wrap: anywhere;
+        }
+        .selectors summary {
+            cursor: pointer;
+        }
+        .selectors .tuneInSelectorAdd {
+            grid-area: 1 / 2;
+            justify-self: end;
+            z-index: 1;
+            margin: .25em 0;
+        }
+    </style>
     <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
 
         <form class="auto-center">

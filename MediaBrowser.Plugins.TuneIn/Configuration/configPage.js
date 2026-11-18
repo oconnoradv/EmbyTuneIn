@@ -96,11 +96,19 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             summary.textContent = caption;
             details.appendChild(summary);
             var content = document.createElement('div');
+            content.className = parent ? 'tuneInSelectorBranch' : 'tuneInSelectorWindow';
+            if (!parent) {
+                content.setAttribute('role', 'region');
+                content.setAttribute('aria-label', spec[2] + ' choices');
+                content.setAttribute('tabindex', '0');
+            }
             details.appendChild(content);
             var status = document.createElement('p');
+            status.className = 'tuneInSelectorStatus';
             status.setAttribute('role', 'status');
             content.appendChild(status);
             var results = document.createElement('ul');
+            results.className = 'tuneInSelectorResults';
             content.appendChild(results);
             var loaded = false;
             var pending;
@@ -122,6 +130,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     status.textContent = data.Warning || (data.Items.length ? '' : 'No further choices in this branch.');
                     data.Items.forEach(function (item) {
                         var row = document.createElement('li');
+                        row.className = 'tuneInSelectorRow';
                         var name = item.Name || item.Id;
                         if (item.CanExpand) row.appendChild(branch(item.Id, name));
                         else {
@@ -132,6 +141,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                         if (item.CanSelect) {
                             var select = button('Add', function () { add(item, status); });
                             select.setAttribute('aria-label', 'Add ' + (item.Path || name));
+                            select.className += ' tuneInSelectorAdd';
                             row.appendChild(select);
                         }
                         results.appendChild(row);
@@ -149,6 +159,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 }).then(function () { pending = null; });
                 return pending;
             }
+            summary.addEventListener('click', function (event) {
+                event.preventDefault();
+                if (epoch !== instance.viewEpoch || instance.saving || instance.refreshBusy) return;
+                details.open = !details.open;
+                if (details.open) return load();
+            });
             details.addEventListener('toggle', function () {
                 if (details.open) return load();
             });

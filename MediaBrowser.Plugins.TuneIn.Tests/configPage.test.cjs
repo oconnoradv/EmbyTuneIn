@@ -111,6 +111,44 @@ function open(details) {
     return details.handlers.toggle();
 }
 
+test('first activation opens and loads Language and Location even when native click defaults are cancelled', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    for (const index of [0, 1]) {
+        const section = app.elements['.selectors'].childNodes[index];
+        const root = section.childNodes.find(node => node.tagName === 'details');
+        const summary = root.childNodes[0];
+        let prevented = false;
+        const loading = summary.handlers.click({ preventDefault() { prevented = true; } });
+        assert.equal(prevented, true);
+        assert.equal(root.open, true);
+        const request = app.selectors.at(-1);
+        assert.equal(request.options.url.params.Category, index === 0 ? 'language' : 'location');
+        request.resolve({ Items: [{ Id: index === 0 ? 'l122' : 'r101218', Name: 'Choice',
+            Path: 'Choice', CanExpand: true, CanSelect: true }] });
+        await loading;
+        const row = root.descendants().find(node => node.tagName === 'li');
+        assert.equal(row.className, 'tuneInSelectorRow');
+        assert.equal(row.childNodes[0].tagName, 'details');
+        const add = row.childNodes[1];
+        assert.match(add.className, /tuneInSelectorAdd/);
+        add.handlers.click();
+        assert.equal(row.childNodes[0].open, undefined);
+        assert.equal(app.selectors.length, index + 1);
+        const window = root.childNodes[1];
+        assert.equal(window.className, 'tuneInSelectorWindow');
+        assert.equal(window.attributes.role, 'region');
+        assert.equal(window.attributes.tabindex, '0');
+        summary.handlers.click({ preventDefault() {} });
+        assert.equal(root.open, false);
+        summary.handlers.click({ preventDefault() {} });
+        assert.equal(root.open, true);
+        assert.equal(app.selectors.length, index + 1);
+    }
+});
+
 test('native view lifecycle loads labeled upstream settings on each visit', async () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /data-controller="__plugin\/tuneinjs"/);
