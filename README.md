@@ -91,6 +91,10 @@ the plugin sends Emby the **complete category listing**, with stable IDs for
 unchanged stations. Emby's import API does not support station-by-station
 deltas. Incomplete discovery never triggers an import for that category.
 
+Category folders use the bundled TuneIn artwork. Emby may keep older folder
+images after an upgrade; explicitly refresh the affected category to update
+existing folder artwork, even when its catalogue is unchanged.
+
 Emby's import isn't transactional. If cancellation, failure, or restart
 interrupts an import, some metadata may already have changed. Refresh that
 category or refresh all to reconcile it before refreshing a different

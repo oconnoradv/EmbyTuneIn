@@ -55,6 +55,7 @@ namespace MediaBrowser.Plugins.TuneIn
             Task<ChannelItemResult>> getItems;
         private readonly Func<TuneInChannel, TuneInStagedImport, string, CancellationToken, Task> import;
         private readonly ILogger logger;
+        private readonly Action<TuneInChannel, string, CancellationToken> updateArtwork;
         private readonly Func<DateTime> clock;
         private readonly TimeSpan? timeoutOverride;
         private TuneInRefreshStatus status = new TuneInRefreshStatus();
@@ -83,7 +84,8 @@ namespace MediaBrowser.Plugins.TuneIn
             Func<TuneInChannel> getChannel,
             Func<TuneInChannel, string, TuneInCatalogueSession, bool, CancellationToken, Task<ChannelItemResult>> getItems,
             Func<TuneInChannel, TuneInStagedImport, string, CancellationToken, Task> import,
-            ILogger logger, Func<DateTime> clock = null, TimeSpan? timeoutOverride = null)
+            ILogger logger, Func<DateTime> clock = null, TimeSpan? timeoutOverride = null,
+            Action<TuneInChannel, string, CancellationToken> updateArtwork = null)
         {
             this.directory = directory ?? throw new ArgumentNullException(nameof(directory));
             this.store = store ?? throw new ArgumentNullException(nameof(store));
@@ -93,6 +95,7 @@ namespace MediaBrowser.Plugins.TuneIn
             this.logger = logger;
             this.clock = clock ?? (() => DateTime.UtcNow);
             this.timeoutOverride = timeoutOverride;
+            this.updateArtwork = updateArtwork;
         }
 
         internal TuneInRefreshStatus Status()
@@ -361,6 +364,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         var mustReconcile = category == dirtyAtStart;
                         if (!mustReconcile && previous != null && previous.Fingerprint == categorySnapshot.Fingerprint)
                         {
+                            directory.CheckCurrent(snapshot, linked.Token);
+                            updateArtwork?.Invoke(channel, root.Id, linked.Token);
                             completed.Add(category);
                             Update(() =>
                             {
@@ -387,6 +392,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         await import(channel, staged, root.Id, linked.Token).ConfigureAwait(false);
                         directory.CheckCurrent(snapshot, linked.Token);
                         linked.Token.ThrowIfCancellationRequested();
+                        updateArtwork?.Invoke(channel, root.Id, linked.Token);
+                        directory.CheckCurrent(snapshot, linked.Token);
 
                         checkpoint.Categories.RemoveAll(value => value.Category == category);
                         checkpoint.Categories.Add(categorySnapshot);

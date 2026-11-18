@@ -129,7 +129,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     (channel, staged, folder, token) =>
                         channel.ImportAsync(staged,
                             () => manager.RefreshChannelContent(channel, 8, folder, token)),
-                    logManager.GetLogger(typeof(TuneInRefreshService).Name));
+                    logManager.GetLogger(typeof(TuneInRefreshService).Name),
+                    updateArtwork: (channel, folder, token) => channel.UpdateCategoryArtwork(folder, token));
                 return shared;
             }
         }

@@ -6,8 +6,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Common;
 using MediaBrowser.Common.Net;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Channels;
 using MediaBrowser.Controller.Drawing;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Channels;
 using MediaBrowser.Model.Drawing;
@@ -22,21 +25,28 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly IHttpClient _httpClient;
         private readonly ILogger _logger;
         private readonly TuneInDirectory directory;
+        private readonly IServerApplicationHost serverHost;
+        private readonly ILibraryManager library;
         private readonly AsyncLocal<TuneInStagedImport> stagedImport = new AsyncLocal<TuneInStagedImport>();
         private readonly object catalogueGate = new object();
         private string browseKey;
         private TuneInCatalogueSession browseCache;
 
-        public TuneInChannel(IHttpClient httpClient, ILogManager logManager, IApplicationHost appHost)
-            : this(TuneInRequests.Directory(httpClient, appHost), httpClient, logManager.GetLogger(typeof(TuneInChannel).Name))
-        {
-        }
+        public TuneInChannel(IHttpClient httpClient, ILogManager logManager, IApplicationHost appHost,
+            IServerApplicationHost serverHost, ILibraryManager libraryManager)
+            : this(TuneInRequests.Directory(httpClient, appHost), httpClient,
+                logManager.GetLogger(typeof(TuneInChannel).Name),
+                serverHost ?? throw new ArgumentNullException(nameof(serverHost)),
+                libraryManager ?? throw new ArgumentNullException(nameof(libraryManager))) { }
 
-        internal TuneInChannel(TuneInDirectory directory, IHttpClient httpClient = null, ILogger logger = null)
+        internal TuneInChannel(TuneInDirectory directory, IHttpClient httpClient = null, ILogger logger = null,
+            IServerApplicationHost serverHost = null, ILibraryManager library = null)
         {
             this.directory = directory;
             _httpClient = httpClient;
             _logger = logger;
+            this.serverHost = serverHost;
+            this.library = library;
         }
 
         public string DataVersion => "47";
@@ -88,6 +98,61 @@ namespace MediaBrowser.Plugins.TuneIn
             }
             finally { stagedImport.Value = previous; }
         }
+
+        internal void UpdateCategoryArtwork(string folderId, CancellationToken token)
+        {
+            if (serverHost == null || library == null) throw new InvalidOperationException("TuneIn artwork services are unavailable.");
+            var snapshot = directory.Snapshot();
+            var rootEntry = directory.Resolve(snapshot, folderId);
+            if (rootEntry.StationId != null || rootEntry.SelectionId != null || rootEntry.Request != null)
+                throw new InvalidOperationException("TuneIn artwork update requires a category root.");
+            var roots = library.GetItemList(new InternalItemsQuery { ExternalId = folderId, IsFolder = true }, token);
+            if (roots.Length > 1) throw new InvalidOperationException("TuneIn category folder is ambiguous.");
+            if (roots.Length == 0) return;
+            Replace(roots[0]);
+            for (var offset = 0; ; offset += 100)
+            {
+                directory.CheckCurrent(snapshot, token);
+                var folders = library.GetItemList(new InternalItemsQuery
+                {
+                    ParentIds = new[] { roots[0].InternalId }, Recursive = true, IsFolder = true,
+                    StartIndex = offset, Limit = 100
+                }, token);
+                foreach (var folder in folders) Replace(folder);
+                if (folders.Length < 100) break;
+            }
+
+            void Replace(BaseItem folder)
+            {
+                directory.CheckCurrent(snapshot, token);
+                if (!(folder is Folder)) return;
+                NavigationEntry entry;
+                try { entry = directory.Resolve(snapshot, folder.ExternalId); }
+                catch (Exception error) when (error is ArgumentException || error is InvalidOperationException || error is InvalidDataException)
+                {
+                    _logger?.Warn("Skipped stale or invalid TuneIn folder artwork ({0}).", error.GetType().Name);
+                    return;
+                }
+                if (entry.Category != rootEntry.Category || entry.StationId != null) return;
+                var version = TuneInCategoryArtwork.Revision + ":" + entry.Category;
+                var previousVersion = folder.GetProviderId("TuneInCategoryArtwork");
+                if (previousVersion == version && folder.HasImage(ImageType.Primary, 0)) return;
+                folder.SetImage(new ItemImageInfo
+                {
+                    Path = CategoryArtworkUrl(entry.Category), Type = ImageType.Primary, DateModified = DateTimeOffset.UtcNow
+                }, 0);
+                folder.SetProviderId("TuneInCategoryArtwork", version);
+                try { library.UpdateItem(folder, library.GetItemById(folder.ParentId), ItemUpdateType.ImageUpdate); }
+                catch
+                {
+                    folder.SetProviderId("TuneInCategoryArtwork", previousVersion ?? "");
+                    throw;
+                }
+            }
+        }
+
+        private string CategoryArtworkUrl(string category) =>
+            TuneInCategoryArtwork.Url(serverHost.GetLocalApiUrl(System.Net.IPAddress.Loopback), category);
 
         private Task<HttpResponseInfo> SendRequest(HttpRequestOptions options, string method) =>
             TuneInRequests.SendAsync(_httpClient, options, method);
@@ -274,23 +339,10 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public String GetDefaultImages(String name)
         {
-            if (name == "Local Radio")
-                return "https://raw.githubusercontent.com/snazy2000/MediaBrowser.Channels/master/MediaBrowser.Plugins.TuneIn/Images/tunein-localradio.png";
-            if (name == "By Language")
-                return "https://raw.githubusercontent.com/snazy2000/MediaBrowser.Channels/master/MediaBrowser.Plugins.TuneIn/Images/tunein-bylanguage.png";
-            if (name == "By Location")
-                return "https://raw.githubusercontent.com/snazy2000/MediaBrowser.Channels/master/MediaBrowser.Plugins.TuneIn/Images/tunein-bylocation.png";
-            if (name == "Music")
-                return "https://raw.githubusercontent.com/snazy2000/MediaBrowser.Channels/master/MediaBrowser.Plugins.TuneIn/Images/tunein-music.png";
-            if (name == "My Favorites")
-                return "https://raw.githubusercontent.com/snazy2000/MediaBrowser.Channels/master/MediaBrowser.Plugins.TuneIn/Images/tunein-myfavs.png";
-            if (name == "Podcasts")
-                return "https://raw.githubusercontent.com/snazy2000/MediaBrowser.Channels/master/MediaBrowser.Plugins.TuneIn/Images/tunein-podcasts.png";
-            if (name == "Sports")
-                return "https://raw.githubusercontent.com/snazy2000/MediaBrowser.Channels/master/MediaBrowser.Plugins.TuneIn/Images/tunein-sports.png";
-            if (name == "Talk")
-                return "https://raw.githubusercontent.com/snazy2000/MediaBrowser.Channels/master/MediaBrowser.Plugins.TuneIn/Images/tunein-talk.png";
-            return "";
+            var category = new[] { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" }
+                .FirstOrDefault(value => TuneInBrowsing.CategoryName(value) == name);
+            if (category == null || serverHost == null) return "";
+            return CategoryArtworkUrl(category);
         }
     }
 }

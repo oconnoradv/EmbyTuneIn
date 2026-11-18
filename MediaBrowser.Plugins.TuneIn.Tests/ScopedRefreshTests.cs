@@ -22,6 +22,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
             var calls = 0;
             var imports = 0;
+            var artworkUpdates = 0;
             var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var directory = new TuneInDirectory(() => config, async (_, token) =>
@@ -45,7 +46,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         staged.Read(folder, token);
                         staged.Verify();
                         return Task.CompletedTask;
-                    }, null, timeoutOverride: TimeSpan.FromSeconds(5));
+                    }, null, timeoutOverride: TimeSpan.FromSeconds(5),
+                    updateArtwork: (_, __, ___) => Interlocked.Increment(ref artworkUpdates));
                 var snapshot = directory.Snapshot();
                 var folderId = directory.Register(snapshot, new NavigationEntry { Category = "talk", Name = "Talk" });
 
@@ -65,6 +67,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal("Completed", refresh.Status().State);
                 Assert.Equal(1, refresh.Status().CategoriesSkipped);
                 Assert.Equal(1, imports);
+                Assert.Equal(2, artworkUpdates);
                 Assert.False(refresh.TryGetCommitted(snapshot, folderId, out _));
             }
             finally { File.Delete(path); }
