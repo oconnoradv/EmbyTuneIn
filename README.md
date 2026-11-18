@@ -78,6 +78,8 @@ If TuneIn returns HTTP 429 during discovery, the refresh can retry one request
 after `Retry-After` (or a 30-second cooldown if no valid header is supplied).
 If TuneIn still rate-limits the run, no partial catalog is imported. Wait before
 retrying; a slower API request interval can reduce repeat rate limiting.
+If the run succeeds after retrying, the status labels the earlier HTTP 429 as
+recovered and confirms that the refresh completed normally.
 
 The **Retrieve refresh log** button becomes available when the latest Control
 Panel refresh fails. It retrieves a bounded error report for that run, not the

@@ -764,6 +764,26 @@ test('settings lock protects pending edits and saves without blocking catalog re
     assert.equal(app.writes[0].config.Username, 'unsaved');
 });
 
+for (const state of ['Completed', 'Running', 'Error', 'Cancelled', 'TimedOut']) {
+    test(`HTTP 429 is marked recovered only for a completed refresh (${state})`, async () => {
+        const app = harness(true);
+        const visit = app.instance.onResume();
+        app.reads[0].resolve({});
+        app.refresh[0].resolve({
+            State: state, Phase: state === 'Running' ? 'Discovering' : state,
+            Busy: state === 'Running', LastHttpStatus: 429
+        });
+        await visit;
+        const text = app.elements['.refreshStatus'].textContent;
+        assert.match(text, /TuneIn returned HTTP 429/);
+        if (state === 'Completed')
+            assert.match(text, /earlier \(recovered; refresh completed normally\)/);
+        else
+            assert.doesNotMatch(text, /recovered|completed normally/);
+        app.instance.onPause();
+    });
+}
+
 test('a failed lock write leaves edits blocked until the server confirms the state', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();

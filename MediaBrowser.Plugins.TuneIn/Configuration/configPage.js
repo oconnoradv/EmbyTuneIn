@@ -287,7 +287,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             description += ' (requested: ' + refreshName(status, status.ActiveRequest) + ')';
         if (status.CategoriesTotal) description += '. ' + status.CategoriesCompleted + ' of ' + status.CategoriesTotal + ' categories checked';
         if (status.CategoriesSkipped) description += '; ' + status.CategoriesSkipped + ' unchanged';
-        if (status.LastHttpStatus) description += '. TuneIn returned HTTP ' + status.LastHttpStatus;
+        if (status.LastHttpStatus) {
+            description += '. TuneIn returned HTTP ' + status.LastHttpStatus;
+            if (status.LastHttpStatus === 429 && status.State === 'Completed')
+                description += ' earlier (recovered; refresh completed normally)';
+        }
         else if (status.ErrorCode) description += '. ' + status.ErrorCode;
         if (status.ImportMayHavePartiallyApplied && status.Phase !== 'Importing')
             description += '. An interrupted import may have changed Emby metadata.';
