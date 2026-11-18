@@ -31,7 +31,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     outbound.Parameters["serial"] = host.SystemId;
                     using (var response = await SendAsync(client, new HttpRequestOptions
                     { Url = outbound.Url, CancellationToken = token, ThrowOnErrorResponse = false }, "GET",
-                        Plugin.Instance.Configuration.ApiRequestIntervalSeconds).ConfigureAwait(false))
+                        Plugin.Instance.Configuration.ApiRequestIntervalSeconds, catalogueRequest: true).ConfigureAwait(false))
                     using (var memory = new MemoryStream())
                     {
                         if ((int)response.StatusCode != 200)
@@ -49,10 +49,11 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         internal static Task<HttpResponseInfo> SendAsync(IHttpClient client, HttpRequestOptions options, string method,
-            int intervalSeconds)
+            int intervalSeconds, bool catalogueRequest = false)
         {
             options.BufferContent = true;
-            return Pacer.SendAsync(() => client.SendAsync(options, method), intervalSeconds, options.CancellationToken);
+            return Pacer.SendAsync(() => client.SendAsync(options, method), intervalSeconds,
+                options.CancellationToken, catalogueRequest);
         }
     }
 }

@@ -74,6 +74,10 @@ aren't replayed after downtime. Scheduled and manual runs never overlap.
 In **Catalog browsing**, set the minimum API request interval from 1 to 30
 seconds; the default is 3 seconds, and TuneIn's retry delays are always honored.
 Previously saved intervals above 30 seconds are treated as 30 seconds.
+If TuneIn returns HTTP 429 during discovery, the refresh can retry one request
+after `Retry-After` (or a 30-second cooldown if no valid header is supplied).
+If TuneIn still rate-limits the run, no partial catalog is imported. Wait before
+retrying; a slower API request interval can reduce repeat rate limiting.
 
 The **Retrieve refresh log** button becomes available when the latest Control
 Panel refresh fails. It retrieves a bounded error report for that run, not the

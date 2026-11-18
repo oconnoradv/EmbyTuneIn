@@ -24,7 +24,7 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         internal async Task<HttpResponseInfo> SendAsync(Func<Task<HttpResponseInfo>> send,
-            int intervalSeconds, CancellationToken token)
+            int intervalSeconds, CancellationToken token, bool catalogueRequest = false)
         {
             if (send == null) throw new ArgumentNullException(nameof(send));
             await owner.WaitAsync(token).ConfigureAwait(false);
@@ -52,6 +52,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     var retryAfter = response.Headers?.FirstOrDefault(pair =>
                         pair.Key.Equals("Retry-After", StringComparison.OrdinalIgnoreCase)).Value;
                     var retryAt = RetryAt(retryAfter, clock());
+                    if (catalogueRequest && (int)response.StatusCode == 429 && !retryAt.HasValue)
+                        retryAt = clock().AddSeconds(30);
                     if (retryAt.HasValue && retryAt.Value > nextRequestUtc)
                         nextRequestUtc = retryAt.Value;
                 }
@@ -66,8 +68,8 @@ namespace MediaBrowser.Plugins.TuneIn
             if (long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds))
             {
                 if (seconds < 0) return null;
-                var maximum = (DateTime.MaxValue - now).TotalSeconds;
-                return now.AddSeconds(Math.Min(seconds, maximum));
+                var maximum = (DateTime.MaxValue - now).Ticks / TimeSpan.TicksPerSecond;
+                return seconds > maximum ? DateTime.MaxValue : now.AddTicks(seconds * TimeSpan.TicksPerSecond);
             }
             if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var date))

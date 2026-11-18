@@ -156,10 +156,11 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Action completed;
         private readonly Action<int> received;
         private readonly bool strictBudget;
+        private int rateLimitRetriesRemaining;
 
         internal TuneInCatalogueSession(IEnumerable<TuneInCachedPage> cached, TimeSpan lifetime, Func<DateTime> clock,
             Action<bool> requested = null, Action completed = null, Action<int> received = null,
-            bool strictBudget = true)
+            bool strictBudget = true, bool retryRateLimit = false)
         {
             this.clock = clock ?? (() => DateTime.UtcNow);
             this.lifetime = lifetime;
@@ -167,6 +168,7 @@ namespace MediaBrowser.Plugins.TuneIn
             this.completed = completed;
             this.received = received;
             this.strictBudget = strictBudget;
+            rateLimitRetriesRemaining = retryRateLimit ? 1 : 0;
             foreach (var page in cached ?? Enumerable.Empty<TuneInCachedPage>())
                 if (Fresh(page)) pages[page.Key] = page;
         }
@@ -193,13 +195,22 @@ namespace MediaBrowser.Plugins.TuneIn
             lock (gate)
                 if (strictBudget && pages.Count >= MaxPages && !pages.ContainsKey(key))
                     throw new InvalidDataException("TuneIn refresh exceeds its 128-page catalog limit.");
-            requested?.Invoke(false);
             XDocument document;
-            try { document = await fetch().ConfigureAwait(false); }
-            catch (TuneInProviderResponseException failure)
+            while (true)
             {
-                received?.Invoke(failure.StatusCode);
-                throw;
+                token.ThrowIfCancellationRequested();
+                requested?.Invoke(false);
+                try
+                {
+                    document = await fetch().ConfigureAwait(false);
+                    break;
+                }
+                catch (TuneInProviderResponseException failure)
+                {
+                    received?.Invoke(failure.StatusCode);
+                    if (failure.StatusCode != 429 || Interlocked.Exchange(ref rateLimitRetriesRemaining, 0) == 0)
+                        throw;
+                }
             }
             token.ThrowIfCancellationRequested();
             var bytes = Encoding.UTF8.GetBytes(document.ToString(SaveOptions.DisableFormatting));

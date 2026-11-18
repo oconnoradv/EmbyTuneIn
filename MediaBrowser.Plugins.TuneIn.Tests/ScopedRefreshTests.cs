@@ -395,6 +395,80 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal(start.AddSeconds(expectedDelay), now);
             }
 
+        [Theory]
+        [InlineData("45", 45, false)]
+        [InlineData("invalid", 30, true)]
+        [InlineData(null, 30, false)]
+        public async Task RefreshRetriesOneRateLimitedPageAfterCooldown(string retryAfter, int seconds, bool persistent)
+        {
+            var now = new DateTime(2026, 11, 18, 8, 0, 0, DateTimeKind.Utc);
+            var pacer = new TuneInRequestPacer(() => now, (delay, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                now += delay;
+                return Task.CompletedTask;
+            });
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true
+            };
+            var sportAttempts = new List<DateTime>();
+            var directory = new TuneInDirectory(() => config, async (request, token) =>
+            {
+                if (request.Parameters["c"] == "sports")
+                {
+                    using var response = await pacer.SendAsync(() =>
+                    {
+                        sportAttempts.Add(now);
+                        return Task.FromResult(new HttpResponseInfo
+                        {
+                            StatusCode = sportAttempts.Count == 1 || persistent ? (HttpStatusCode)429 : HttpStatusCode.OK,
+                            Headers = retryAfter == null ? null : new Dictionary<string, string> { ["Retry-After"] = retryAfter }
+                        });
+                    }, 3, token, catalogueRequest: true);
+                    if (response.StatusCode != HttpStatusCode.OK)
+                        throw new TuneInProviderResponseException((int)response.StatusCode);
+                }
+                return XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>");
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-rate-limit-{Guid.NewGuid():N}.xml");
+            try
+            {
+                var store = new TuneInRefreshStore(path);
+                var imports = 0;
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        Assert.Equal(2, ReadStagedTree(staged, token).Count);
+                        imports++;
+                        return Task.CompletedTask;
+                    }, null, clock: () => now);
+                refresh.Start();
+                await WaitUntilIdle(refresh);
+                Assert.Equal(2, sportAttempts.Count);
+                Assert.Equal(TimeSpan.FromSeconds(seconds), sportAttempts[1] - sportAttempts[0]);
+                var status = refresh.Status();
+                Assert.Equal(3, status.RequestsStarted);
+                Assert.Equal(429, status.LastHttpStatus);
+                if (persistent)
+                {
+                    Assert.Equal("Error", status.State);
+                    Assert.Contains("rate limit reached", status.Phase);
+                    Assert.Null(store.Read());
+                    Assert.Equal(0, imports);
+                }
+                else
+                {
+                    Assert.Equal("Completed", status.State);
+                    Assert.Equal(1, imports);
+                    Assert.Null(store.Read().DirtyCategory);
+                }
+            }
+            finally { File.Delete(path); }
+        }
+
         [Fact]
         public async Task SavedScheduleStartsOnlyAnEnabledDueCategoryAndDoesNotOverlap()
         {

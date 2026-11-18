@@ -459,7 +459,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     session = new TuneInCatalogueSession(null, CatalogueCacheLifetime, clock,
                         hit => Update(() => { if (hit) status.CacheHits++; else status.RequestsStarted++; }),
                         () => Update(() => status.RequestsCompleted++),
-                        code => Update(() => status.LastHttpStatus = code));
+                        code => Update(() => status.LastHttpStatus = code), retryRateLimit: true);
 
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");
@@ -571,6 +571,8 @@ namespace MediaBrowser.Plugins.TuneIn
                             categoryStates[currentCategory] = timedOut ? "Timed out" : cancelled ? "Cancelled" : "Failed";
                         status.ErrorCode = cancelled ? status.State : error.GetType().Name;
                         status.Phase = cancelled ? "Stopped and drained" : status.Phase;
+                        if (!cancelled && error is TuneInProviderResponseException provider && provider.StatusCode == 429)
+                            status.Phase += " (TuneIn rate limit reached; wait before retrying or increase the API request interval)";
                     }
                     logger?.Error("TuneIn refresh stopped in {0}/{1} ({2}).",
                         status.Category ?? "preparation", status.Phase, status.ErrorCode);
