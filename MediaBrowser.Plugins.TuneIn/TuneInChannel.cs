@@ -299,7 +299,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 case ImageType.Backdrop:
                 case ImageType.Primary:
                     {
-                        var path = GetType().Namespace + ".Images." + type.ToString().ToLower() + ".png";
+                        var imageName = type == ImageType.Primary ? "tunein-poweredby" : type.ToString().ToLowerInvariant();
+                        var path = GetType().Namespace + ".Images." + imageName + ".png";
 
                         return Task.FromResult(new DynamicImageResponse
                         {

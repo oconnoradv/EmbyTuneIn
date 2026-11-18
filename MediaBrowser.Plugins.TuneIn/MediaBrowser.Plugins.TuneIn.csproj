@@ -12,6 +12,7 @@
     <None Remove="Images\backdrop.png" />
     <None Remove="Images\primary.png" />
     <None Remove="Images\thumb.png" />
+    <None Remove="Images\tunein-poweredby.png" />
     <None Remove="Images\tunein-bylanguage.png" />
     <None Remove="Images\tunein-bylocation.png" />
     <None Remove="Images\tunein-localradio.png" />
@@ -28,6 +29,7 @@
     <EmbeddedResource Include="Images\backdrop.png" />
     <EmbeddedResource Include="Images\primary.png" />
     <EmbeddedResource Include="Images\thumb.png" />
+    <EmbeddedResource Include="Images\tunein-poweredby.png" />
     <EmbeddedResource Include="Images\tunein-bylanguage.png" />
     <EmbeddedResource Include="Images\tunein-bylocation.png" />
     <EmbeddedResource Include="Images\tunein-localradio.png" />

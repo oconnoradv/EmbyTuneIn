@@ -19,6 +19,24 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
     public class LibraryArtworkTests
     {
         [Fact]
+        public async Task TopLevelPrimaryImageUsesBundledLandscapeLogo()
+        {
+            var directory = new TuneInDirectory(() => new PluginConfiguration(), (_, __) => throw new Exception("Unexpected provider request."));
+            var channel = new TuneInChannel(directory);
+            var image = await channel.GetChannelImage(ImageType.Primary, CancellationToken.None);
+            using var expected = typeof(TuneInChannel).Assembly.GetManifestResourceStream("MediaBrowser.Plugins.TuneIn.Images.tunein-poweredby.png");
+            using var actualBuffer = new System.IO.MemoryStream();
+            using var expectedBuffer = new System.IO.MemoryStream();
+            using (image.Stream) image.Stream.CopyTo(actualBuffer);
+            Assert.NotNull(expected);
+            expected.CopyTo(expectedBuffer);
+            Assert.Equal(expectedBuffer.ToArray(), actualBuffer.ToArray());
+            var png = actualBuffer.ToArray();
+            Assert.Equal(544, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(16, 4)));
+            Assert.Equal(306, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(20, 4)));
+        }
+
+        [Fact]
         public async Task ConfiguredCategoriesUseDistinctBundledImages()
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true };
