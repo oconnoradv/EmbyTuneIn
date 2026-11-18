@@ -108,9 +108,14 @@ path. Playback still resolves live and old IDs cannot bypass the saved scopes.
 Refresh discovers changes at the **category level**. If an import is needed,
 the plugin sends Emby the **complete channel tree** so Emby doesn't drop sibling
 categories. A single-category refresh discovers only the requested category
-and reuses saved listings for its siblings. If a sibling listing is missing
-or the baseline is outdated, select **Refresh all enabled categories** to
-build the baseline before retrying the individual refresh.
+and reuses saved listings for its siblings. Saving additional enabled categories
+preserves the completed status and listings of categories whose scopes haven't
+changed. New categories can then be refreshed individually, including after a
+server restart; categories not yet imported remain pending and aren't included
+in the imported tree until their first successful refresh.
+If an existing sibling's listing is missing or its scope changed, refresh that
+category first, or use **Refresh all enabled categories**. An outdated baseline
+from an earlier RC1 still requires a full refresh.
 Incomplete discovery blocks the import, and unchanged catalogs skip import
 unless the library needs reconciliation.
 The error report identifies the category where discovery stopped.
@@ -160,6 +165,11 @@ settings enabling both, only Local Radio should be unavailable until corrected.
 Confirm **Catalog Refresh** opens expanded and can be collapsed. Refresh one
 category after establishing a baseline and verify the other categories and
 their stations still exist in Emby's library. Set one category's interval, save,
+then enable two more categories and save again. Verify the previously refreshed
+categories retain their completed status. Refresh each new category separately,
+checking that only the requested category is fetched and existing library
+categories remain. Restart between saves and refreshes to check persisted state.
+Set a category interval again if needed, save,
 and verify it refreshes with the Control Panel closed. Before and after a refresh, compare Scheduled Tasks for new entries, triggers,
 or runs: none should have changed because of the Control Panel action. Establish
 a successful baseline, browse it during another discovery, and check that

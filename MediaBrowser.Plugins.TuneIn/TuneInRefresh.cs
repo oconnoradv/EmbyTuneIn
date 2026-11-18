@@ -130,7 +130,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 var copy = status.Copy();
                 copy.Busy = work != null && !work.IsCompleted;
                 copy.DirtyCategory = dirtyCategory;
-                copy.RecoveryCategory = copy.Busy ? null : dirtyCategory ??
+                copy.RecoveryCategory = copy.Busy ? null : (snapshot.Enabled(dirtyCategory) ? dirtyCategory : null) ??
                     (copy.State == "Error" && snapshot.Enabled(activeRequest ?? copy.Category) ? activeRequest ?? copy.Category : null);
                 copy.RecoveryId = copy.RecoveryCategory == null ? null : recoveryId;
                 copy.ActiveRequest = copy.Busy ? activeRequest ?? "all" : null;
@@ -254,10 +254,44 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 if (work != null && !work.IsCompleted)
                     throw new InvalidOperationException("TuneIn settings cannot change while refresh work is active or draining.");
-                var previousKey = directory.Snapshot().Key;
+                var previous = directory.Snapshot();
+                var checkpoint = store.Read();
                 update();
-                if (directory.Snapshot().Key == previousKey) return;
-                store.Clear();
+                var current = directory.Snapshot();
+                if (current.Key == previous.Key) return;
+                if (checkpoint?.ConfigurationKey == previous.Key)
+                {
+                    var retained = checkpoint.Categories.Where(category => current.Enabled(category.Category)
+                        && previous.CategoryScopeKey(category.Category) == current.CategoryScopeKey(category.Category)).ToList();
+                    foreach (var category in retained)
+                    {
+                        // IDs include the whole configuration key; authenticate and re-sign unchanged scopes only.
+                        var sign = directory.CategoryRebinder(previous, current, category.Category);
+                        var rebound = new Dictionary<string, string>(StringComparer.Ordinal);
+                        string Rebind(string id)
+                        {
+                            if (!rebound.TryGetValue(id, out var updated))
+                                rebound[id] = updated = sign(id);
+                            return updated;
+                        }
+                        category.RootId = Rebind(category.RootId);
+                        foreach (var folder in category.Folders)
+                        {
+                            folder.Id = Rebind(folder.Id);
+                            foreach (var item in folder.Items) item.Id = Rebind(item.Id);
+                        }
+                        category.Fingerprint = TuneInStagedImport.Fingerprint(category.Folders);
+                    }
+                    checkpoint.Categories = retained;
+                    checkpoint.PendingCategories = current.Categories.Where(category =>
+                        !retained.Any(saved => saved.Category == category) &&
+                        checkpoint.DirtyCategory != category &&
+                        (!previous.Enabled(category) || checkpoint.PendingCategories.Contains(category))).ToList();
+                    checkpoint.ConfigurationKey = current.Key;
+                    checkpoint.NeedsImport = true;
+                    store.Write(checkpoint);
+                }
+                else store.Clear();
                 categoryStateKey = null;
                 categoryStates.Clear();
                 dirtyCategory = null;
@@ -439,8 +473,10 @@ namespace MediaBrowser.Plugins.TuneIn
                     var enabled = snapshot.Categories.ToArray();
                     var listings = checkpoint.Categories.ToDictionary(category => category.Category, StringComparer.Ordinal);
                     var needsRebuild = checkpoint.ChannelImportVersion != ChannelImportVersion;
-                    if (requestedCategory != null && enabled.Any(category => category != requestedCategory &&
-                        (needsRebuild || !listings.ContainsKey(category))))
+                    if (requestedCategory != null && (needsRebuild && enabled.Length > 1 ||
+                        enabled.Any(category => category != requestedCategory &&
+                            !listings.ContainsKey(category) &&
+                            (!checkpoint.PendingCategories.Contains(category) || category == dirtyAtStart))))
                     {
                         lock (gate)
                         {
@@ -464,7 +500,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");
                     var roots = enabled.Select(category => channel.GetCategoryRoot(snapshot, category)).ToArray();
-                    var importRequired = categories.Length != 0 && (needsRebuild || dirtyAtStart != null);
+                    var importRequired = categories.Length != 0 && (needsRebuild || dirtyAtStart != null || checkpoint.NeedsImport);
                     var changed = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var category in categories)
                     {
@@ -505,7 +541,12 @@ namespace MediaBrowser.Plugins.TuneIn
 
                     if (importRequired || changed.Count != 0)
                     {
-                        var full = TuneInStagedImport.ForChannel(roots, enabled.Select(category => listings[category]),
+                        // Only newly enabled, never-imported categories may wait outside the complete saved tree.
+                        var importedCategories = enabled.Where(listings.ContainsKey).ToArray();
+                        var importedRoots = roots.Where(root => importedCategories.Any(category => listings[category].RootId == root.Id)).ToArray();
+                        var full = TuneInStagedImport.ForChannel(
+                            importedRoots,
+                            importedCategories.Select(category => listings[category]),
                             linked.Token, (total, served) => Update(() =>
                             {
                                 status.ImportFoldersTotal = total;
@@ -527,9 +568,12 @@ namespace MediaBrowser.Plugins.TuneIn
                         await import(channel, full, null, linked.Token).ConfigureAwait(false);
                         full.Verify();
                         linked.Token.ThrowIfCancellationRequested();
-                        foreach (var root in roots) updateArtwork?.Invoke(channel, root.Id, linked.Token);
+                        foreach (var root in importedRoots)
+                            updateArtwork?.Invoke(channel, root.Id, linked.Token);
                         directory.CheckCurrent(snapshot, linked.Token);
-                        checkpoint.Categories = enabled.Select(category => listings[category]).ToList();
+                        checkpoint.Categories = importedCategories.Select(category => listings[category]).ToList();
+                        checkpoint.PendingCategories.RemoveAll(listings.ContainsKey);
+                        checkpoint.NeedsImport = false;
                         checkpoint.DirtyCategory = null;
                         checkpoint.ChannelImportVersion = ChannelImportVersion;
                         Persist(snapshot, checkpoint, started, BuildCommitted(checkpoint, snapshot.Key));
@@ -543,7 +587,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     {
                         var didImport = importRequired || changed.Count != 0;
                         if (didImport)
-                            foreach (var category in enabled) categoryStates[category] = "Imported";
+                            foreach (var category in enabled.Where(listings.ContainsKey)) categoryStates[category] = "Imported";
                         else
                             foreach (var category in categories) categoryStates[category] = "Unchanged";
                         status.CategoriesSkipped = didImport ? 0 : categories.Length;

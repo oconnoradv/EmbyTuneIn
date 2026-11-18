@@ -50,6 +50,50 @@ namespace MediaBrowser.Plugins.TuneIn
         public bool Ready => Value.ConfigurationCompleted && Value.SchemaVersion == 1;
         public string LocalSource => Value.EnableLocalRadio ? ResolveLocalSource(Value) : null;
         public IEnumerable<string> Categories => CategoryKeys.Where(Enabled);
+        internal string CategoryScopeKey(string category)
+        {
+            var scope = new PluginConfiguration
+            {
+                NavigationSecret = Value.NavigationSecret,
+                SchemaVersion = Value.SchemaVersion,
+                ConfigurationCompleted = Value.ConfigurationCompleted
+            };
+            switch (category)
+            {
+                case "local":
+                    scope.EnableLocalRadio = Value.EnableLocalRadio;
+                    scope.LocalRadioSource = Value.LocalRadioSource;
+                    scope.UseCoordinates = Value.UseCoordinates;
+                    scope.LatLon = Value.LatLon;
+                    scope.LocalCities = Selections("local").ToList();
+                    break;
+                case "language":
+                    scope.EnableLanguage = Value.EnableLanguage;
+                    scope.Languages = Selections("language").ToList();
+                    scope.EnableTalk = Value.EnableTalk;
+                    scope.EnableSports = Value.EnableSports;
+                    scope.EnableMusic = Value.EnableMusic;
+                    scope.Music = Selections("music").ToList();
+                    break;
+                case "music":
+                    scope.EnableMusic = Value.EnableMusic;
+                    scope.Music = Selections("music").ToList();
+                    break;
+                case "location":
+                    scope.EnableLocation = Value.EnableLocation;
+                    scope.Locations = Selections("location").ToList();
+                    break;
+                case "talk": scope.EnableTalk = Value.EnableTalk; break;
+                case "sports": scope.EnableSports = Value.EnableSports; break;
+                case "podcast": scope.EnablePodcasts = Value.EnablePodcasts; break;
+                case "presets":
+                    scope.EnableFavorites = Value.EnableFavorites;
+                    scope.Username = Value.Username;
+                    break;
+                default: throw new ArgumentException("Invalid TuneIn category.", nameof(category));
+            }
+            return new ConfigurationSnapshot(scope).Key;
+        }
         internal static bool ValidSchedule(CategoryRefreshSchedule schedule) =>
             schedule != null && CategoryKeys.Contains(schedule.Category) && ScheduleHours.Contains(schedule.IntervalHours);
 
@@ -272,6 +316,25 @@ namespace MediaBrowser.Plugins.TuneIn
         public NavigationEntry Resolve(ConfigurationSnapshot snapshot, string id)
         {
             AssertSnapshot(snapshot);
+            return ResolveSigned(snapshot, id);
+        }
+
+        internal Func<string, string> CategoryRebinder(ConfigurationSnapshot previous, ConfigurationSnapshot current,
+            string category)
+        {
+            if (previous.CategoryScopeKey(category) != current.CategoryScopeKey(category))
+                throw new InvalidOperationException("Cannot reuse a TuneIn item whose category scope changed.");
+            return id =>
+            {
+                var entry = ResolveSigned(previous, id);
+                if (entry.Category != category)
+                    throw new InvalidOperationException("Saved TuneIn item belongs to a different category.");
+                return Register(current, entry);
+            };
+        }
+
+        private NavigationEntry ResolveSigned(ConfigurationSnapshot snapshot, string id)
+        {
             if (id == null || id.Length > 6000 || !Regex.IsMatch(id, @"\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}\z"))
                 throw new InvalidOperationException("Invalid TuneIn navigation identifier. Return to the channel root.");
             var parts = id.Split('.');

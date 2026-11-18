@@ -655,6 +655,202 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             finally { File.Delete(path); }
         }
 
+        [Fact]
+        public async Task EnablingCategoriesPreservesCompletedListingsAndAllowsIncrementalRefreshAfterRestart()
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true
+            };
+            var fetched = new List<string>();
+            var failFavorites = false;
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                var category = request.Parameters["c"];
+                fetched.Add(category);
+                if (failFavorites && category == "presets") throw new InvalidDataException("Discovery failed");
+                return Task.FromResult(XDocument.Parse(
+                    "<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-add-categories-{Guid.NewGuid():N}.xml");
+            var store = new TuneInRefreshStore(path);
+            var imported = new List<Dictionary<string, string[]>>();
+            TuneInRefresh Make() => new TuneInRefresh(directory, store, () => channel,
+                (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                (_, staged, __, token) =>
+                {
+                    imported.Add(ReadStagedTree(staged, token));
+                    return Task.CompletedTask;
+                }, null);
+            try
+            {
+                using (var refresh = Make())
+                {
+                    refresh.Start();
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("Completed", refresh.Status().State);
+                    fetched.Clear();
+                    refresh.UpdateConfiguration(() =>
+                    {
+                        config.Username = "tester";
+                        config.EnableFavorites = true;
+                        config.EnablePodcasts = true;
+                    });
+                    var state = refresh.Status();
+                    Assert.All(state.Categories.Where(category => category.Category == "talk" || category.Category == "sports"),
+                        category => Assert.Equal("Imported", category.State));
+                    Assert.All(state.Categories.Where(category => category.Category == "presets" || category.Category == "podcast"),
+                        category => Assert.Equal("No recorded refresh", category.State));
+                    Assert.Empty(fetched);
+                    Assert.Single(imported);
+                }
+                using (var refresh = Make())
+                {
+                    Assert.Equal(2, refresh.Status().Categories.Count(category => category.State == "Imported"));
+                    failFavorites = true;
+                    refresh.Start("presets");
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("Error", refresh.Status().State);
+                    Assert.Single(imported);
+                    Assert.Equal(2, store.Read().Categories.Count);
+                    Assert.Equal(new[] { "podcast", "presets" }, store.Read().PendingCategories);
+
+                    failFavorites = false;
+                    fetched.Clear();
+                    refresh.Start("presets");
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("Completed", refresh.Status().State);
+                    Assert.Equal(new[] { "presets" }, fetched);
+                    Assert.Equal(new[] { "Talk", "Sports", "My Favorites" }, imported[1].Keys);
+                    var snapshot = directory.Snapshot();
+                    Assert.All(imported[1]["Talk"], id => Assert.Equal("talk", directory.Resolve(snapshot, id).Category));
+                    Assert.All(imported[1]["Sports"], id => Assert.Equal("sports", directory.Resolve(snapshot, id).Category));
+                    Assert.Equal(new[] { "podcast" }, store.Read().PendingCategories);
+
+                    fetched.Clear();
+                    refresh.Start("podcast");
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("Completed", refresh.Status().State);
+                    Assert.Single(fetched);
+                    Assert.Equal(4, imported[2].Count);
+                    Assert.All(refresh.Status().Categories, category => Assert.Equal("Imported", category.State));
+                    Assert.Empty(store.Read().PendingCategories);
+
+                    refresh.UpdateConfiguration(() => config.EnableSports = false);
+                    Assert.DoesNotContain(refresh.Status().Categories, category => category.Category == "sports");
+                    fetched.Clear();
+                    refresh.Start("presets");
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("Completed", refresh.Status().State);
+                    Assert.Equal(new[] { "presets" }, fetched);
+                    Assert.DoesNotContain("Sports", imported[3].Keys);
+
+                    refresh.UpdateConfiguration(() => config.Username = "different-user");
+                    Assert.Equal("Imported", refresh.Status().Categories.Single(category => category.Category == "talk").State);
+                    Assert.DoesNotContain(store.Read().Categories, category => category.Category == "presets");
+                    Assert.DoesNotContain("presets", store.Read().PendingCategories);
+                    fetched.Clear();
+                    refresh.Start("talk");
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("BaselineRequired", refresh.Status().State);
+                    Assert.Empty(fetched);
+                    refresh.Start("presets");
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("Completed", refresh.Status().State);
+                    Assert.Equal(new[] { "presets" }, fetched);
+                    Assert.Equal(3, imported[4].Count);
+                }
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Fact]
+        public async Task InterruptedFirstImportOfANewCategoryCannotBeOmittedByTheNextRefresh()
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true
+            };
+            var fetched = new List<string>();
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                fetched.Add(request.Parameters["c"]);
+                return Task.FromResult(XDocument.Parse(
+                    "<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-pending-import-{Guid.NewGuid():N}.xml");
+            try
+            {
+                var store = new TuneInRefreshStore(path);
+                var failImport = false;
+                var imports = 0;
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        imports++;
+                        ReadStagedTree(staged, token);
+                        if (failImport) throw new InvalidOperationException("Import partially applied");
+                        return Task.CompletedTask;
+                    }, null);
+                refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                refresh.UpdateConfiguration(() => config.EnableSports = true);
+                failImport = true;
+                refresh.Start("sports");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("sports", store.Read().DirtyCategory);
+                Assert.Contains("sports", store.Read().PendingCategories);
+
+                fetched.Clear();
+                var choice = refresh.Start("talk");
+                refresh.Start("talk", choice.RecoveryId, false);
+                await WaitUntilIdle(refresh);
+                Assert.Equal("BaselineRequired", refresh.Status().State);
+                Assert.Empty(fetched);
+                Assert.Equal(2, imports);
+                Assert.Equal("sports", store.Read().DirtyCategory);
+
+                failImport = false;
+                refresh.Start("sports");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(new[] { "sports" }, fetched);
+                Assert.Null(store.Read().DirtyCategory);
+                Assert.Empty(store.Read().PendingCategories);
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Fact]
+        public void SavedItemRebindingRequiresAnUnchangedAuthorizedCategoryAndValidSignature()
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableFavorites = true, Username = "first"
+            };
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+                throw new InvalidOperationException("Rebinding must not fetch the provider."));
+            var previous = directory.Snapshot();
+            var id = directory.Register(previous, new NavigationEntry { Category = "presets", Name = "My Favorites" });
+            config.EnableTalk = true;
+            var current = directory.Snapshot();
+            var rebind = directory.CategoryRebinder(previous, current, "presets");
+            Assert.Equal("presets", directory.Resolve(current, rebind(id)).Category);
+            Assert.Throws<InvalidOperationException>(() => rebind(id.Substring(0, id.Length - 5) + "AAAAA"));
+
+            config.Username = "second";
+            var changedUser = directory.Snapshot();
+            Assert.Throws<InvalidOperationException>(() => directory.CategoryRebinder(current, changedUser, "presets"));
+            config.Username = "first";
+            config.EnableFavorites = false;
+            var disabled = directory.Snapshot();
+            Assert.Throws<InvalidOperationException>(() => directory.CategoryRebinder(current, disabled, "presets"));
+            Assert.Throws<InvalidOperationException>(() => directory.Resolve(disabled, id));
+        }
+
         private static async Task WaitUntilIdle(TuneInRefresh refresh)
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));

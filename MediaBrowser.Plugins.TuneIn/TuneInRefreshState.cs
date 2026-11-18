@@ -53,6 +53,8 @@ namespace MediaBrowser.Plugins.TuneIn
         public List<TuneInCategorySnapshot> Categories { get; set; } = new List<TuneInCategorySnapshot>();
         public string DirtyCategory { get; set; }
         public int ChannelImportVersion { get; set; }
+        public List<string> PendingCategories { get; set; } = new List<string>();
+        public bool NeedsImport { get; set; }
     }
 
     internal sealed class TuneInRefreshStore
@@ -110,6 +112,10 @@ namespace MediaBrowser.Plugins.TuneIn
             var validCategories = new[] { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
             if (checkpoint == null || checkpoint.ConfigurationKey?.Length != 64
                 || checkpoint.Categories == null || checkpoint.Categories.Count > 8
+                || checkpoint.PendingCategories == null || checkpoint.PendingCategories.Count > 8
+                || checkpoint.PendingCategories.Any(category => !validCategories.Contains(category))
+                || checkpoint.PendingCategories.Distinct().Count() != checkpoint.PendingCategories.Count
+                || checkpoint.Categories.Any(category => category != null && checkpoint.PendingCategories.Contains(category.Category))
                 || checkpoint.Categories.Any(category => category == null || !validCategories.Contains(category.Category)
                     || string.IsNullOrEmpty(category.RootId) || category.RootId.Length > 6000
                     || category.Folders == null || category.Folders.Count > TuneInStagedImport.MaxFolders
