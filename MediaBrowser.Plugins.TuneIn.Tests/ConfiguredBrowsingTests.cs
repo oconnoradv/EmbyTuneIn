@@ -380,11 +380,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         {
             var config = Ready();
             Assert.Equal(3, new PluginConfiguration().ApiRequestIntervalSeconds);
-            config.ApiRequestIntervalSeconds = 2;
+            config.ApiRequestIntervalSeconds = 0;
             Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
-            config.ApiRequestIntervalSeconds = 61;
+            config.ApiRequestIntervalSeconds = 31;
             Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
-            config.ApiRequestIntervalSeconds = 60;
+            config.ApiRequestIntervalSeconds = 1;
+            ConfigurationSnapshot.Validate(config);
+            config.ApiRequestIntervalSeconds = 30;
             ConfigurationSnapshot.Validate(config);
             config.Languages.Add(Selection("r1"));
             Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));

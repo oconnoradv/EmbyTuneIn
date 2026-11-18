@@ -22,12 +22,13 @@ namespace MediaBrowser.Plugins.TuneIn
 {
     public class TuneInChannel : IChannel, IRequiresMediaInfoCallback, IHasChannelFeatures
     {
+        private static readonly ImageType[] ChannelImageTypes = { ImageType.Thumb, ImageType.Backdrop, ImageType.Primary };
         private readonly IHttpClient _httpClient;
         private readonly ILogger _logger;
         private readonly TuneInDirectory directory;
         private readonly IServerApplicationHost serverHost;
         private readonly ILibraryManager library;
-        private readonly AsyncLocal<TuneInStagedImport> stagedImport = new AsyncLocal<TuneInStagedImport>();
+        private TuneInStagedImport stagedImport;
         private readonly object catalogueGate = new object();
         private string browseKey;
         private TuneInCatalogueSession browseCache;
@@ -49,21 +50,23 @@ namespace MediaBrowser.Plugins.TuneIn
             this.library = library;
         }
 
-        public string DataVersion => "48";
+        public string DataVersion => "49";
         public ChannelFeatures Features => new ChannelFeatures { ShowRootFoldersAtTopLevel = false };
         public string Description => "Listen to online radio, find streaming music radio and streaming talk radio with TuneIn.";
         public bool IsEnabledFor(string userId) => true;
 
         public Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken cancellationToken)
         {
-            if (stagedImport.Value != null)
-                return Task.FromResult(stagedImport.Value.Read(query.FolderId, cancellationToken));
-
             var snapshot = directory.Snapshot();
             directory.CheckCurrent(snapshot, cancellationToken);
             if (snapshot.Ready && !string.IsNullOrEmpty(query.FolderId))
-            {
                 directory.Resolve(snapshot, query.FolderId);
+            var staged = Volatile.Read(ref stagedImport);
+            if (staged != null)
+                return Task.FromResult(staged.Read(query.FolderId, cancellationToken));
+
+            if (snapshot.Ready && !string.IsNullOrEmpty(query.FolderId))
+            {
                 if (TuneInRefreshService.TryGetCommitted(snapshot, query.FolderId, out var old))
                 {
                     directory.CheckCurrent(snapshot, cancellationToken);
@@ -92,14 +95,15 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal async Task ImportAsync(TuneInStagedImport staged, Func<Task> import)
         {
-            var previous = stagedImport.Value;
-            stagedImport.Value = staged;
+            // Emby can request listings in a different execution context from the import caller.
+            if (Interlocked.CompareExchange(ref stagedImport, staged, null) != null)
+                throw new InvalidOperationException("A TuneIn channel import is already active.");
             try
             {
                 await import().ConfigureAwait(false);
                 staged.Verify();
             }
-            finally { stagedImport.Value = previous; }
+            finally { Volatile.Write(ref stagedImport, null); }
         }
 
         internal void UpdateCategoryArtwork(string folderId, CancellationToken token)
@@ -112,6 +116,10 @@ namespace MediaBrowser.Plugins.TuneIn
             var roots = library.GetItemList(new InternalItemsQuery { ExternalId = folderId, IsFolder = true }, token);
             if (roots.Length > 1) throw new InvalidOperationException("TuneIn category folder is ambiguous.");
             if (roots.Length == 0) return;
+            directory.CheckCurrent(snapshot, token);
+            if (roots[0] is Folder && roots[0].ExternalId == folderId && roots[0].ParentId != 0 &&
+                library.GetItemById(roots[0].ParentId) is Channel channel && channel.Name == Name)
+                UpdateLibraryArtwork(channel);
             Replace(roots[0]);
             for (var offset = 0; ; offset += 100)
             {
@@ -151,6 +159,25 @@ namespace MediaBrowser.Plugins.TuneIn
                     folder.SetProviderId("TuneInCategoryArtwork", previousVersion ?? "");
                     throw;
                 }
+            }
+        }
+
+        private void UpdateLibraryArtwork(Channel channel)
+        {
+            const string provider = "TuneInLibraryArtwork";
+            var url = CategoryArtworkUrl(TuneInCategoryArtwork.ChannelArtwork);
+            var previousRevision = channel.GetProviderId(provider);
+            if (previousRevision == TuneInCategoryArtwork.Revision &&
+                ChannelImageTypes.All(type => channel.HasImage(type, 0))) return;
+            var now = DateTimeOffset.UtcNow;
+            foreach (var type in ChannelImageTypes)
+                channel.SetImage(new ItemImageInfo { Path = url, Type = type, DateModified = now }, 0);
+            channel.SetProviderId(provider, TuneInCategoryArtwork.Revision);
+            try { library.UpdateItem(channel, library.GetItemById(channel.ParentId), ItemUpdateType.ImageUpdate); }
+            catch
+            {
+                channel.SetProviderId(provider, previousRevision ?? "");
+                throw;
             }
         }
 
@@ -296,34 +323,16 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public Task<DynamicImageResponse> GetChannelImage(ImageType type, CancellationToken cancellationToken)
         {
-            switch (type)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!ChannelImageTypes.Contains(type)) throw new ArgumentException("Unsupported image type: " + type, nameof(type));
+            return Task.FromResult(new DynamicImageResponse
             {
-                case ImageType.Thumb:
-                case ImageType.Backdrop:
-                case ImageType.Primary:
-                    {
-                        var path = GetType().Namespace + ".Images.tunein-poweredby.png";
-
-                        return Task.FromResult(new DynamicImageResponse
-                        {
-                            Format = ImageFormat.Png,
-                            Stream = GetType().Assembly.GetManifestResourceStream(path)
-                        });
-                    }
-                default:
-                    throw new ArgumentException("Unsupported image type: " + type);
-            }
+                Format = ImageFormat.Png,
+                Stream = TuneInCategoryArtwork.Open(TuneInCategoryArtwork.ChannelArtwork)
+            });
         }
 
-        public IEnumerable<ImageType> GetSupportedChannelImages()
-        {
-            return new List<ImageType>
-            {
-                ImageType.Thumb,
-                ImageType.Backdrop,
-                ImageType.Primary
-            };
-        }
+        public IEnumerable<ImageType> GetSupportedChannelImages() => ChannelImageTypes.ToArray();
 
         public string Name
         {

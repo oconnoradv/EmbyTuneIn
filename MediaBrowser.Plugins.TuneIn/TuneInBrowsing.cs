@@ -130,8 +130,10 @@ namespace MediaBrowser.Plugins.TuneIn
                         && !(entry.Category == "language" && new[] { "lang", "music", "talk", "sports" }.Contains(classifier))) continue;
                     var rowKey = TuneInDirectory.Attribute(row, "key") ?? "";
                     if (rowKey.StartsWith("next", StringComparison.Ordinal)
-                        && next.Parameters.GetValueOrDefault("id") != request.Parameters.GetValueOrDefault("id"))
-                        throw new InvalidDataException("TuneIn pagination escaped its selected node.");
+                        && !IsSamePaginationNode(entry, request, next))
+                        throw new InvalidDataException("TuneIn pagination escaped its selected node ("
+                            + (request.Parameters.GetValueOrDefault("id") ?? "(no ID)") + " to "
+                            + (next.Parameters.GetValueOrDefault("id") ?? "(no ID)") + ").");
                     var id = next.Parameters.GetValueOrDefault("id");
                     if (id == null && classifier != null && (entry.Category == "music" || entry.Category == "location"
                         || entry.Category == "local" && entry.SelectionId != "coordinates")) continue;
@@ -148,6 +150,25 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
             }
             return Deduplicate(snapshot, items);
+        }
+
+        private static bool IsSamePaginationNode(NavigationEntry entry, DirectoryRequest current, DirectoryRequest next)
+        {
+            var from = current.Parameters.GetValueOrDefault("id");
+            var to = next.Parameters.GetValueOrDefault("id");
+            if (from == to) return true;
+            if (entry.Category != "music" && entry.MusicSelectionId == null) return false;
+            if (current.Parameters.ContainsKey("c") || next.Parameters.ContainsKey("c")
+                || !int.TryParse(next.Parameters.GetValueOrDefault("offset"), out var offset) || offset <= 0)
+                return false;
+            // TuneIn emits the canonical category ID in More Stations/Shows links for these legacy genre IDs.
+            switch (from)
+            {
+                case "g3": return to == "c57935";
+                case "g19": return to == "c57951";
+                case "g22": return to == "c57954";
+                default: return false;
+            }
         }
 
         private static bool EscapesSelection(ConfigurationSnapshot snapshot, NavigationEntry entry, string id)

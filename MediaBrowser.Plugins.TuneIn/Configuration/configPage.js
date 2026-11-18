@@ -464,8 +464,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var config = instance.config;
         var coordinates = instance.view.querySelector('.txtLatLon').value.trim();
         var requestInterval = String(instance.view.querySelector('.apiRequestIntervalSeconds').value || '').trim();
-        if (!/^[0-9]+$/.test(requestInterval) || Number(requestInterval) < 3 || Number(requestInterval) > 60) {
-            message(instance, 'Use a whole number from 3 to 60 for the API request interval.');
+        if (!/^[0-9]+$/.test(requestInterval) || Number(requestInterval) < 1 || Number(requestInterval) > 30) {
+            message(instance, 'Use a whole number from 1 to 30 for the API request interval.');
             return false;
         }
         var localEnabled = instance.view.querySelector('[data-category="EnableLocalRadio"]').checked;
@@ -578,7 +578,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.txtUsername').value = config.Username || '';
             view.querySelector('.txtLatLon').value = config.LatLon || '';
             view.querySelector('.apiRequestIntervalSeconds').value =
-                config.ApiRequestIntervalSeconds == null ? 3 : config.ApiRequestIntervalSeconds;
+                config.ApiRequestIntervalSeconds == null ? 3 : Math.min(config.ApiRequestIntervalSeconds, 30);
             var hasRegions = (config.LocalCities || []).some(function (item) {
                 return item && item.Enabled !== false && /^r[1-9][0-9]{0,9}$/.test(item.Id);
             });

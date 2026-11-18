@@ -71,8 +71,9 @@ hours**, **Every 12 hours**, **Daily**, or **Weekly**, then select **Save**.
 Schedules are off by default and run only for enabled categories. The interval
 starts when the plugin detects the saved choice or Emby starts; missed runs
 aren't replayed after downtime. Scheduled and manual runs never overlap.
-In **Catalog browsing**, set the minimum API request interval from 3 to 60
+In **Catalog browsing**, set the minimum API request interval from 1 to 30
 seconds; the default is 3 seconds, and TuneIn's retry delays are always honored.
+Previously saved intervals above 30 seconds are treated as 30 seconds.
 
 The **Retrieve refresh log** button becomes available when the latest Control
 Panel refresh fails. It retrieves a bounded error report for that run, not the
@@ -102,10 +103,19 @@ categories. A single-category refresh reuses saved listings for the other
 categories. If any listing is missing, the plugin discovers that category first.
 Incomplete discovery blocks the import, and unchanged catalogs skip import
 unless the library needs reconciliation.
+The error report identifies the category where discovery stopped, which can
+differ from the requested category when building or repairing the baseline.
+
+The first refresh after upgrading from an earlier RC1 rebuilds all enabled
+categories, even if you start it from one category. During the Emby import,
+channel callbacks receive the complete staged tree, including callbacks on
+separate workers.
 
 Category folders use the bundled TuneIn artwork. Emby may keep older folder
 images after an upgrade; explicitly refresh the affected category to update
-existing folder artwork, even when its catalog is unchanged.
+existing folder artwork, even when its catalog is unchanged. The refresh also
+updates the saved Primary, Thumb, and first Backdrop images on the top-level
+TuneIn library item to **Powered by TuneIn**.
 
 Emby's import isn't transactional. If cancellation, failure, or restart
 interrupts an import, some metadata may already have changed. Refresh that
@@ -116,9 +126,10 @@ guaranteed.
 
 ### Manual testing
 
-Use a test server. Confirm the top-level TuneIn library image shows the Powered
-by TuneIn logo after the channel data version refreshes. If Emby retains older
-cached artwork, refresh the TuneIn channel. After installing, open, leave, and
+Use a test server. Run **Refresh all enabled categories** from the TuneIn
+Control Panel, then reload the Emby client. Confirm that the top-level library
+tile shows **Powered by TuneIn** and category images are still distinct.
+After installing, open, leave, and
 reopen TuneIn settings while a response is pending: the native transition and
 loader should settle,
 and stale responses should not update the page. Keyboard-open selected Location
@@ -134,7 +145,7 @@ and verify it refreshes with the Control Panel closed. Before and after a refres
 or runs: none should have changed because of the Control Panel action. Establish
 a successful baseline, browse it during another discovery, and check that
 unchanged scopes are skipped and changed scopes still list unchanged stations.
-Verify the API interval accepts 3 and 60 seconds, rejects values outside that
+Verify the API interval accepts 1 and 30 seconds, rejects values outside that
 range, and delays requests accordingly. Cause a refresh error and retrieve its
 report; verify the button is unavailable after a successful new run.
 Interrupt an import on the test server, restart, and check reconciliation on the

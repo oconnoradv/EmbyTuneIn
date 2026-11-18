@@ -44,6 +44,7 @@ namespace MediaBrowser.Plugins.TuneIn
     internal static class TuneInCategoryArtwork
     {
         internal const string Revision = "1";
+        internal const string ChannelArtwork = "channel";
         private static readonly string[] Categories = { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
 
         internal static string Url(string baseUrl, string category)
@@ -59,6 +60,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private static string ResourceName(string category)
         {
+            if (category == ChannelArtwork) return "MediaBrowser.Plugins.TuneIn.Images.tunein-poweredby.png";
             if (!Categories.Contains(category, StringComparer.Ordinal))
                 throw new ArgumentException("Unknown TuneIn artwork category.", nameof(category));
             var name = category == "local" ? "localradio" : category == "language" ? "bylanguage"

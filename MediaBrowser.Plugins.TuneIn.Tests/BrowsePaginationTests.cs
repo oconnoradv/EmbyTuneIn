@@ -64,12 +64,35 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal("", new Uri(request).Fragment);
         }
 
-        private static async Task<string> BrowseProviderLink(string url, bool location = false)
+        [Theory]
+        [InlineData("g3", "c57935")]
+        [InlineData("g19", "c57951")]
+        [InlineData("g22", "c57954")]
+        public async Task LegacyGenrePaginationFollowsItsCanonicalMusicCategory(string genre, string category)
+        {
+            var url = "https://opml.radiotime.com/Browse.ashx?offset=26&id=" + category + "&filter=s";
+            var request = await BrowseProviderLink(url, musicId: genre);
+            var query = HttpUtility.ParseQueryString(new Uri(request).Query);
+            Assert.Equal(category, query["id"]);
+            Assert.Equal("26", query["offset"]);
+        }
+
+        [Theory]
+        [InlineData("offset=26&id=c57954&filter=s")]
+        [InlineData("id=c57951&filter=s")]
+        public async Task LegacyGenrePaginationRejectsUnrelatedIdsAndNonPageLinks(string query)
+        {
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                BrowseProviderLink("https://opml.radiotime.com/Browse.ashx?" + query, musicId: "g19"));
+            Assert.Contains("pagination escaped", error.Message);
+        }
+
+        private static async Task<string> BrowseProviderLink(string url, bool location = false, string musicId = "c57941")
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true,
                 EnableLocation = location, EnableMusic = !location };
             if (location) config.Locations.Add(new CatalogSelection { Id = "r100016", Enabled = true });
-            else config.Music.Add(new CatalogSelection { Id = "c57941", Enabled = true });
+            else config.Music.Add(new CatalogSelection { Id = musicId, Enabled = true });
             var calls = 0;
             string requestedUrl = null;
             var directory = new TuneInDirectory(() => config, (request, token) =>

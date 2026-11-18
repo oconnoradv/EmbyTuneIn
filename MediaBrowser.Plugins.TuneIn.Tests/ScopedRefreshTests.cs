@@ -163,12 +163,24 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var store = new TuneInRefreshStore(path);
                 using var refresh = new TuneInRefresh(directory, store, () => channel,
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
-                    (_, staged, folder, token) =>
+                    (c, staged, folder, token) => c.ImportAsync(staged, async () =>
                     {
                         Assert.Null(folder);
-                        imported.Add(ReadStagedTree(staged, token));
-                        return Task.CompletedTask;
-                    }, null);
+                        Task<Dictionary<string, string[]>> callbacks;
+                        using (ExecutionContext.SuppressFlow())
+                            callbacks = Task.Run(async () =>
+                            {
+                                var roots = await c.GetChannelItems(new InternalChannelItemQuery(), token);
+                                var listings = new Dictionary<string, string[]>();
+                                foreach (var root in roots.Items)
+                                {
+                                    var result = await c.GetChannelItems(new InternalChannelItemQuery { FolderId = root.Id }, token);
+                                    listings.Add(root.Name, result.Items.Select(item => item.Id).ToArray());
+                                }
+                                return listings;
+                            });
+                        imported.Add(await callbacks);
+                    }), null);
                 try
                 {
                     Assert.Throws<ArgumentException>(() => refresh.Start("music"));
@@ -200,6 +212,17 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         talk => { Assert.Equal("talk", talk.Category); Assert.Equal("Imported", talk.State); },
                         sports => { Assert.Equal("sports", sports.Category); Assert.Equal("Unchanged", sports.State); });
                     Assert.Equal(2, imported.Count);
+
+                    // A checkpoint from the previous RC must not let an unchanged category skip repair.
+                    var olderCheckpoint = store.Read();
+                    olderCheckpoint.ChannelImportVersion = 0;
+                    store.Write(olderCheckpoint);
+                    fetched.Clear();
+                    refresh.Start("sports");
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("Completed", refresh.Status().State);
+                    Assert.Equal(new[] { "Talk", "Sports" }, imported[2].Keys);
+                    Assert.Equal(new[] { "talk", "sports" }, fetched);
                 }
                 finally { File.Delete(path); }
             }
@@ -331,8 +354,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 finally { File.Delete(path); }
             }
 
-            [Fact]
-            public async Task ProviderRetryAfterDelaysTheNextCatalogRequest()
+            [Theory]
+            [InlineData(1, null, 1)]
+            [InlineData(30, null, 30)]
+            [InlineData(60, null, 30)]
+            [InlineData(1, "45", 45)]
+            public async Task CatalogRequestsHonorTheConfiguredIntervalAndProviderRetryAfter(
+                int interval, string retryAfter, int expectedDelay)
             {
                 var now = new DateTime(2026, 11, 18, 8, 0, 0, DateTimeKind.Utc);
                 var start = now;
@@ -342,12 +370,14 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     now += delay;
                     return Task.CompletedTask;
                 });
-                var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Retry-After"] = "30" };
+                var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                if (retryAfter != null) headers["Retry-After"] = retryAfter;
                 using var first = await pacer.SendAsync(() => Task.FromResult(new HttpResponseInfo
-                { StatusCode = (HttpStatusCode)429, Headers = headers }), 3, CancellationToken.None);
+                { StatusCode = retryAfter == null ? HttpStatusCode.OK : (HttpStatusCode)429, Headers = headers }),
+                    interval, CancellationToken.None);
                 using var second = await pacer.SendAsync(() => Task.FromResult(new HttpResponseInfo
-                { StatusCode = HttpStatusCode.OK }), 3, CancellationToken.None);
-                Assert.Equal(start.AddSeconds(30), now);
+                { StatusCode = HttpStatusCode.OK }), interval, CancellationToken.None);
+                Assert.Equal(start.AddSeconds(expectedDelay), now);
             }
 
         [Fact]

@@ -52,7 +52,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public DateTime StartedUtc { get; set; }
         public List<TuneInCategorySnapshot> Categories { get; set; } = new List<TuneInCategorySnapshot>();
         public string DirtyCategory { get; set; }
-        public bool FullChannelImported { get; set; }
+        public int ChannelImportVersion { get; set; }
     }
 
     internal sealed class TuneInRefreshStore

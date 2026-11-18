@@ -1,4 +1,5 @@
 using MediaBrowser.Common.Net;
+using MediaBrowser.Plugins.TuneIn.Configuration;
 using System;
 using System.Globalization;
 using System.Linq;
@@ -29,7 +30,8 @@ namespace MediaBrowser.Plugins.TuneIn
             await owner.WaitAsync(token).ConfigureAwait(false);
             try
             {
-                var interval = TimeSpan.FromSeconds(Math.Max(3, intervalSeconds));
+                var interval = TimeSpan.FromSeconds(Math.Min(PluginConfiguration.MaxApiRequestIntervalSeconds,
+                    Math.Max(PluginConfiguration.MinApiRequestIntervalSeconds, intervalSeconds)));
                 var earliest = lastRequestUtc == default(DateTime) ? clock() : lastRequestUtc + interval;
                 if (earliest > nextRequestUtc) nextRequestUtc = earliest;
                 while (nextRequestUtc > clock())

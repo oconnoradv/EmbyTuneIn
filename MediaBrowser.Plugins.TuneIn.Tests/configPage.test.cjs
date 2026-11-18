@@ -265,17 +265,22 @@ test('save retains unrelated configuration and converts empty fields to null', a
 test('API request interval validates and saves the shared catalog pacing setting', async () => {
     const app = harness();
     const visit = app.instance.onResume();
-    app.reads[0].resolve({ ApiRequestIntervalSeconds: 12 });
+    app.reads[0].resolve({ ApiRequestIntervalSeconds: 60 });
     await visit;
-    assert.equal(app.requestInterval.value, 12);
-    app.requestInterval.value = '2';
-    app.formHandlers.submit({ preventDefault() {} });
-    assert.equal(app.writes.length, 0);
-    assert.match(app.elements['.status'].textContent, /whole number from 3 to 60/);
-    app.requestInterval.value = '60';
-    app.formHandlers.submit({ preventDefault() {} });
-    await settle();
-    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 60);
+    assert.equal(app.requestInterval.value, 30);
+    for (const value of ['0', '31', '1.5']) {
+        app.requestInterval.value = value;
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes.length, 0);
+        assert.match(app.elements['.status'].textContent, /whole number from 1 to 30/);
+    }
+    for (const value of [1, 30]) {
+        app.requestInterval.value = String(value);
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes.at(-1).config.ApiRequestIntervalSeconds, value);
+        await settle();
+    }
+    assert.equal(app.writes.length, 2);
 });
 
 test('navigation discards stale loads without hiding the next visit loader', async () => {

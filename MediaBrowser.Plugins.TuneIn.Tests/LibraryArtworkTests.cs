@@ -42,7 +42,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         {
             var directory = new TuneInDirectory(() => new PluginConfiguration(), (_, __) => throw new Exception("Unexpected provider request."));
             var channel = new TuneInChannel(directory);
-            Assert.Equal("48", channel.DataVersion);
+            Assert.Equal("49", channel.DataVersion);
             using var expected = typeof(TuneInChannel).Assembly.GetManifestResourceStream("MediaBrowser.Plugins.TuneIn.Images.tunein-poweredby.png");
             using var expectedBuffer = new System.IO.MemoryStream();
             Assert.NotNull(expected);
@@ -124,6 +124,37 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public void RefreshReplacesPersistedArtworkOnTheTuneInChannelParent()
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("Unexpected provider request."));
+            var rootId = directory.Register(directory.Snapshot(), new NavigationEntry { Category = "talk", Name = "Talk" });
+            var library = DispatchProxy.Create<ILibraryManager, LibraryProxy>();
+            var proxy = (LibraryProxy)library;
+            proxy.Root = Folder(1, rootId);
+            proxy.Root.ParentId = 10;
+            var parent = new Channel { InternalId = 10, Name = "Other channel" };
+            var types = new[] { ImageType.Primary, ImageType.Thumb, ImageType.Backdrop };
+            foreach (var type in types)
+                parent.SetImage(new ItemImageInfo { Type = type, Path = "old.png" }, 0);
+            proxy.Parent = parent;
+            var channel = new TuneInChannel(directory, serverHost: DispatchProxy.Create<IServerApplicationHost, HostProxy>(), library: library);
+
+            channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+            Assert.All(types, type => Assert.Equal("old.png", parent.GetImagePath(type, 0)));
+            parent.Name = "TuneIn";
+            proxy.FailNextUpdate = true;
+            Assert.Throws<InvalidOperationException>(() => channel.UpdateCategoryArtwork(rootId, CancellationToken.None));
+            channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+            channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+
+            Assert.Single(proxy.Updated, item => item == parent);
+            Assert.All(types, type => Assert.Equal("http://127.0.0.1:8096/emby/TuneIn/CategoryArtwork/channel?v=1",
+                parent.GetImagePath(type, 0)));
+            Assert.EndsWith("/TuneIn/CategoryArtwork/talk?v=1", proxy.Root.GetImagePath(ImageType.Primary, 0));
+        }
+
+        [Fact]
         public void FailedImageUpdateIsRetriedOnTheNextRefresh()
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
@@ -160,6 +191,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public class LibraryProxy : DispatchProxy
         {
             public BaseItem Root { get; set; }
+            public BaseItem Parent { get; set; }
             public BaseItem[] Descendants { get; set; } = Array.Empty<BaseItem>();
             public List<BaseItem> Updated { get; } = new List<BaseItem>();
             public bool FailNextUpdate { get; set; }
@@ -172,7 +204,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     Assert.Equal(new[] { Root.InternalId }, query.ParentIds);
                     return Descendants.Skip(query.StartIndex ?? 0).Take(query.Limit ?? 100).ToArray();
                 }
-                if (method.Name == "GetItemById") return null;
+                if (method.Name == "GetItemById")
+                    return Parent != null && args[0] is long id && Parent.InternalId == id ? Parent : null;
                 if (method.Name == "UpdateItem")
                 {
                     if (FailNextUpdate) { FailNextUpdate = false; throw new InvalidOperationException("Image update failed."); }

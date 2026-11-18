@@ -113,8 +113,9 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             if (value.SchemaVersion != 1 && (value.ConfigurationCompleted || value.SchemaVersion != 0))
                 throw new ArgumentException("Unsupported TuneIn configuration schema.");
-            if (value.ApiRequestIntervalSeconds < 3 || value.ApiRequestIntervalSeconds > 60)
-                throw new ArgumentException("TuneIn API request interval must be between 3 and 60 seconds.");
+            if (value.ApiRequestIntervalSeconds < PluginConfiguration.MinApiRequestIntervalSeconds
+                || value.ApiRequestIntervalSeconds > PluginConfiguration.MaxApiRequestIntervalSeconds)
+                throw new ArgumentException("TuneIn API request interval must be between 1 and 30 seconds.");
             var schedules = value.RefreshSchedules;
             if (schedules != null && (schedules.Count > CategoryKeys.Length || schedules.Any(schedule => !ValidSchedule(schedule))
                 || schedules.Select(schedule => schedule.Category).Distinct(StringComparer.Ordinal).Count() != schedules.Count))

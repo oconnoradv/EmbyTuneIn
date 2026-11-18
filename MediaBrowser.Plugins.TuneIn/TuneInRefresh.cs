@@ -52,6 +52,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
     internal sealed class TuneInRefresh : IDisposable
     {
+        private const int ChannelImportVersion = 2;
         private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(20);
         private static readonly TimeSpan CatalogueCacheLifetime = TimeSpan.FromMinutes(15);
         private const int FailureReportLimit = 64 * 1024;
@@ -357,8 +358,9 @@ namespace MediaBrowser.Plugins.TuneIn
                     var dirtyAtStart = checkpoint.DirtyCategory;
                     var enabled = snapshot.Categories.ToArray();
                     var listings = checkpoint.Categories.ToDictionary(category => category.Category, StringComparer.Ordinal);
+                    var needsRebuild = checkpoint.ChannelImportVersion != ChannelImportVersion;
                     var categories = enabled
-                        .Where(category => requestedCategory == null || dirtyAtStart != null || category == requestedCategory ||
+                        .Where(category => requestedCategory == null || dirtyAtStart != null || needsRebuild || category == requestedCategory ||
                             !listings.ContainsKey(category))
                         .OrderBy(category => category == dirtyAtStart ? 0 : 1)
                         .ToArray();
@@ -375,7 +377,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");
                     var roots = enabled.Select(category => channel.GetCategoryRoot(snapshot, category)).ToArray();
-                    var importRequired = categories.Length != 0 && (!checkpoint.FullChannelImported || dirtyAtStart != null);
+                    var importRequired = categories.Length != 0 && (needsRebuild || dirtyAtStart != null);
                     var changed = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var category in categories)
                     {
@@ -441,7 +443,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         directory.CheckCurrent(snapshot, linked.Token);
                         checkpoint.Categories = enabled.Select(category => listings[category]).ToList();
                         checkpoint.DirtyCategory = null;
-                        checkpoint.FullChannelImported = true;
+                        checkpoint.ChannelImportVersion = ChannelImportVersion;
                         Persist(snapshot, checkpoint, started, BuildCommitted(checkpoint, snapshot.Key));
                     }
                     else
