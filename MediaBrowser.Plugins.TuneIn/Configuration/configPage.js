@@ -86,7 +86,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function createSelector(instance, spec) {
         var epoch = instance.viewEpoch;
-        var collapsible = spec[0] === 'language' || spec[0] === 'location';
+        var collapsible = spec[0] !== 'local';
         var section = document.createElement(collapsible ? 'details' : 'section');
         var heading = document.createElement(collapsible ? 'summary' : 'h3');
         heading.textContent = spec[2];

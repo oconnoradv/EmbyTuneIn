@@ -59,9 +59,9 @@ the channel root to obtain current signed IDs.
 
 ## Refresh from the Control Panel
 
-**Categories**, **By Language**, **By Location**, and **Local Radio** can each
-be collapsed without losing unsaved choices. Save your browsing settings, then
-open **Catalogue refresh**, which starts collapsed. Opening it reads the latest
+**Categories**, **By Language**, **By Location**, **Music genres**, and
+**Local Radio** can each be collapsed without losing unsaved choices. Save your
+browsing settings, then open **Catalogue refresh**, which starts collapsed. Opening it reads the latest
 Control Panel status for the enabled categories; it does not start a refresh.
 Choose **Refresh** beside a category to check only that category, or **Refresh
 all enabled categories** to check them all. The status shows the latest outcomes

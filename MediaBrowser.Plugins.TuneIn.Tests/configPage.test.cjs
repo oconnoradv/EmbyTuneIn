@@ -214,7 +214,8 @@ test('selector retry is bounded and does not send requests after leaving setting
 test('native view lifecycle loads labeled upstream settings on each visit', async () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /data-controller="__plugin\/tuneinjs"/);
-    assert.match(html, /class="txtUsername"[^>]*label="Your Tune In username:"/);
+    assert.match(html, /class="txtUsername"[^>]*label="Your TuneIn username:"[\s\S]*class="categoriesSummary"/);
+    assert.doesNotMatch(html, /<h2>Favorites<\/h2>/);
     assert.match(html, /class="txtLatLon"[^>]*label="Your LatLon:"/);
     const app = harness();
     assert.equal(app.instance.onBeginResume(), 'native transition');
@@ -484,13 +485,15 @@ test('idle polling is slower, refresh actions are explicit, and old polls cannot
     assert.equal(app.refresh.length, 5);
 });
 
-test('collapsing browsing settings keeps choices and does not start provider requests', async () => {
+test('collapsing browsing settings, including Music genres, keeps choices and does not start provider requests', async () => {
     const app = harness();
     const visit = app.instance.onResume();
-    app.reads[0].resolve({ EnableTalk: true, LatLon: '1,2' });
+    app.reads[0].resolve({ EnableTalk: true, LatLon: '1,2', Music: [{ Id: 'g1', Name: 'Rock' }] });
     await visit;
+    const music = app.elements['.selectors'].childNodes[2];
+    assert.equal(music.childNodes[0].textContent, 'Music genres');
     const summaries = [app.elements['.categoriesSummary'], app.elements['.localSummary'],
-        ...app.elements['.selectors'].childNodes.slice(0, 2).map(section => section.childNodes[0])];
+        ...app.elements['.selectors'].childNodes.map(section => section.childNodes[0])];
     for (const summary of summaries) {
         assert.equal(summary.parentNode.open, true);
         summary.handlers.click({ preventDefault() {} });
@@ -499,6 +502,7 @@ test('collapsing browsing settings keeps choices and does not start provider req
         assert.equal(summary.parentNode.open, true);
     }
     assert.equal(app.selectors.length, 0);
+    assert.match(music.textContent, /Rock/);
     assert.equal(app.latLon.value, '1,2');
     assert.ok(app.elements['.categories'].descendants().some(item => item.checked));
 });
