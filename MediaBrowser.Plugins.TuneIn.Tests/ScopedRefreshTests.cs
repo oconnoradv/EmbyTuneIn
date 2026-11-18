@@ -522,7 +522,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task FavoritesWithoutABaselineDoesNotDiscoverMusicOrImport()
+        public async Task FavoritesRequiresABaselineAndThenImportsWithoutFetchingMusic()
         {
             var config = new PluginConfiguration
             {
@@ -530,24 +530,55 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 EnableFavorites = true, EnableMusic = true
             };
             config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
-            var requests = 0;
-            var directory = new TuneInDirectory(() => config, (_, __) =>
+            var requests = new List<string>();
+            var imports = new List<Dictionary<string, string[]>>();
+            var favoriteStation = "s2";
+            var directory = new TuneInDirectory(() => config, (request, _) =>
             {
-                Interlocked.Increment(ref requests);
-                throw new InvalidOperationException("No discovery expected before the baseline exists.");
+                var scope = request.Parameters.TryGetValue("id", out var id) ? id : request.Parameters["c"];
+                requests.Add(scope);
+                var station = scope == "presets" ? favoriteStation : "s1";
+                return Task.FromResult(XDocument.Parse(
+                    $"<opml><body><outline type='audio' guide_id='{station}' text='Radio'/></body></opml>"));
             });
             var channel = new TuneInChannel(directory);
-            using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(null), () => channel,
-                (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
-                (_, __, ___, ____) => throw new InvalidOperationException("No import expected."), null);
-            refresh.Start("presets");
-            await WaitUntilIdle(refresh);
-            var status = refresh.Status();
-            Assert.Equal("presets", status.Category);
-            Assert.Equal("BaselineRequired", status.State);
-            Assert.Contains("Refresh all enabled categories", status.Phase);
-            Assert.Equal(0, requests);
-            Assert.Null(status.DirtyCategory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-favorites-{Guid.NewGuid():N}.xml");
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        imports.Add(ReadStagedTree(staged, token));
+                        return Task.CompletedTask;
+                    }, null);
+                refresh.Start("presets");
+                await WaitUntilIdle(refresh);
+                var status = refresh.Status();
+                Assert.Equal("presets", status.Category);
+                Assert.Equal("BaselineRequired", status.State);
+                Assert.Contains("Refresh all enabled categories", status.Phase);
+                Assert.Empty(requests);
+                Assert.Empty(imports);
+                Assert.Null(status.DirtyCategory);
+
+                refresh.Start();
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(new[] { "g2698", "presets" }, requests);
+                var baseline = Assert.Single(imports);
+                requests.Clear();
+                favoriteStation = "s3";
+
+                refresh.Start("presets");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(new[] { "presets" }, requests);
+                Assert.Equal(2, imports.Count);
+                Assert.Equal(Assert.Single(baseline["Music"]), Assert.Single(imports[1]["Music"]));
+                Assert.NotEqual(Assert.Single(baseline["My Favorites"]), Assert.Single(imports[1]["My Favorites"]));
+            }
+            finally { File.Delete(path); }
         }
 
         private static async Task WaitUntilIdle(TuneInRefresh refresh)

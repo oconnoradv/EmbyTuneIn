@@ -630,6 +630,8 @@ for (const resume of [true, false]) {
         const rows = app.elements['.tuneInRefreshCategories'].childNodes;
         const [local, favorites, sports] = rows.map(row => row.childNodes[1].childNodes[0]);
         const action = favorites.handlers.click();
+        assert.equal(app.refresh[1].options.url.route, 'TuneIn/Refresh/Start');
+        assert.equal(app.refresh[1].options.url.params.Category, 'presets');
         app.refresh[1].resolve({ ...failure, RecoveryChoiceRequired: true });
         await action;
         const dialog = app.elements['.tuneInRecoveryDialog'];
@@ -638,6 +640,7 @@ for (const resume of [true, false]) {
         assert.equal(app.refresh.filter(request => request.options.type === 'POST').length, 1);
         const confirm = app.elements[resume ? '.refreshResumeFirst' : '.refreshNewFirst'].handlers.click();
         const request = app.refresh.at(-1);
+        assert.equal(request.options.url.params.Category, 'presets');
         assert.equal(request.options.url.params.ExpectedRecoveryId, 'generation');
         assert.equal(request.options.url.params.ResumeFirst, resume);
         request.resolve({ State: 'Running', Busy: true, ActiveRequest: resume ? 'local' : 'presets',
