@@ -293,7 +293,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             string requested = null;
             client.Setup(c => c.SendAsync(It.IsAny<HttpRequestOptions>(), "GET"))
                 .Callback<HttpRequestOptions, string>((request, method) => requested = request.Url)
-                .ReturnsAsync(new HttpResponseInfo { Content = new MemoryStream(Encoding.UTF8.GetBytes("https://example.com/live.mp3\n")) });
+                .ReturnsAsync(new HttpResponseInfo { StatusCode = System.Net.HttpStatusCode.OK,
+                    Content = new MemoryStream(Encoding.UTF8.GetBytes("https://example.com/live.mp3\n")) });
             var source = Assert.Single(await new TuneInChannel(directory, client.Object, Mock.Of<ILogger>())
                 .GetChannelItemMediaInfo(id, Token));
             Assert.Equal("https://example.com/live.mp3", source.Path);

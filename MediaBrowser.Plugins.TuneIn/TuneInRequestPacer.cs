@@ -34,10 +34,11 @@ namespace MediaBrowser.Plugins.TuneIn
                     Math.Max(PluginConfiguration.MinApiRequestIntervalSeconds, intervalSeconds)));
                 var earliest = lastRequestUtc == default(DateTime) ? clock() : lastRequestUtc + interval;
                 if (earliest > nextRequestUtc) nextRequestUtc = earliest;
-                while (nextRequestUtc > clock())
+                while (true)
                 {
                     token.ThrowIfCancellationRequested();
                     var remaining = nextRequestUtc - clock();
+                    if (remaining <= TimeSpan.Zero) break;
                     await delay(remaining > TimeSpan.FromDays(1) ? TimeSpan.FromDays(1) : remaining, token)
                         .ConfigureAwait(false);
                 }

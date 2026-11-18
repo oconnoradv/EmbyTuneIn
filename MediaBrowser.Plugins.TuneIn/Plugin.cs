@@ -58,6 +58,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 value.NavigationSecret = Configuration.NavigationSecret;
                 base.UpdateConfiguration(value);
+                TuneInPlayback.CancelChangedScopes();
             }));
         }
 

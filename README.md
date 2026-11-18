@@ -182,6 +182,53 @@ next explicit run. Separately run Emby's built-in channel refresh and verify
 that it can browse the configured catalog without changing Control Panel
 status. These are host checks, not guarantees from the mocked tests.
 
+## Pre-roll and live playback
+
+All configured categories share the same playback resolver. When TuneIn returns
+its recognized separate introduction followed by station alternatives, the plugin
+plays the introduction and then **one** working live alternative as a single Emby
+media item. It does not expose the short introduction as a separate station,
+skip required introductions, or queue all alternative URLs. The verified
+introduction is TuneIn's HTTPS
+`tunein-ondemand.cdnstream1.com/multi_bump_sonic_pre_pre.mp3` asset; arbitrary
+short audio files are not treated as advertisements. The rule also applies to
+supported nested M3U/PLS lists, with URL case and query values preserved.
+
+Ordinary stations, including continuous KEXP-style streams with in-stream
+advertisements, keep their direct playback path. Only separate-introduction
+stations use a server-loopback `/TuneIn/Playback/{signed-item}` endpoint.
+It validates the saved category/selection scope and retains the Favorites
+username. Probe and playback requests have independent lifetimes and re-fetch
+provider playback information. Saving a changed browsing scope cancels affected
+handoff sessions; leaving or stopping playback releases their responses and
+decoders.
+
+API and handoff media requests still use Emby's injected `IHttpClient` and shared
+request pacing, not a new socket, proxy, DNS or TLS implementation. Handoff media
+bodies are streamed, not buffered in full. For separate introductions, Emby's
+configured FFmpeg decodes each MP3/AAC input to 48 kHz stereo PCM behind one WAV
+header so an MP3 introduction can transition to AAC music without ending the
+item or inheriting ad-only probe metadata. This uses additional server CPU and a
+local audio connection; the host must supply a runnable FFmpeg executable and
+allow its child processes. FFmpeg receives audio bytes through pipes, not remote
+URLs. Missing decoders or failed required introductions fail explicitly rather
+than silently dropping the introduction.
+
+Each playlist is limited to 256 KiB and eight entries, with at most four nested
+playlist levels, 16 nested playlist requests and 16 audio opening attempts per
+handoff. Up to 16 handoff requests (including probes) can be active. Opening
+timeouts allow 30 seconds plus the configured pacing interval; playlist body
+reads have a 30-second budget. Failed live opening can try another advertised
+alternative; read/decoder failures after selection terminate the stream without
+restarting the ad or cycling alternatives.
+
+On a test server, play asia DREAM and Big B Radio from Favorites and another
+configured category. Confirm the introduction reaches sustained music without
+advancing the playlist. Check KEXP, Stop, changing stations, leaving playback,
+and saving a disabled category during playback. These host checks remain
+necessary; automated codec and mocked API tests do not establish end-to-end
+behavior on a live Emby installation.
+
 ## Build and test
 
 > [!IMPORTANT]
@@ -204,6 +251,11 @@ Run the .NET tests with a .NET 8 SDK:
 dotnet test MediaBrowser.Plugins.TuneIn.sln -c Release
 ```
 
+For the real MP3-introduction/AAC-live decoding regression, set
+`TUNEIN_TEST_FFMPEG` to a runnable FFmpeg executable before running the .NET
+tests. That regression is skipped when the variable is absent; the remaining
+playback tests use mocked HTTP responses and decoders.
+
 Run the settings controller tests with Node.js:
 
 ```powershell
@@ -218,10 +270,13 @@ selector laziness, form validation, and stale asynchronous responses.
 
 ## Limitations
 
-This plugin uses the upstream TuneIn catalog and playback paths. It does not
-include a protected stream relay or sequential pre-roll/live playback. Existing
-upstream network and playlist playback limitations
-therefore remain. No live Emby server authentication or dashboard runtime test
+Connections, redirects, proxy behavior and destination protections remain the
+responsibility of the installed Emby HTTP client/server; the local handoff is not
+a replacement network sandbox. Keep the host patched. Separate-introduction
+handoff supports the verified provider sequence and MP3/AAC audio, not arbitrary
+ad formats, DRM or HLS sequencing. Ordinary HLS destinations remain on Emby's
+native direct playback path. Unsupported required sequences fail rather than
+skip ads. No live Emby authentication, playback or dashboard runtime validation
 is implied by the automated build and tests.
 
 The project is based on [MediaBrowser/TuneIn](https://github.com/MediaBrowser/TuneIn)

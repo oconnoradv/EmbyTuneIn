@@ -49,9 +49,9 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         internal static Task<HttpResponseInfo> SendAsync(IHttpClient client, HttpRequestOptions options, string method,
-            int intervalSeconds, bool catalogueRequest = false)
+            int intervalSeconds, bool catalogueRequest = false, bool bufferContent = true)
         {
-            options.BufferContent = true;
+            options.BufferContent = bufferContent;
             return Pacer.SendAsync(() => client.SendAsync(options, method), intervalSeconds,
                 options.CancellationToken, catalogueRequest);
         }
