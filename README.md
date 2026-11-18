@@ -119,7 +119,7 @@ from an earlier RC1 still requires a full refresh.
 Incomplete discovery blocks the import, and unchanged catalogs skip import
 unless the library needs reconciliation.
 The error report identifies the category where discovery stopped.
-Music discovery follows verified TuneIn genre aliases (such as Metal and Punk) for
+Music discovery follows verified TuneIn genre aliases (such as Smooth Jazz, Metal and Punk) for
 station and show pagination, but rejects page links into unrelated genres.
 
 After upgrading from an earlier RC1 with an outdated baseline, use **Refresh

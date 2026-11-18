@@ -68,6 +68,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("g3", "c57935", "26", "s", "nextStations")]
         [InlineData("g19", "c57951", "26", "s", "nextStations")]
         [InlineData("g22", "c57954", "26", "s", "nextStations")]
+        [InlineData("g71", "c100002515", "26", "s", "nextStations")]
+        [InlineData("g71", "c100002515", "6", "p", "nextShows")]
         [InlineData("g373", "c100002519", "26", "s", "nextStations")]
         [InlineData("g373", "c100002519", "6", "p", "nextShows")]
         [InlineData("g2698", "c100002520", "26", "s", "nextStations")]
@@ -87,6 +89,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("g19", "id=c57951&filter=s")]
         [InlineData("g19", "offset=26&id=c100002519&filter=s")]
         [InlineData("g2698", "offset=26&id=c100002519&filter=s")]
+        [InlineData("g71", "offset=26&id=c100002519&filter=s")]
+        [InlineData("g71", "id=c100002515&filter=s")]
+        [InlineData("g71", "offset=0&id=c100002515&filter=s")]
+        [InlineData("g71", "offset=26&id=c100002515&filter=s&c=music")]
         public async Task LegacyGenrePaginationRejectsUnrelatedIdsAndNonPageLinks(string genre, string query)
         {
             var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
