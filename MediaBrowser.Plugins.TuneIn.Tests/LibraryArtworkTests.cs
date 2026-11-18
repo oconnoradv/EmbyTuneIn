@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -18,6 +19,24 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 {
     public class LibraryArtworkTests
     {
+        [Fact]
+        public void PluginLibraryThumbnailUsesPoweredByTuneInImage()
+        {
+            var plugin = (Plugin)RuntimeHelpers.GetUninitializedObject(typeof(Plugin));
+            using var actual = plugin.GetThumbImage();
+            using var expected = typeof(Plugin).Assembly.GetManifestResourceStream(
+                "MediaBrowser.Plugins.TuneIn.Images.tunein-poweredby.png");
+            using var actualBuffer = new System.IO.MemoryStream();
+            using var expectedBuffer = new System.IO.MemoryStream();
+            Assert.NotNull(actual);
+            Assert.NotNull(expected);
+            actual.CopyTo(actualBuffer);
+            expected.CopyTo(expectedBuffer);
+            Assert.Equal(expectedBuffer.ToArray(), actualBuffer.ToArray());
+            Assert.Equal(544, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(actualBuffer.ToArray().AsSpan(16, 4)));
+            Assert.Equal(306, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(actualBuffer.ToArray().AsSpan(20, 4)));
+        }
+
         [Fact]
         public async Task TopLevelPrimaryImageUsesBundledLandscapeLogo()
         {

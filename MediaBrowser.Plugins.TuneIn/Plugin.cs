@@ -91,7 +91,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public Stream GetThumbImage()
         {
             var type = GetType();
-            return type.Assembly.GetManifestResourceStream(type.Namespace + ".Images.thumb.png");
+            return type.Assembly.GetManifestResourceStream(type.Namespace + ".Images.tunein-poweredby.png");
         }
 
         public ImageFormat ThumbImageFormat
