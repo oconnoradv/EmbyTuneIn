@@ -50,8 +50,9 @@ browsing. Leaving the opt-in unchecked keeps the channel disabled.
 The first saved configuration persists a server-generated navigation signing
 key in the plugin configuration. Normal settings saves retain this key; deleting
 or replacing it invalidates existing navigation IDs. The upstream plugin GUID,
-assembly name, configuration filename, artwork, and assembly version remain
-unchanged.
+assembly name, configuration filename, and assembly version remain unchanged.
+The plugin thumbnail and TuneIn channel images use TuneIn's 544 × 306
+**Powered by TuneIn** artwork; category folders retain their bundled artwork.
 
 Legacy URL-based `subcat_`, `preset_`, and `stream_` item IDs are not accepted.
 Old library entries may remain until Emby refreshes channel metadata; return to
@@ -104,8 +105,11 @@ guaranteed.
 
 ### Manual testing
 
-Use a test server. After installing, open, leave, and reopen TuneIn settings
-while a response is pending: the native transition and loader should settle,
+Use a test server. Confirm the top-level TuneIn library image shows the Powered
+by TuneIn logo after the channel data version refreshes. If Emby retains older
+cached artwork, refresh the TuneIn channel. After installing, open, leave, and
+reopen TuneIn settings while a response is pending: the native transition and
+loader should settle,
 and stale responses should not update the page. Keyboard-open selected Location
 and Language branches, try **Add** separately, and check saved paths and retry
 feedback. With Local Radio on, alternate between saved regions and coordinates

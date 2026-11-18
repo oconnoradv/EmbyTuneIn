@@ -38,21 +38,28 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task TopLevelPrimaryImageUsesBundledLandscapeLogo()
+        public async Task ChannelImagesUsePoweredByTuneInAssetAndInvalidateCachedVersion()
         {
             var directory = new TuneInDirectory(() => new PluginConfiguration(), (_, __) => throw new Exception("Unexpected provider request."));
             var channel = new TuneInChannel(directory);
-            var image = await channel.GetChannelImage(ImageType.Primary, CancellationToken.None);
+            Assert.Equal("48", channel.DataVersion);
             using var expected = typeof(TuneInChannel).Assembly.GetManifestResourceStream("MediaBrowser.Plugins.TuneIn.Images.tunein-poweredby.png");
-            using var actualBuffer = new System.IO.MemoryStream();
             using var expectedBuffer = new System.IO.MemoryStream();
-            using (image.Stream) image.Stream.CopyTo(actualBuffer);
             Assert.NotNull(expected);
             expected.CopyTo(expectedBuffer);
-            Assert.Equal(expectedBuffer.ToArray(), actualBuffer.ToArray());
-            var png = actualBuffer.ToArray();
-            Assert.Equal(544, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(16, 4)));
-            Assert.Equal(306, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(20, 4)));
+            foreach (var type in new[] { ImageType.Primary, ImageType.Thumb, ImageType.Backdrop })
+            {
+                var image = await channel.GetChannelImage(type, CancellationToken.None);
+                using (image.Stream)
+                using (var actualBuffer = new System.IO.MemoryStream())
+                {
+                    image.Stream.CopyTo(actualBuffer);
+                    var png = actualBuffer.ToArray();
+                    Assert.Equal(expectedBuffer.ToArray(), png);
+                    Assert.Equal(544, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(16, 4)));
+                    Assert.Equal(306, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(20, 4)));
+                }
+            }
         }
 
         [Fact]

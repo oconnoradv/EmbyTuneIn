@@ -49,7 +49,7 @@ namespace MediaBrowser.Plugins.TuneIn
             this.library = library;
         }
 
-        public string DataVersion => "47";
+        public string DataVersion => "48";
         public ChannelFeatures Features => new ChannelFeatures { ShowRootFoldersAtTopLevel = false };
         public string Description => "Listen to online radio, find streaming music radio and streaming talk radio with TuneIn.";
         public bool IsEnabledFor(string userId) => true;
@@ -299,8 +299,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 case ImageType.Backdrop:
                 case ImageType.Primary:
                     {
-                        var imageName = type == ImageType.Primary ? "tunein-poweredby" : type.ToString().ToLowerInvariant();
-                        var path = GetType().Namespace + ".Images." + imageName + ".png";
+                        var path = GetType().Namespace + ".Images.tunein-poweredby.png";
 
                         return Task.FromResult(new DynamicImageResponse
                         {
