@@ -1,6 +1,32 @@
 ﻿<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/tuneinjs" data-title="TuneIn">
     <style>
-        .selectors .tuneInSelectorWindow {
+        .tuneInSection {
+            margin-block: 1em;
+        }
+        .tuneInSection > summary {
+            cursor: pointer;
+            font-size: 1.15em;
+            font-weight: 600;
+            padding-block: .6em;
+        }
+        .tuneInSection > summary:focus-visible {
+            outline: 2px solid currentColor;
+            outline-offset: 2px;
+        }
+        .tuneInRefreshCategories {
+            list-style: none;
+            margin: .75em 0;
+            padding: 0;
+        }
+        .tuneInRefreshCategories li {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: .25em 1em;
+            padding-block: .35em;
+        }
+        .tuneInSelectors .tuneInSelectorWindow {
             box-sizing: border-box;
             height: 24rem;
             max-height: 60vh;
@@ -10,43 +36,43 @@
             padding: .5em;
             border: 1px solid currentColor;
         }
-        .selectors .tuneInSelectorResults {
+        .tuneInSelectors .tuneInSelectorResults {
             list-style: none;
             margin: 0;
             padding: 0;
         }
-        .selectors .tuneInSelectorBranch {
+        .tuneInSelectors .tuneInSelectorBranch {
             padding-inline-start: 1em;
         }
-        .selectors .tuneInSelectorStatus {
+        .tuneInSelectors .tuneInSelectorStatus {
             margin: .5em 0;
         }
-        .selectors .tuneInSelectorStatus:empty {
+        .tuneInSelectors .tuneInSelectorStatus:empty {
             display: none;
         }
-        .selectors .tuneInSelectorRow {
+        .tuneInSelectors .tuneInSelectorRow {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
             align-items: start;
             position: relative;
             min-height: 3em;
         }
-        .selectors .tuneInSelectorRow > details {
+        .tuneInSelectors .tuneInSelectorRow > details {
             grid-area: 1 / 1 / auto / -1;
             min-width: 0;
         }
-        .selectors .tuneInSelectorRow > details > summary {
+        .tuneInSelectors .tuneInSelectorRow > details > summary {
             margin-inline-end: 5.5em;
         }
-        .selectors .tuneInSelectorRow > span,
-        .selectors summary {
+        .tuneInSelectors .tuneInSelectorRow > span,
+        .tuneInSelectors summary:not(.tuneInSectionLabel) {
             padding: .75em .25em;
             overflow-wrap: anywhere;
         }
-        .selectors summary {
+        .tuneInSelectors summary {
             cursor: pointer;
         }
-        .selectors .tuneInSelectorAdd {
+        .tuneInSelectors .tuneInSelectorAdd {
             grid-area: 1 / 2;
             justify-self: end;
             z-index: 1;
@@ -64,42 +90,50 @@
                 <input type="checkbox" is="emby-checkbox" class="configurationCompleted" />
                 <span>Enable configured browsing after saving</span>
             </label>
-            <h2>Categories</h2>
-            <div class="categories"></div>
-            <h2>Favorites and Local Radio</h2>
+            <details class="tuneInSection" open>
+                <summary class="categoriesSummary">Categories</summary>
+                <div class="categories"></div>
+            </details>
+            <h2>Favorites</h2>
             <div class="inputContainer">
                 <input type="text" is="emby-input" class="txtUsername" label="Your Tune In username:" maxlength="128" />
             </div>
-            <div class="selectContainer">
-                <select is="emby-select" class="localSource" label="Local Radio source:">
-                    <option value="">Choose a source</option>
-                    <option value="regions">Saved cities and regions</option>
-                    <option value="coordinates">Coordinates</option>
-                </select>
-                <div class="fieldDescription">When Local Radio is enabled, choose one source. Switching sources keeps your saved regions and coordinate text.</div>
-            </div>
-            <div class="inputContainer">
-                <input type="text" is="emby-input" class="txtLatLon" label="Your LatLon:" />
-                <div class="fieldDescription">
-                    Your LatLon can be found at <a is="emby-linkbutton" class="button-link" target="_blank" href="https://www.latlong.net">https://www.latlong.net</a>.
+            <details class="tuneInSection" open>
+                <summary class="localSummary">Local Radio</summary>
+                <div class="selectContainer">
+                    <select is="emby-select" class="localSource" label="Local Radio source:">
+                        <option value="">Choose a source</option>
+                        <option value="regions">Saved cities and regions</option>
+                        <option value="coordinates">Coordinates</option>
+                    </select>
+                    <div class="fieldDescription">When Local Radio is enabled, choose one source. Switching sources keeps your saved regions and coordinate text.</div>
                 </div>
-            </div>
+                <div class="inputContainer">
+                    <input type="text" is="emby-input" class="txtLatLon" label="Your LatLon:" />
+                    <div class="fieldDescription">
+                        Your LatLon can be found at <a is="emby-linkbutton" class="button-link" target="_blank" href="https://www.latlong.net">https://www.latlong.net</a>.
+                    </div>
+                </div>
+                <div class="localSelector tuneInSelectors"></div>
+            </details>
             <h2>Saved selections</h2>
             <p>Music, By Language, and By Location require enabled saved selections. Open a selector to see its choices, then expand a branch or add a selection.</p>
-            <div class="selectors"></div>
+            <div class="selectors tuneInSelectors"></div>
             </fieldset>
             <br />
             <div>
                 <button is="emby-button" type="submit" class="raised button-submit block" disabled><span>Save</span></button>
             </div>
         </form>
-        <section class="auto-center tuneInRefresh">
-            <h2>Catalogue refresh</h2>
+        <details class="auto-center tuneInSection tuneInRefresh">
+            <summary class="refreshSummary">Catalogue refresh</summary>
             <p>Checks the saved TuneIn scopes and imports changed categories into Emby. Save browsing changes before starting.</p>
             <p class="refreshStatus" role="status">Reading refresh status...</p>
             <p class="refreshError" role="alert"></p>
-            <button is="emby-button" type="button" class="raised refreshStart" disabled>Start refresh</button>
+            <button is="emby-button" type="button" class="raised refreshStart" disabled>Refresh all enabled categories</button>
             <button is="emby-button" type="button" class="emby-button refreshCancel" disabled>Cancel refresh</button>
-        </section>
+            <p class="refreshCategoryNote" role="status"></p>
+            <ul class="tuneInRefreshCategories" aria-label="Category refresh status"></ul>
+        </details>
     </div>
 </div>

@@ -59,7 +59,13 @@ the channel root to obtain current signed IDs.
 
 ## Refresh from the Control Panel
 
-Save your browsing settings, then use **Catalogue refresh → Start refresh**.
+**Categories**, **By Language**, **By Location**, and **Local Radio** can each
+be collapsed without losing unsaved choices. Save your browsing settings, then
+open **Catalogue refresh**, which starts collapsed. Opening it reads the latest
+Control Panel status for the enabled categories; it does not start a refresh.
+Choose **Refresh** beside a category to check only that category, or **Refresh
+all enabled categories** to check them all. The status shows the latest outcomes
+since Emby started, or a previous successful import from the saved checkpoint.
 Only administrators can start, cancel, or read progress. Leaving the page stops
 status polling, not the server run. Starting or cancelling is always explicit;
 this plugin doesn't register, edit, or trigger anything in Scheduled Tasks.
@@ -67,18 +73,24 @@ Emby's built-in channel refresh still uses the shared catalogue browse path.
 The plugin has no per-category outcome signal for that native task and does not
 report a browse callback as a successful import.
 
-The Control Panel run checks each enabled scope against its last successful
-import. An unchanged category is skipped. A changed category is imported as a
-complete listing, not a delta; incomplete discovery never triggers an import
-for that category. Browse can use the previous successful snapshot while
-discovery runs. Before the first successful import there is no snapshot and
-browsing follows the normal provider path. Playback still resolves live and
-old IDs cannot bypass the saved scopes.
+The plugin caches its last successfully imported TuneIn catalogue for the
+saved scopes, not a copy of Emby's library database. Browse can use that
+snapshot while a Control Panel refresh discovers fresh data. Before the first
+successful import there is no snapshot, so browsing follows the normal provider
+path. Playback still resolves live and old IDs cannot bypass the saved scopes.
+
+Refresh applies changes at the **category level**. It skips categories whose
+fresh catalogue matches the last successful import. For a changed category,
+the plugin sends Emby the **complete category listing**, with stable IDs for
+unchanged stations. Emby's import API does not support station-by-station
+deltas. Incomplete discovery never triggers an import for that category.
 
 Emby's import isn't transactional. If cancellation, failure, or restart
-interrupts an import, some metadata may already have changed. The next run
-rechecks the dirty category and imports it again even if its catalogue appears
-unchanged. Browse availability during Emby's import isn't guaranteed.
+interrupts an import, some metadata may already have changed. Refresh that
+category or refresh all to reconcile it before refreshing a different
+category on its own. Reconciliation imports the category again even if its
+catalogue appears unchanged. Browse availability during Emby's import isn't
+guaranteed.
 
 ### Manual testing
 
@@ -90,7 +102,9 @@ feedback. With Local Radio on, alternate between saved regions and coordinates
 and verify that Browse and Refresh use only the selected source. With legacy
 settings enabling both, only Local Radio should be unavailable until corrected.
 
-Before and after a refresh, compare Scheduled Tasks for new entries, triggers,
+Expand **Catalogue refresh** and verify opening it updates the category states
+without starting a run. Refresh one category and check that other categories
+keep their status. Before and after a refresh, compare Scheduled Tasks for new entries, triggers,
 or runs: none should have changed because of the Control Panel action. Establish
 a successful baseline, browse it during another discovery, and check that
 unchanged scopes are skipped and changed scopes still list unchanged stations.

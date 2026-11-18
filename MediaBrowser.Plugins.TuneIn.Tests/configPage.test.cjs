@@ -29,7 +29,7 @@ class Element {
     }
     set textContent(value) { this._text = value; this.childNodes = []; }
     get textContent() { return this._text + this.childNodes.map(child => child.textContent).join(''); }
-    appendChild(child) { this.childNodes.push(child); return child; }
+    appendChild(child) { this.childNodes.push(child); child.parentNode = this; return child; }
     setAttribute(name, value) { this.attributes[name] = value; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
     descendants() { return this.childNodes.flatMap(child => [child, ...child.descendants()]); }
@@ -44,7 +44,17 @@ function harness() {
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon };
     for (const name of ['.localSource', '.configurationCompleted', '.categories', '.selectors',
         '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
-        '.refreshStart', '.refreshCancel']) elements[name] = new Element();
+        '.refreshStart', '.refreshCancel', '.localSelector', '.tuneInRefreshCategories',
+        '.refreshCategoryNote']) elements[name] = new Element();
+    for (const [section, summary, open] of [
+        ['.categoriesSection', '.categoriesSummary', true],
+        ['.localSection', '.localSummary', true],
+        ['.tuneInRefresh', '.refreshSummary', false]
+    ]) {
+        elements[section] = new Element('details');
+        elements[section].open = open;
+        elements[summary] = elements[section].appendChild(new Element('summary'));
+    }
     const enhanced = [];
     const view = {
         addEventListener(event, handler) { handlers[event] = handler; },
@@ -307,7 +317,7 @@ test('only explicit selector actions fetch branches and save multiple local sele
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     await visit;
-    const section = app.elements['.selectors'].childNodes[2];
+    const section = app.elements['.localSelector'].childNodes[0];
     const root = section.childNodes.find(node => node.tagName === 'details');
     const loading = open(root);
     assert.equal(open(root), loading);
@@ -437,9 +447,11 @@ test('status polls once per visit, drains prior requests and updates only the cu
 
 test('idle polling is slower, refresh actions are explicit, and old polls cannot overwrite action results', async () => {
     const app = harness();
+    app.elements['.tuneInRefresh'].open = true;
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
-    app.refresh[0].resolve({ State: 'NeverRun', Busy: false });
+    app.refresh[0].resolve({ State: 'NeverRun', Busy: false,
+        Categories: [{ Category: 'talk', Name: 'Talk', State: 'No recorded refresh' }] });
     await visit;
     await settle();
     const idle = [...app.timers.values()][0];
@@ -449,6 +461,7 @@ test('idle polling is slower, refresh actions are explicit, and old polls cannot
     const action = app.elements['.refreshStart'].handlers.click();
     assert.equal(app.refresh[2].options.type, 'POST');
     assert.equal(app.refresh[2].options.url.route, 'TuneIn/Refresh/Start');
+    assert.equal(app.refresh[2].options.url.params, undefined);
     app.refresh[2].resolve({ State: 'Running', Busy: true });
     await settle();
     app.refresh[1].resolve({ State: 'NeverRun', Busy: false });
@@ -464,4 +477,71 @@ test('idle polling is slower, refresh actions are explicit, and old polls cannot
     await cancel;
     assert.match(app.elements['.refreshStatus'].textContent, /Running/);
     assert.equal(app.refresh.length, 5);
+});
+
+test('collapsing browsing settings keeps choices and does not start provider requests', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ EnableTalk: true, LatLon: '1,2' });
+    await visit;
+    const summaries = [app.elements['.categoriesSummary'], app.elements['.localSummary'],
+        ...app.elements['.selectors'].childNodes.slice(0, 2).map(section => section.childNodes[0])];
+    for (const summary of summaries) {
+        assert.equal(summary.parentNode.open, true);
+        summary.handlers.click({ preventDefault() {} });
+        assert.equal(summary.parentNode.open, false);
+        summary.handlers.click({ preventDefault() {} });
+        assert.equal(summary.parentNode.open, true);
+    }
+    assert.equal(app.selectors.length, 0);
+    assert.equal(app.latLon.value, '1,2');
+    assert.ok(app.elements['.categories'].descendants().some(item => item.checked));
+});
+
+test('opening collapsed Catalogue refresh gets fresh category status before allowing a scoped refresh', async () => {
+    const app = harness();
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /<details class="[^"]*\btuneInRefresh">/);
+    const visit = app.instance.onResume();
+    const section = app.elements['.tuneInRefresh'];
+    const list = app.elements['.tuneInRefreshCategories'];
+    app.reads[0].resolve({});
+    await visit;
+    app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
+    assert.equal(section.open, true);
+    section.handlers.toggle();
+    assert.equal(app.refresh.length, 1);
+    app.refresh[0].resolve({ State: 'NeverRun' });
+    await settle();
+    assert.equal(app.refresh[1].options.url.route, 'TuneIn/Refresh/Status');
+    assert.equal(list.childNodes.length, 0);
+    const categories = [{ Category: 'talk', Name: 'Talk', State: 'Unchanged' },
+        { Category: 'sports', Name: 'Sports', State: 'Cancelled' }];
+    app.refresh[1].resolve({ State: 'Cancelled', DirtyCategory: 'sports', Categories: categories });
+    await settle();
+    const [talk, sports] = list.childNodes;
+    assert.match(talk.textContent, /Talk.*Unchanged/);
+    assert.match(sports.textContent, /Sports.*reconciliation needed/);
+    assert.equal(talk.childNodes[1].disabled, true);
+    assert.equal(sports.childNodes[1].disabled, false);
+    const action = sports.childNodes[1].handlers.click();
+    assert.equal(app.refresh[2].options.type, 'POST');
+    assert.equal(app.refresh[2].options.url.route, 'TuneIn/Refresh/Start');
+    assert.equal(app.refresh[2].options.url.params.Category, 'sports');
+    app.refresh[2].resolve({ State: 'Running', Busy: true, Categories: categories });
+    await action;
+    assert.equal(sports.childNodes[1].disabled, true);
+    section.open = false;
+    section.handlers.toggle();
+    app.refresh[3].resolve({ State: 'Completed', Categories: categories });
+    await settle();
+    section.open = true;
+    section.handlers.toggle();
+    assert.equal(app.refresh[4].options.url.route, 'TuneIn/Refresh/Status');
+    assert.equal(sports.childNodes[1].disabled, true);
+    app.refresh[4].resolve({ State: 'Completed', Categories: [categories[0], { ...categories[1], State: 'Imported' }] });
+    await settle();
+    assert.equal(list.childNodes[1], sports);
+    assert.match(sports.textContent, /Sports.*Imported/);
+    assert.equal(sports.childNodes[1].disabled, false);
 });

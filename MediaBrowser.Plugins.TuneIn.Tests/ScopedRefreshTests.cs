@@ -99,9 +99,68 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
             [Fact]
+            public async Task SingleCategoryRefreshValidatesSavedScopeAndLeavesOtherCategoriesUntouched()
+            {
+                var config = new PluginConfiguration
+                {
+                    SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true
+                };
+                var fetched = new List<string>();
+                var imported = new List<string>();
+                var directory = new TuneInDirectory(() => config, (request, _) =>
+                {
+                    fetched.Add(request.Parameters["c"]);
+                    return Task.FromResult(XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Station'/></body></opml>"));
+                });
+                var channel = new TuneInChannel(directory);
+                var path = Path.Combine(Path.GetTempPath(), $"tunein-refresh-{Guid.NewGuid():N}.xml");
+                var store = new TuneInRefreshStore(path);
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, __, folder, ___) =>
+                    {
+                        imported.Add(directory.Resolve(directory.Snapshot(), folder).Category);
+                        return Task.CompletedTask;
+                    }, null);
+                try
+                {
+                    Assert.Throws<ArgumentException>(() => refresh.Start("music"));
+                    Assert.Throws<ArgumentException>(() => refresh.Start("https://example.test/"));
+                    Assert.Empty(fetched);
+
+                    refresh.Start("talk");
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("talk", Assert.Single(fetched));
+                    Assert.Equal("talk", Assert.Single(imported));
+                    var talkCheckpoint = Assert.Single(store.Read().Categories);
+                    Assert.Equal("talk", talkCheckpoint.Category);
+
+                    refresh.Start("sports");
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal(new[] { "talk", "sports" }, fetched);
+                    Assert.Equal(new[] { "talk", "sports" }, imported);
+                    Assert.Equal(talkCheckpoint.Fingerprint, store.Read().Categories.Single(category => category.Category == "talk").Fingerprint);
+
+                    refresh.Start("sports");
+                    await WaitUntilIdle(refresh);
+                    var status = refresh.Status();
+                    Assert.Equal("Completed", status.State);
+                    Assert.Equal(1, status.CategoriesSkipped);
+                    Assert.Collection(status.Categories,
+                        talk => { Assert.Equal("talk", talk.Category); Assert.Equal("Imported", talk.State); },
+                        sports => { Assert.Equal("sports", sports.Category); Assert.Equal("Unchanged", sports.State); });
+                    Assert.Equal(2, imported.Count);
+                }
+                finally { File.Delete(path); }
+            }
+
+            [Fact]
             public async Task ChangedCategoryImportsCompleteListingAndReconcilesAfterCancellationAndRestart()
             {
-                var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+                var config = new PluginConfiguration
+                {
+                    SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true
+                };
                 const string first = "<outline type='audio' guide_id='s1' text='Existing'/>";
                 var listing = first;
                 var directory = new TuneInDirectory(() => config, (_, __) =>
@@ -135,13 +194,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     using (var refresh = Make())
                     {
                         Assert.Equal("NeverRun", refresh.Status().State);
-                        refresh.Start();
+                        refresh.Start("talk");
                         await WaitUntilIdle(refresh);
                         Assert.Equal("Completed", refresh.Status().State);
                         Assert.Single(Assert.Single(imported));
 
                         listing = first + "<outline type='link' text='Invalid' url='https://invalid.example/Browse.ashx?id=s2'/>";
-                        refresh.Start();
+                        refresh.Start("talk");
                         await WaitUntilIdle(refresh);
                         Assert.Equal("Error", refresh.Status().State);
                         Assert.Null(store.Read().DirtyCategory);
@@ -149,7 +208,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 
                         listing = first + "<outline type='audio' guide_id='s2' text='New'/>";
                         interrupt = true;
-                        refresh.Start();
+                        refresh.Start("talk");
                         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
                         Assert.Throws<InvalidOperationException>(() => refresh.UpdateConfiguration(() => config.EnableTalk = false));
                         Assert.Throws<InvalidOperationException>(() => refresh.Start());
@@ -163,7 +222,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     listing = first; // Same as the last successful import, but a dirty category cannot skip.
                     using (var restarted = Make())
                     {
-                        restarted.Start();
+                        Assert.Equal("talk", restarted.Status().DirtyCategory);
+                        Assert.Throws<InvalidOperationException>(() => restarted.Start("sports"));
+                        restarted.Start("talk");
                         await WaitUntilIdle(restarted);
                         Assert.Equal("Completed", restarted.Status().State);
                         Assert.Equal(0, restarted.Status().CategoriesSkipped);
@@ -188,6 +249,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var service = new TuneInRefreshService(refresh);
                 Assert.Throws<UnauthorizedAccessException>(() => service.Get(new GetTuneInRefreshStatus()));
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new StartTuneInRefresh()));
+                Assert.Throws<UnauthorizedAccessException>(() => service.Post(new StartTuneInRefresh { Category = "talk" }));
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new CancelTuneInRefresh()));
             }
 

@@ -30,7 +30,16 @@ namespace MediaBrowser.Plugins.TuneIn
         public string ErrorCode { get; set; }
         public DateTime? StartedUtc { get; set; }
         public DateTime? FinishedUtc { get; set; }
+        public string DirtyCategory { get; set; }
+        public TuneInCategoryRefreshStatus[] Categories { get; set; }
         internal TuneInRefreshStatus Copy() => (TuneInRefreshStatus)MemberwiseClone();
+    }
+
+    public sealed class TuneInCategoryRefreshStatus
+    {
+        public string Category { get; set; }
+        public string Name { get; set; }
+        public string State { get; set; }
     }
 
     internal sealed class TuneInRefresh : IDisposable
@@ -48,6 +57,9 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Func<DateTime> clock;
         private readonly TimeSpan? timeoutOverride;
         private TuneInRefreshStatus status = new TuneInRefreshStatus();
+        private readonly Dictionary<string, string> categoryStates = new Dictionary<string, string>(StringComparer.Ordinal);
+        private string categoryStateKey;
+        private string dirtyCategory;
         private CommittedCatalogue committed = new CommittedCatalogue(null,
             new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal));
         private CancellationTokenSource cancellation;
@@ -86,29 +98,46 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             lock (gate)
             {
+                var snapshot = directory.Snapshot();
+                LoadCategoryStates(snapshot);
                 var copy = status.Copy();
                 copy.Busy = work != null && !work.IsCompleted;
+                copy.DirtyCategory = dirtyCategory;
+                copy.Categories = snapshot.Categories.Select(category => new TuneInCategoryRefreshStatus
+                {
+                    Category = category,
+                    Name = TuneInBrowsing.CategoryName(category),
+                    State = copy.Busy && copy.State == "Running" && copy.Category == category ? copy.Phase :
+                        categoryStates.TryGetValue(category, out var state) ? state : "No recorded refresh"
+                }).ToArray();
                 return copy;
             }
         }
 
-        internal TuneInRefreshStatus Start()
+        internal TuneInRefreshStatus Start(string category = null)
         {
             lock (gate)
             {
                 if (disposed) throw new ObjectDisposedException(nameof(TuneInRefresh));
                 if (work != null && !work.IsCompleted)
                     throw new InvalidOperationException("TuneIn refresh is already running or draining.");
+                var snapshot = directory.Snapshot();
+                if (category != null && !snapshot.Enabled(category))
+                    throw new ArgumentException("Choose a category enabled by the saved TuneIn configuration.", nameof(category));
+                LoadCategoryStates(snapshot);
+                if (category != null && dirtyCategory != null && category != dirtyCategory)
+                    throw new InvalidOperationException("Reconcile the interrupted TuneIn category before refreshing another.");
                 cancellation?.Dispose();
                 cancellation = new CancellationTokenSource();
                 status = new TuneInRefreshStatus
                 {
                     State = "Running",
                     Phase = "Preparing",
+                    Category = category,
                     StartedUtc = clock()
                 };
                 var ownedToken = cancellation.Token;
-                work = Task.Run(() => ExecuteAsync(ownedToken));
+                work = Task.Run(() => ExecuteAsync(snapshot, category, ownedToken));
                 return Status();
             }
         }
@@ -117,7 +146,7 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             lock (gate)
             {
-                if (work == null || work.IsCompleted) return status.Copy();
+                if (work == null || work.IsCompleted) return Status();
                 cancellation.Cancel();
                 status.Phase = "Cancelling and draining";
                 return Status();
@@ -133,7 +162,31 @@ namespace MediaBrowser.Plugins.TuneIn
                     throw new InvalidOperationException("TuneIn settings cannot change while refresh work is active or draining.");
                 update();
                 store.Clear();
+                categoryStateKey = null;
+                categoryStates.Clear();
+                dirtyCategory = null;
                 committed = new CommittedCatalogue(null, new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal));
+            }
+        }
+
+        // The checkpoint is bounded but can be large. Read it once per saved scope, not on every status poll.
+        private void LoadCategoryStates(ConfigurationSnapshot snapshot)
+        {
+            if (categoryStateKey == snapshot.Key) return;
+            categoryStates.Clear();
+            dirtyCategory = null;
+            categoryStateKey = snapshot.Key;
+            try
+            {
+                var checkpoint = store.Read();
+                if (checkpoint?.ConfigurationKey != snapshot.Key) return;
+                dirtyCategory = checkpoint.DirtyCategory;
+                foreach (var category in checkpoint.Categories) categoryStates[category.Category] = "Imported";
+            }
+            catch (Exception error)
+            {
+                logger?.Error("TuneIn category refresh state could not be read ({0}).", error.GetType().Name);
+                foreach (var category in snapshot.Categories) categoryStates[category] = "Status unavailable";
             }
         }
 
@@ -211,11 +264,11 @@ namespace MediaBrowser.Plugins.TuneIn
             return new CommittedCatalogue(key, folders);
         }
 
-        private async Task ExecuteAsync(CancellationToken serverToken)
+        private async Task ExecuteAsync(ConfigurationSnapshot snapshot, string requestedCategory, CancellationToken serverToken)
         {
-            ConfigurationSnapshot snapshot = null;
             TuneInCatalogueSession session = null;
             TuneInRefreshCheckpoint checkpoint = null;
+            string currentCategory = null;
             var completed = new HashSet<string>(StringComparer.Ordinal);
             DateTime started = clock();
             var timedOut = false;
@@ -224,8 +277,8 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 try
                 {
-                    snapshot = directory.Snapshot();
                     if (!snapshot.Ready) throw new InvalidOperationException("TuneIn settings are not complete.");
+                    directory.CheckCurrent(snapshot, linked.Token);
                     timeout.CancelAfter(timeoutOverride ?? DefaultTimeout);
 
                     checkpoint = store.Read();
@@ -244,6 +297,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         started = checkpoint.StartedUtc <= clock() ? checkpoint.StartedUtc : started;
                         lock (gate)
                         {
+                            dirtyCategory = checkpoint.DirtyCategory;
                             status.Resumed = checkpoint.DirtyCategory != null;
                             status.ImportMayHavePartiallyApplied = checkpoint.DirtyCategory != null;
                         }
@@ -251,11 +305,14 @@ namespace MediaBrowser.Plugins.TuneIn
 
                     var dirtyAtStart = checkpoint.DirtyCategory;
                     var categories = snapshot.Categories
+                        .Where(category => requestedCategory == null || category == requestedCategory)
                         .OrderBy(category => category == dirtyAtStart ? 0 : 1)
                         .ToArray();
                     lock (gate) status.CategoriesTotal = categories.Length;
                     if (dirtyAtStart != null && !categories.Contains(dirtyAtStart, StringComparer.Ordinal))
-                        throw new InvalidOperationException("TuneIn refresh has a dirty category outside the enabled configuration.");
+                        throw new InvalidOperationException("TuneIn refresh must include the category with an interrupted import.");
+                    if (requestedCategory != null && categories.Length == 0)
+                        throw new InvalidOperationException("The selected TuneIn category is no longer enabled.");
                     session = new TuneInCatalogueSession(null, CatalogueCacheLifetime, clock,
                         hit => Update(() => { if (hit) status.CacheHits++; else status.RequestsStarted++; }),
                         () => Update(() => status.RequestsCompleted++),
@@ -267,6 +324,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     {
                         linked.Token.ThrowIfCancellationRequested();
                         directory.CheckCurrent(snapshot, linked.Token);
+                        currentCategory = category;
                         int requestsBefore;
                         lock (gate) requestsBefore = status.RequestsCompleted + status.CacheHits;
                         Update(() =>
@@ -305,10 +363,12 @@ namespace MediaBrowser.Plugins.TuneIn
                             completed.Add(category);
                             Update(() =>
                             {
+                                categoryStates[category] = "Unchanged";
                                 status.CategoriesSkipped++;
                                 status.CategoriesCompleted = completed.Count;
                                 status.Progress = categories.Length == 0 ? 99 : 99d * completed.Count / categories.Length;
                             });
+                            currentCategory = null;
                             continue;
                         }
 
@@ -336,9 +396,11 @@ namespace MediaBrowser.Plugins.TuneIn
                         completed.Add(category);
                         Update(() =>
                         {
+                            categoryStates[category] = "Imported";
                             status.CategoriesCompleted = completed.Count;
                             status.Progress = categories.Length == 0 ? 99 : 99d * completed.Count / categories.Length;
                         });
+                        currentCategory = null;
                         dirtyAtStart = null;
                     }
 
@@ -359,6 +421,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     lock (gate)
                     {
                         status.State = timedOut ? "TimedOut" : cancelled ? "Cancelled" : "Error";
+                        if (currentCategory != null && categoryStateKey == snapshot.Key)
+                            categoryStates[currentCategory] = timedOut ? "Timed out" : cancelled ? "Cancelled" : "Failed";
                         status.ErrorCode = cancelled ? status.State : error.GetType().Name;
                         status.Phase = cancelled ? "Stopped and drained" : status.Phase;
                     }
@@ -390,6 +454,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 checkpoint.SavedUtc = clock();
                 checkpoint.StartedUtc = started;
                 store.Write(checkpoint);
+                dirtyCategory = checkpoint.DirtyCategory;
                 status.ImportMayHavePartiallyApplied = checkpoint.DirtyCategory != null;
                 if (published != null) committed = published;
             }
