@@ -327,15 +327,18 @@ namespace MediaBrowser.Plugins.TuneIn
                 && !entry.Request.Parameters.ContainsKey("c");
         }
 
-        public async Task<XDocument> FetchAsync(ConfigurationSnapshot snapshot, DirectoryRequest request, CancellationToken token)
+        public async Task<XDocument> FetchAsync(ConfigurationSnapshot snapshot, DirectoryRequest request, CancellationToken token,
+            TuneInCatalogueSession session = null)
         {
             CheckCurrent(snapshot, token);
-            var document = await fetch(request, token).ConfigureAwait(false);
+            var document = session == null ? await fetch(request, token).ConfigureAwait(false)
+                : await session.FetchAsync(request, () => fetch(request, token), token).ConfigureAwait(false);
             CheckCurrent(snapshot, token);
             return document;
         }
 
-        public async Task<SelectorResult> SelectAsync(string category, string parent, bool refresh, CancellationToken token)
+        public async Task<SelectorResult> SelectAsync(string category, string parent, bool refresh, CancellationToken token,
+            TuneInCatalogueSession catalogue = null)
         {
             var snapshot = Snapshot();
             if (!new[] { "music", "language", "location", "local" }.Contains(category))
@@ -347,7 +350,7 @@ namespace MediaBrowser.Plugins.TuneIn
             SelectorItem parentItem = null;
             lock (gate)
             {
-                if (!refresh && selectors.TryGetValue(cacheKey, out var cached)) return cached;
+                if (catalogue == null && !refresh && selectors.TryGetValue(cacheKey, out var cached)) return cached;
                 if (!root)
                     parentItem = selectors.Where(p => p.Key.StartsWith(category + ":", StringComparison.Ordinal))
                         .SelectMany(p => p.Value.Items).FirstOrDefault(i => i.Id == parent);
@@ -364,7 +367,7 @@ namespace MediaBrowser.Plugins.TuneIn
             }
             else if (category == "music" && root) request.Parameters["c"] = "music";
             else request.Parameters["id"] = root ? "r0" : parent;
-            var doc = await FetchAsync(snapshot, request, token).ConfigureAwait(false);
+            var doc = await FetchAsync(snapshot, request, token, catalogue).ConfigureAwait(false);
             var rows = doc.Root.Element("body").Descendants("outline").ToList();
             var result = new SelectorResult
             {
@@ -402,6 +405,11 @@ namespace MediaBrowser.Plugins.TuneIn
             if (characters > 2 * 1024 * 1024) throw new InvalidDataException("TuneIn selector labels exceed cache limit.");
             result.Warning = omitted ? "Some TuneIn links could not be shown; this branch is incomplete."
                 : result.ContainsStationMetadata ? "This branch includes stations, which are not selection options." : null;
+            if (catalogue != null)
+            {
+                if (omitted) throw new InvalidDataException("TuneIn language validation returned incomplete links.");
+                return result;
+            }
             lock (gate)
             {
                 CheckCurrent(snapshot, token);

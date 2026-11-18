@@ -39,5 +39,13 @@
                 <button is="emby-button" type="submit" class="raised button-submit block" disabled><span>Save</span></button>
             </div>
         </form>
+        <section class="auto-center tuneInRefresh">
+            <h2>Catalogue refresh</h2>
+            <p>Checks the saved TuneIn scopes and imports changed categories into Emby. Save browsing changes before starting.</p>
+            <p class="refreshStatus" role="status">Reading refresh status...</p>
+            <p class="refreshError" role="alert"></p>
+            <button is="emby-button" type="button" class="raised refreshStart" disabled>Start refresh</button>
+            <button is="emby-button" type="button" class="emby-button refreshCancel" disabled>Cancel refresh</button>
+        </section>
     </div>
 </div>

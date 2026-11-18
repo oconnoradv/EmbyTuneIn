@@ -159,16 +159,84 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     }
 
     function editing(instance) {
-        var disabled = !instance.config || instance.saving;
+        var disabled = !instance.config || instance.saving || instance.refreshBusy;
         instance.view.querySelector('.configurationFields').disabled = disabled;
         instance.view.querySelector('.button-submit').disabled = disabled;
+    }
+
+    function renderRefresh(instance, status) {
+        instance.refreshBusy = !!status.Busy;
+        var category = ({ local: 'Local Radio', music: 'Music', language: 'By Language', location: 'By Location',
+            talk: 'Talk', sports: 'Sports', podcast: 'Podcasts', presets: 'My Favorites' })[status.Category];
+        var description = status.State === 'NeverRun' ? 'No Control Panel refresh has run.' :
+            [status.State, status.Phase, category].filter(Boolean).join(' - ');
+        if (status.CategoriesTotal) description += '. ' + status.CategoriesCompleted + ' of ' + status.CategoriesTotal + ' categories checked';
+        if (status.CategoriesSkipped) description += '; ' + status.CategoriesSkipped + ' unchanged';
+        if (status.LastHttpStatus) description += '. TuneIn returned HTTP ' + status.LastHttpStatus;
+        else if (status.ErrorCode) description += '. ' + status.ErrorCode;
+        if (status.ImportMayHavePartiallyApplied) description += '. An interrupted import may have changed Emby metadata; run refresh again to reconcile.';
+        instance.view.querySelector('.refreshStatus').textContent = description;
+        refreshControls(instance, true);
+    }
+
+    function refreshControls(instance, available) {
+        instance.view.querySelector('.refreshStart').disabled = !available || instance.refreshBusy || !!instance.refreshAction || instance.saving;
+        instance.view.querySelector('.refreshCancel').disabled = !available || !instance.refreshBusy || !!instance.refreshAction;
+        editing(instance);
+    }
+
+    function scheduleStatus(instance, epoch) {
+        if (epoch !== instance.viewEpoch || !instance.refreshVisible) return;
+        clearTimeout(instance.refreshTimer);
+        instance.refreshTimer = setTimeout(function () { pollStatus(instance, epoch); }, instance.refreshBusy ? 1500 : 10000);
+    }
+
+    function pollStatus(instance, epoch) {
+        if (epoch !== instance.viewEpoch || !instance.refreshVisible) return;
+        clearTimeout(instance.refreshTimer);
+        if (instance.refreshAction) return scheduleStatus(instance, epoch);
+        if (instance.refreshPoll) return instance.refreshPoll.then(function () { return pollStatus(instance, epoch); });
+        var generation = instance.refreshGeneration || 0;
+        instance.refreshPoll = ApiClient.ajax({
+            type: 'GET', dataType: 'json', url: ApiClient.getUrl('TuneIn/Refresh/Status')
+        }).then(function (status) {
+            if (epoch === instance.viewEpoch && generation === (instance.refreshGeneration || 0)) renderRefresh(instance, status);
+        }).catch(function () {
+            if (epoch === instance.viewEpoch && generation === (instance.refreshGeneration || 0)) {
+                instance.view.querySelector('.refreshStatus').textContent = 'Could not read refresh status. Retrying automatically.';
+                refreshControls(instance, false);
+            }
+        }).then(function () {
+            instance.refreshPoll = null;
+            scheduleStatus(instance, epoch);
+        });
+        return instance.refreshPoll;
+    }
+
+    function doRefresh(instance, action) {
+        if (!instance.refreshVisible || instance.refreshAction) return;
+        var epoch = instance.viewEpoch;
+        instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
+        instance.refreshAction = true;
+        refreshControls(instance, false);
+        instance.view.querySelector('.refreshError').textContent = '';
+        return ApiClient.ajax({ type: 'POST', dataType: 'json', url: ApiClient.getUrl('TuneIn/Refresh/' + action) })
+            .then(function (status) {
+                if (epoch === instance.viewEpoch) renderRefresh(instance, status);
+            }).catch(function () {
+                if (epoch === instance.viewEpoch)
+                    instance.view.querySelector('.refreshError').textContent = 'Could not ' + action.toLowerCase() + ' refresh. Check the current status before retrying.';
+            }).then(function () {
+                instance.refreshAction = false;
+                if (instance.refreshVisible) pollStatus(instance, instance.viewEpoch);
+            });
     }
 
     function onSubmit(event) {
         event.preventDefault();
         var instance = this;
         var epoch = instance.viewEpoch;
-        if (!instance.config || instance.saving) return false;
+        if (!instance.config || instance.saving || instance.refreshBusy) return false;
         var config = instance.config;
         var coordinates = instance.view.querySelector('.txtLatLon').value.trim();
         var localEnabled = instance.view.querySelector('[data-category="EnableLocalRadio"]').checked;
@@ -219,6 +287,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     function View(view, params) {
         BaseView.apply(this, arguments);
         view.querySelector('form').addEventListener('submit', onSubmit.bind(this));
+        view.querySelector('.refreshStart').addEventListener('click', doRefresh.bind(null, this, 'Start'));
+        view.querySelector('.refreshCancel').addEventListener('click', doRefresh.bind(null, this, 'Cancel'));
     }
 
     Object.assign(View.prototype, BaseView.prototype);
@@ -227,10 +297,15 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         BaseView.prototype.onResume.apply(this, arguments);
         var instance = this;
         var epoch = instance.viewEpoch = (instance.viewEpoch || 0) + 1;
+        instance.refreshVisible = true;
+        instance.view.querySelector('.refreshStatus').textContent = 'Reading refresh status...';
+        instance.view.querySelector('.refreshError').textContent = '';
         instance.config = null;
         instance.saving = false;
         instance.loadingConfig = true;
         editing(instance);
+        refreshControls(instance, false);
+        pollStatus(instance, epoch);
         loading.show();
         return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
             if (epoch !== instance.viewEpoch) return;
@@ -276,6 +351,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     View.prototype.onPause = function () {
         this.viewEpoch = (this.viewEpoch || 0) + 1;
+        this.refreshVisible = false;
+        clearTimeout(this.refreshTimer);
         if (this.loadingConfig || this.saving) {
             this.loadingConfig = false;
             this.saving = false;

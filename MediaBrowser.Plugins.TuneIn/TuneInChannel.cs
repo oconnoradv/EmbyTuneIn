@@ -17,11 +17,15 @@ using MediaBrowser.Model.Logging;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
-    public class TuneInChannel : IChannel, IRequiresMediaInfoCallback, IHasCacheKey
+    public class TuneInChannel : IChannel, IRequiresMediaInfoCallback, IHasChannelFeatures
     {
         private readonly IHttpClient _httpClient;
         private readonly ILogger _logger;
         private readonly TuneInDirectory directory;
+        private readonly AsyncLocal<TuneInStagedImport> stagedImport = new AsyncLocal<TuneInStagedImport>();
+        private readonly object catalogueGate = new object();
+        private string browseKey;
+        private TuneInCatalogueSession browseCache;
 
         public TuneInChannel(IHttpClient httpClient, ILogManager logManager, IApplicationHost appHost)
             : this(TuneInRequests.Directory(httpClient, appHost), httpClient, logManager.GetLogger(typeof(TuneInChannel).Name))
@@ -36,11 +40,54 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         public string DataVersion => "47";
+        public ChannelFeatures Features => new ChannelFeatures { ShowRootFoldersAtTopLevel = false };
         public string Description => "Listen to online radio, find streaming music radio and streaming talk radio with TuneIn.";
         public bool IsEnabledFor(string userId) => true;
 
-        public Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken cancellationToken) =>
-            new TuneInBrowsing(directory, GetDefaultImages).GetItemsAsync(query.FolderId, cancellationToken);
+        public Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken cancellationToken)
+        {
+            if (stagedImport.Value != null)
+                return Task.FromResult(stagedImport.Value.Read(query.FolderId, cancellationToken));
+
+            var snapshot = directory.Snapshot();
+            directory.CheckCurrent(snapshot, cancellationToken);
+            if (snapshot.Ready && !string.IsNullOrEmpty(query.FolderId))
+            {
+                directory.Resolve(snapshot, query.FolderId);
+                if (TuneInRefreshService.TryGetCommitted(snapshot, query.FolderId, out var old))
+                {
+                    directory.CheckCurrent(snapshot, cancellationToken);
+                    return Task.FromResult(old);
+                }
+            }
+            TuneInCatalogueSession session;
+            lock (catalogueGate)
+            {
+                if (browseKey != snapshot.Key)
+                {
+                    browseKey = snapshot.Key;
+                    browseCache = new TuneInCatalogueSession(null, TimeSpan.FromSeconds(30), () => DateTime.UtcNow, strictBudget: false);
+                }
+                session = browseCache;
+            }
+            return new TuneInBrowsing(directory, GetDefaultImages).GetItemsAsync(query.FolderId, cancellationToken, session, snapshot);
+        }
+
+        internal Task<ChannelItemResult> GetRefreshChannelItems(string folder, TuneInCatalogueSession session,
+            bool strict, CancellationToken token) =>
+            new TuneInBrowsing(directory, GetDefaultImages).GetItemsAsync(folder, token, session);
+
+        internal async Task ImportAsync(TuneInStagedImport staged, Func<Task> import)
+        {
+            var previous = stagedImport.Value;
+            stagedImport.Value = staged;
+            try
+            {
+                await import().ConfigureAwait(false);
+                staged.Verify();
+            }
+            finally { stagedImport.Value = previous; }
+        }
 
         private Task<HttpResponseInfo> SendRequest(HttpRequestOptions options, string method) =>
             TuneInRequests.SendAsync(_httpClient, options, method);
@@ -215,21 +262,6 @@ namespace MediaBrowser.Plugins.TuneIn
             get { return "TuneIn"; }
         }
 
-        public InternalChannelFeatures GetChannelFeatures()
-        {
-            return new InternalChannelFeatures
-            {
-                ContentTypes = new List<ChannelMediaContentType>
-                {
-                    ChannelMediaContentType.Song
-                },
-                MediaTypes = new List<ChannelMediaType>
-                {
-                    ChannelMediaType.Audio
-                }
-            };
-        }
-
         public string HomePageUrl
         {
             get { return "http://www.tunein.com/"; }
@@ -239,8 +271,6 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             get { return ChannelParentalRating.GeneralAudience; }
         }
-
-        public string GetCacheKey(string userId) => directory.Snapshot().Key;
 
         public String GetDefaultImages(String name)
         {

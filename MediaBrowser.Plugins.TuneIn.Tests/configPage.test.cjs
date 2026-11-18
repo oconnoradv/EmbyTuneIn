@@ -43,7 +43,8 @@ function harness() {
     const form = { addEventListener: (event, handler) => { formHandlers[event] = handler; } };
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon };
     for (const name of ['.localSource', '.configurationCompleted', '.categories', '.selectors',
-        '.configurationFields', '.button-submit', '.status']) elements[name] = new Element();
+        '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
+        '.refreshStart', '.refreshCancel']) elements[name] = new Element();
     const enhanced = [];
     const view = {
         addEventListener(event, handler) { handlers[event] = handler; },
@@ -58,6 +59,9 @@ function harness() {
     const notices = [];
     const errors = [];
     const selectors = [];
+    const refresh = [];
+    const timers = new Map();
+    let timerId = 0;
     const loader = { shown: 0, hidden: 0, show() { this.shown++; }, hide() { this.hidden++; } };
     const ApiClient = {
         getPluginConfiguration(id) {
@@ -73,7 +77,7 @@ function harness() {
         getUrl(route, params) { return { route, params }; },
         ajax(options) {
             const request = deferred();
-            selectors.push({ options, ...request });
+            (options.url.route.startsWith('TuneIn/Refresh/') ? refresh : selectors).push({ options, ...request });
             return request.promise;
         }
     };
@@ -93,11 +97,13 @@ function harness() {
             PluginView = factory(BaseView, loader, element => ({ trigger(event) { enhanced.push({ element, event }); } }));
         },
         ApiClient, Dashboard, console: { error(...args) { errors.push(args); } },
-        document: { createElement(tag) { return new Element(tag); } }
+        document: { createElement(tag) { return new Element(tag); } },
+        setTimeout(handler, delay) { timers.set(++timerId, { handler, delay }); return timerId; },
+        clearTimeout(id) { timers.delete(id); }
     });
 
     return { instance: new PluginView(view), username, latLon, formHandlers, reads, writes, notices, errors, loader,
-        elements, selectors, enhanced, calls, handlers };
+        elements, selectors, enhanced, calls, handlers, refresh, timers };
 }
 
 function open(details) {
@@ -312,4 +318,65 @@ test('a language branch retries independently, caches on reopening, and offers o
     assert.equal(app.selectors.length, 3);
     section.descendants().find(node => node.textContent === 'Add' && node.tagName === 'button').handlers.click();
     assert.match(section.childNodes[1].textContent, /Arabic/);
+});
+
+test('status polls once per visit, drains prior requests and updates only the current view', async () => {
+    const app = harness();
+    const first = app.instance.onResume();
+    assert.equal(app.refresh[0].options.url.route, 'TuneIn/Refresh/Status');
+    app.reads[0].resolve({});
+    await first;
+    app.instance.onPause();
+    const second = app.instance.onResume();
+    app.reads[1].resolve({});
+    await second;
+    assert.equal(app.refresh.length, 1);
+    app.refresh[0].resolve({ State: 'Stale', Busy: true });
+    await settle();
+    assert.equal(app.refresh.length, 2);
+    assert.doesNotMatch(app.elements['.refreshStatus'].textContent, /Stale/);
+    app.refresh[1].resolve({ State: 'Running', Phase: 'Discovering', Busy: true });
+    await settle();
+    assert.match(app.elements['.refreshStatus'].textContent, /Discovering/);
+    assert.equal(app.elements['.button-submit'].disabled, true);
+    const tick = [...app.timers.values()][0];
+    assert.equal(tick.delay, 1500);
+    tick.handler();
+    assert.equal(app.refresh.length, 3);
+    app.instance.onPause();
+    app.refresh[2].resolve({ State: 'Completed', Busy: false });
+    await settle();
+    assert.equal(app.timers.size, 0);
+    assert.match(app.elements['.refreshStatus'].textContent, /Discovering/);
+});
+
+test('idle polling is slower, refresh actions are explicit, and old polls cannot overwrite action results', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', Busy: false });
+    await visit;
+    await settle();
+    const idle = [...app.timers.values()][0];
+    assert.equal(idle.delay, 10000);
+    idle.handler();
+    assert.equal(app.refresh[1].options.type, 'GET');
+    const action = app.elements['.refreshStart'].handlers.click();
+    assert.equal(app.refresh[2].options.type, 'POST');
+    assert.equal(app.refresh[2].options.url.route, 'TuneIn/Refresh/Start');
+    app.refresh[2].resolve({ State: 'Running', Busy: true });
+    await settle();
+    app.refresh[1].resolve({ State: 'NeverRun', Busy: false });
+    await settle();
+    assert.match(app.elements['.refreshStatus'].textContent, /Running/);
+    assert.equal(app.refresh[3].options.url.route, 'TuneIn/Refresh/Status');
+    await action;
+    const cancel = app.elements['.refreshCancel'].handlers.click();
+    assert.equal(app.refresh[4].options.url.route, 'TuneIn/Refresh/Cancel');
+    app.instance.onPause();
+    app.refresh[4].resolve({ State: 'Cancelled' });
+    app.refresh[3].resolve({ State: 'Cancelled' });
+    await cancel;
+    assert.match(app.elements['.refreshStatus'].textContent, /Running/);
+    assert.equal(app.refresh.length, 5);
 });

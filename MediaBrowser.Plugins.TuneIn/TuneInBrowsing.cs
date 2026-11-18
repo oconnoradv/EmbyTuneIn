@@ -22,9 +22,10 @@ namespace MediaBrowser.Plugins.TuneIn
             this.image = image;
         }
 
-        public async Task<ChannelItemResult> GetItemsAsync(string folderId, CancellationToken token)
+        public async Task<ChannelItemResult> GetItemsAsync(string folderId, CancellationToken token,
+            TuneInCatalogueSession session = null, ConfigurationSnapshot snapshot = null)
         {
-            var snapshot = directory.Snapshot();
+            snapshot = snapshot ?? directory.Snapshot();
             var items = new List<ChannelItemInfo>();
             if (!snapshot.Ready) return new ChannelItemResult { Items = items };
             directory.CheckCurrent(snapshot, token);
@@ -38,7 +39,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 var entry = directory.Resolve(snapshot, folderId);
                 if (entry.StationId != null) throw new InvalidOperationException("TuneIn item is not a folder.");
                 if (entry.Request != null)
-                    items = await BrowseAsync(snapshot, entry, token).ConfigureAwait(false);
+                    items = await BrowseAsync(snapshot, entry, token, session).ConfigureAwait(false);
                 else if (entry.Category == "music" || entry.Category == "language" || entry.Category == "location")
                 {
                     foreach (var starting in StartingEntries(snapshot, entry.Category))
@@ -51,7 +52,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 else
                 {
                     foreach (var starting in StartingEntries(snapshot, entry.Category))
-                        items.AddRange(await BrowseAsync(snapshot, starting, token).ConfigureAwait(false));
+                        items.AddRange(await BrowseAsync(snapshot, starting, token, session).ConfigureAwait(false));
                     items = Deduplicate(snapshot, items);
                 }
             }
@@ -65,7 +66,8 @@ namespace MediaBrowser.Plugins.TuneIn
             ImageUrl = image(CategoryName(entry.Category))
         };
 
-        private async Task<List<ChannelItemInfo>> BrowseAsync(ConfigurationSnapshot snapshot, NavigationEntry entry, CancellationToken token)
+        private async Task<List<ChannelItemInfo>> BrowseAsync(ConfigurationSnapshot snapshot, NavigationEntry entry,
+            CancellationToken token, TuneInCatalogueSession session)
         {
             if (IsLanguageMusicHub(entry))
                 return snapshot.Selections("music").Select(selection =>
@@ -80,12 +82,12 @@ namespace MediaBrowser.Plugins.TuneIn
                 }).ToList();
             if (entry.Category == "language")
             {
-                var languages = await directory.SelectAsync("language", null, false, token).ConfigureAwait(false);
+                var languages = await directory.SelectAsync("language", null, false, token, session).ConfigureAwait(false);
                 if (!languages.Items.Any(i => i.Id == entry.SelectionId))
                     throw new InvalidOperationException("Selected TuneIn language is unavailable; load the language selector again.");
             }
             var request = CatalogueRequest(snapshot, entry);
-            var document = await directory.FetchAsync(snapshot, request, token).ConfigureAwait(false);
+            var document = await directory.FetchAsync(snapshot, request, token, session).ConfigureAwait(false);
             var items = new List<ChannelItemInfo>();
             foreach (var row in ContentRows(document.Root.Element("body")))
             {
