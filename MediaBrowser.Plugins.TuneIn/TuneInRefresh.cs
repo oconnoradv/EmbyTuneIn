@@ -32,6 +32,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public DateTime? FinishedUtc { get; set; }
         public string DirtyCategory { get; set; }
         public TuneInCategoryRefreshStatus[] Categories { get; set; }
+        public bool? SettingsLocked { get; set; }
         internal TuneInRefreshStatus Copy() => (TuneInRefreshStatus)MemberwiseClone();
     }
 

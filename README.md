@@ -66,6 +66,10 @@ Control Panel status for the enabled categories; it does not start a refresh.
 Choose **Refresh** beside a category to check only that category, or **Refresh
 all enabled categories** to check them all. The status shows the latest outcomes
 since Emby started, or a previous successful import from the saved checkpoint.
+
+Use **Lock settings** at the top of the TuneIn page to prevent accidental
+edits and saves. The lock persists on the server across browser sessions and
+restarts. Turning it on does not save pending edits or stop catalogue refresh.
 Only administrators can start, cancel, or read progress. Leaving the page stops
 status polling, not the server run. Starting or cancelling is always explicit;
 this plugin doesn't register, edit, or trigger anything in Scheduled Tasks.

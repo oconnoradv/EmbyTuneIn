@@ -35,7 +35,7 @@ class Element {
     descendants() { return this.childNodes.flatMap(child => [child, ...child.descendants()]); }
 }
 
-function harness() {
+function harness(manualStatus = false) {
     const handlers = {};
     const formHandlers = {};
     const username = new Element('input');
@@ -45,7 +45,7 @@ function harness() {
     for (const name of ['.localSource', '.configurationCompleted', '.categories', '.selectors',
         '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.refreshStart', '.refreshCancel', '.localSelector', '.tuneInRefreshCategories',
-        '.refreshCategoryNote']) elements[name] = new Element();
+        '.refreshCategoryNote', '.settingsLocked', '.settingsLockStatus']) elements[name] = new Element();
     for (const [section, summary, open] of [
         ['.categoriesSection', '.categoriesSummary', true],
         ['.localSection', '.localSummary', true],
@@ -70,6 +70,7 @@ function harness() {
     const errors = [];
     const selectors = [];
     const refresh = [];
+    const locks = [];
     const timers = new Map();
     let timerId = 0;
     const loader = { shown: 0, hidden: 0, show() { this.shown++; }, hide() { this.hidden++; } };
@@ -87,7 +88,11 @@ function harness() {
         getUrl(route, params) { return { route, params }; },
         ajax(options) {
             const request = deferred();
-            (options.url.route.startsWith('TuneIn/Refresh/') ? refresh : selectors).push({ options, ...request });
+            if (options.url.route === 'TuneIn/SettingsLock') locks.push({ options, ...request });
+            else if (options.url.route.startsWith('TuneIn/Refresh/')) {
+                refresh.push({ options, ...request });
+                if (!manualStatus && options.type === 'GET') request.resolve({ SettingsLocked: false });
+            } else selectors.push({ options, ...request });
             return request.promise;
         }
     };
@@ -113,7 +118,7 @@ function harness() {
     });
 
     return { instance: new PluginView(view), username, latLon, formHandlers, reads, writes, notices, errors, loader,
-        elements, selectors, enhanced, calls, handlers, refresh, timers };
+        elements, selectors, enhanced, calls, handlers, refresh, locks, timers };
 }
 
 function open(details) {
@@ -172,7 +177,7 @@ test('an open selector retries a transient first failure once without a second c
     assert.equal(root.descendants().some(node => node.textContent === 'Retry' && node.tagName === 'button'), false);
     assert.equal(open(root), loading);
     assert.equal(app.selectors.length, 1);
-    const [timer] = app.timers.values();
+    const timer = [...app.timers.values()].find(item => item.delay === 1000);
     timer.handler();
     await settle();
     assert.equal(app.selectors.length, 2);
@@ -194,7 +199,7 @@ test('selector retry is bounded and does not send requests after leaving setting
         app.selectors[0].reject({ response: { status: 502 } });
         await settle();
         if (leave) app.instance.onPause();
-        const [timer] = app.timers.values();
+        const timer = [...app.timers.values()].find(item => item.delay === 1000);
         timer.handler();
         await settle();
         assert.equal(app.selectors.length, leave ? 1 : 2);
@@ -416,7 +421,7 @@ test('a language branch retries independently, caches on reopening, and offers o
 });
 
 test('status polls once per visit, drains prior requests and updates only the current view', async () => {
-    const app = harness();
+    const app = harness(true);
     const first = app.instance.onResume();
     assert.equal(app.refresh[0].options.url.route, 'TuneIn/Refresh/Status');
     app.reads[0].resolve({});
@@ -446,7 +451,7 @@ test('status polls once per visit, drains prior requests and updates only the cu
 });
 
 test('idle polling is slower, refresh actions are explicit, and old polls cannot overwrite action results', async () => {
-    const app = harness();
+    const app = harness(true);
     app.elements['.tuneInRefresh'].open = true;
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
@@ -499,7 +504,7 @@ test('collapsing browsing settings keeps choices and does not start provider req
 });
 
 test('opening collapsed Catalogue refresh gets fresh category status before allowing a scoped refresh', async () => {
-    const app = harness();
+    const app = harness(true);
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /<details class="[^"]*\btuneInRefresh">/);
     const visit = app.instance.onResume();
@@ -544,4 +549,63 @@ test('opening collapsed Catalogue refresh gets fresh category status before allo
     assert.equal(list.childNodes[1], sports);
     assert.match(sports.textContent, /Sports.*Imported/);
     assert.equal(sports.childNodes[1].disabled, false);
+});
+
+test('settings lock protects pending edits and saves without blocking catalogue refresh', async () => {
+    const app = harness(true);
+    app.elements['.tuneInRefresh'].open = true;
+    const toggle = app.elements['.settingsLocked'];
+    const save = app.elements['.button-submit'];
+    const visit = app.instance.onResume();
+    const categories = [{ Category: 'talk', Name: 'Talk', State: 'Imported' }];
+    app.reads[0].resolve({ Languages: [{ Id: 'l1', Name: 'English', Enabled: true }] });
+    await visit;
+    assert.equal(toggle.disabled, true);
+    assert.equal(save.disabled, true);
+    app.refresh[0].resolve({ SettingsLocked: false, Categories: categories });
+    await settle();
+    assert.equal(save.disabled, false);
+    const language = app.elements['.selectors'].childNodes[0];
+    const selection = language.childNodes[1];
+    app.username.value = 'unsaved';
+    toggle.checked = true;
+    const locking = toggle.handlers.change();
+    assert.deepEqual(JSON.parse(app.locks[0].options.data), { Locked: true });
+    assert.equal(save.disabled, true);
+    app.locks[0].resolve({ Locked: true });
+    await locking;
+    app.formHandlers.submit({ preventDefault() {} });
+    selection.descendants().find(item => item.textContent === 'Remove').handlers.click();
+    assert.equal(app.writes.length, 0);
+    assert.match(selection.textContent, /English/);
+    assert.equal(app.elements['.refreshStart'].disabled, false);
+    assert.equal(app.username.value, 'unsaved');
+    app.refresh[1].resolve({ SettingsLocked: true, Categories: categories });
+    await settle();
+    toggle.checked = false;
+    const unlocking = toggle.handlers.change();
+    app.locks[1].resolve({ Locked: false });
+    await unlocking;
+    app.formHandlers.submit({ preventDefault() {} });
+    assert.equal(app.writes[0].config.Username, 'unsaved');
+});
+
+test('a failed lock write leaves edits blocked until the server confirms the state', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ SettingsLocked: false });
+    await visit;
+    const toggle = app.elements['.settingsLocked'];
+    toggle.checked = true;
+    const locking = toggle.handlers.change();
+    app.locks[0].reject(new Error('response lost'));
+    await locking;
+    assert.equal(app.elements['.button-submit'].disabled, true);
+    assert.match(app.elements['.settingsLockStatus'].textContent, /Checking the server/);
+    app.refresh[1].resolve({ SettingsLocked: true });
+    await settle();
+    assert.equal(toggle.checked, true);
+    assert.equal(toggle.disabled, false);
+    assert.equal(app.elements['.button-submit'].disabled, true);
 });

@@ -238,7 +238,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             [Fact]
             public void RefreshRoutesRequireAdministratorAndRejectMissingRequestContext()
             {
-                foreach (var route in new[] { typeof(GetTuneInRefreshStatus), typeof(StartTuneInRefresh), typeof(CancelTuneInRefresh) })
+                foreach (var route in new[] { typeof(GetTuneInRefreshStatus), typeof(StartTuneInRefresh),
+                    typeof(CancelTuneInRefresh), typeof(SetTuneInSettingsLock) })
                     Assert.Equal("Admin", Assert.Single(route.GetCustomAttributes(typeof(AuthenticatedAttribute), false).Cast<AuthenticatedAttribute>()).Roles);
 
                 var config = new PluginConfiguration();
@@ -251,6 +252,27 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new StartTuneInRefresh()));
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new StartTuneInRefresh { Category = "talk" }));
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new CancelTuneInRefresh()));
+                Assert.Throws<UnauthorizedAccessException>(() => service.Post(new SetTuneInSettingsLock { Locked = false }));
+            }
+
+            [Fact]
+            public void SettingsLockPersistsAndRejectsConfigurationWritesUntilUnlocked()
+            {
+                var path = Path.Combine(Path.GetTempPath(), $"tunein-lock-{Guid.NewGuid():N}.xml");
+                try
+                {
+                    var store = new TuneInSettingsLockStore(path);
+                    var saves = 0;
+                    store.SaveConfiguration(() => saves++);
+                    store.Set(true);
+                    var reloaded = new TuneInSettingsLockStore(path);
+                    Assert.Throws<InvalidOperationException>(() => reloaded.SaveConfiguration(() => saves++));
+                    Assert.Equal(1, saves);
+                    reloaded.Set(false);
+                    new TuneInSettingsLockStore(path).SaveConfiguration(() => saves++);
+                    Assert.Equal(2, saves);
+                }
+                finally { File.Delete(path); }
             }
 
             [Fact]

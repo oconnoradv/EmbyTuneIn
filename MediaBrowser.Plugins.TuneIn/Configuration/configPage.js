@@ -55,13 +55,18 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     }
 
     function selected(instance, spec, container) {
+        var epoch = instance.viewEpoch;
         container.textContent = '';
         (instance.config[spec[1]] || []).forEach(function (item) {
             var row = document.createElement('div');
             var control = checkbox(item.Path || item.Name || item.Id, item.Enabled !== false,
-                function () { item.Enabled = control.input.checked; });
+                function () {
+                    if (epoch === instance.viewEpoch && !editingBlocked(instance)) item.Enabled = control.input.checked;
+                    else control.input.checked = item.Enabled !== false;
+                });
             row.appendChild(control.label);
             row.appendChild(button('Remove', function () {
+                if (epoch !== instance.viewEpoch || editingBlocked(instance)) return;
                 instance.config[spec[1]] = instance.config[spec[1]].filter(function (entry) { return entry !== item; });
                 selected(instance, spec, container);
             }));
@@ -97,7 +102,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         selected(instance, spec, saved);
         var requests = new Map();
         function add(item, feedback) {
-            if (epoch !== instance.viewEpoch || instance.saving) return;
+            if (epoch !== instance.viewEpoch || editingBlocked(instance)) return;
             var list = instance.config[spec[1]] || [];
             var existing = list.find(function (entry) { return entry.Id === item.Id; });
             if (existing) existing.Enabled = true;
@@ -211,14 +216,58 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         return section;
     }
 
+    function editingBlocked(instance) {
+        return !instance.config || instance.settingsLocked !== false || instance.lockChanging || instance.saving || instance.refreshBusy;
+    }
+
     function editing(instance) {
-        var disabled = !instance.config || instance.saving || instance.refreshBusy;
+        var disabled = !!editingBlocked(instance);
         instance.view.querySelector('.configurationFields').disabled = disabled;
         instance.view.querySelector('.button-submit').disabled = disabled;
+        var toggle = instance.view.querySelector('.settingsLocked');
+        toggle.disabled = typeof instance.settingsLocked !== 'boolean' || !!instance.lockChanging || instance.saving;
+        toggle.checked = instance.lockChanging ? instance.lockRequested : instance.settingsLocked === true;
+        var note = instance.view.querySelector('.settingsLockStatus');
+        var text = instance.lockError || (instance.lockChanging ? 'Updating settings lock...' :
+            instance.settingsLocked === true ? 'Settings are locked. Unlock to make changes.' :
+            instance.settingsLocked === false ? 'Settings are unlocked.' : 'Reading settings lock...');
+        if (note.textContent !== text) note.textContent = text;
+    }
+
+    function changeSettingsLock(instance) {
+        var toggle = instance.view.querySelector('.settingsLocked');
+        if (toggle.disabled || !instance.refreshVisible) return;
+        var epoch = instance.viewEpoch;
+        instance.lockRequested = toggle.checked;
+        instance.lockChanging = true;
+        instance.lockError = '';
+        instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
+        editing(instance);
+        return ApiClient.ajax({
+            type: 'POST', dataType: 'json', contentType: 'application/json',
+            url: ApiClient.getUrl('TuneIn/SettingsLock'),
+            data: JSON.stringify({ Locked: instance.lockRequested })
+        }).then(function (result) {
+            if (typeof result.Locked !== 'boolean') throw new Error('Missing TuneIn lock state.');
+            if (epoch === instance.viewEpoch) instance.settingsLocked = result.Locked;
+        }).catch(function () {
+            if (epoch !== instance.viewEpoch) return;
+            instance.settingsLocked = undefined;
+            instance.lockError = 'Could not change the settings lock. Checking the server again.';
+        }).then(function () {
+            instance.lockChanging = false;
+            if (!instance.refreshVisible) return;
+            editing(instance);
+            pollStatus(instance, instance.viewEpoch);
+        });
     }
 
     function renderRefresh(instance, status) {
         instance.refreshBusy = !!status.Busy;
+        if (typeof status.SettingsLocked === 'boolean' && !instance.lockChanging) {
+            instance.settingsLocked = status.SettingsLocked;
+            instance.lockError = '';
+        }
         instance.refreshStatus = status;
         var category = ({ local: 'Local Radio', music: 'Music', language: 'By Language', location: 'By Location',
             talk: 'Talk', sports: 'Sports', podcast: 'Podcasts', presets: 'My Favorites' })[status.Category];
@@ -290,7 +339,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     function pollStatus(instance, epoch) {
         if (epoch !== instance.viewEpoch || !instance.refreshVisible) return;
         clearTimeout(instance.refreshTimer);
-        if (instance.refreshAction) return scheduleStatus(instance, epoch);
+        if (instance.refreshAction || instance.lockChanging) return scheduleStatus(instance, epoch);
         if (instance.refreshPoll) return instance.refreshPoll;
         var generation = instance.refreshGeneration || 0;
         instance.refreshPoll = ApiClient.ajax({
@@ -301,6 +350,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             if (epoch === instance.viewEpoch && generation === (instance.refreshGeneration || 0)) {
                 instance.view.querySelector('.refreshStatus').textContent = 'Could not read refresh status. Retrying automatically.';
                 instance.view.querySelector('.refreshCategoryNote').textContent = '';
+                if (typeof instance.settingsLocked !== 'boolean')
+                    instance.lockError = 'Could not read the settings lock. Retrying automatically.';
                 refreshControls(instance, false);
             }
         }).then(function () {
@@ -342,7 +393,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         event.preventDefault();
         var instance = this;
         var epoch = instance.viewEpoch;
-        if (!instance.config || instance.saving || instance.refreshBusy) return false;
+        if (editingBlocked(instance)) return false;
         var config = instance.config;
         var coordinates = instance.view.querySelector('.txtLatLon').value.trim();
         var localEnabled = instance.view.querySelector('[data-category="EnableLocalRadio"]').checked;
@@ -380,7 +431,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         }).catch(function (error) {
             if (epoch !== instance.viewEpoch) return;
             console.error('Unable to save TuneIn configuration.', error);
-            message(instance, 'Configuration was not saved. Check validation, connectivity and administrator access, then retry.');
+            message(instance, 'Configuration was not saved. Check the settings lock, validation, connectivity and administrator access, then retry.');
         }).then(function () {
             if (epoch !== instance.viewEpoch) return;
             instance.saving = false;
@@ -400,6 +451,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         ['.categoriesSummary', '.localSummary', '.refreshSummary'].forEach(function (selector) {
             bindDisclosure(view.querySelector(selector));
         });
+        view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });
         instance.refreshSection.addEventListener('toggle', function () {
             if (!instance.refreshSection.open || !instance.refreshVisible) return;
             instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
@@ -423,6 +475,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.refreshStatus').textContent = 'Reading refresh status...';
         instance.view.querySelector('.refreshError').textContent = '';
         instance.config = null;
+        instance.settingsLocked = undefined;
+        instance.lockError = '';
         instance.saving = false;
         instance.loadingConfig = true;
         editing(instance);

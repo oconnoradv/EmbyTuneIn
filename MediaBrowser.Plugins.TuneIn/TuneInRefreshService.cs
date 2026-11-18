@@ -25,6 +25,13 @@ namespace MediaBrowser.Plugins.TuneIn
     [Authenticated(Roles = "Admin")]
     public sealed class CancelTuneInRefresh : IReturn<TuneInRefreshStatus> { }
 
+    [Route("/TuneIn/SettingsLock", "POST")]
+    [Authenticated(Roles = "Admin")]
+    public sealed class SetTuneInSettingsLock : IReturn<TuneInSettingsLock>
+    {
+        public bool? Locked { get; set; }
+    }
+
     public sealed class TuneInRefreshService : IService, IRequiresRequest
     {
         private static readonly object SharedGate = new object();
@@ -45,7 +52,9 @@ namespace MediaBrowser.Plugins.TuneIn
         public TuneInRefreshStatus Get(GetTuneInRefreshStatus request)
         {
             EnsureAdmin();
-            return refresh.Status();
+            var status = refresh.Status();
+            status.SettingsLocked = Plugin.Instance.SettingsLock.IsLocked;
+            return status;
         }
 
         public TuneInRefreshStatus Post(StartTuneInRefresh request)
@@ -58,6 +67,13 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             EnsureAdmin();
             return refresh.Cancel();
+        }
+
+        public TuneInSettingsLock Post(SetTuneInSettingsLock request)
+        {
+            EnsureAdmin();
+            if (!request.Locked.HasValue) throw new ArgumentException("Specify whether to lock TuneIn settings.");
+            return Plugin.Instance.SettingsLock.Set(request.Locked.Value);
         }
 
         private void EnsureAdmin()

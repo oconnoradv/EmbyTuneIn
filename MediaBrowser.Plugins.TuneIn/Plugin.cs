@@ -19,8 +19,12 @@ namespace MediaBrowser.Plugins.TuneIn
         public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
             : base(applicationPaths, xmlSerializer)
         {
+            SettingsLock = new TuneInSettingsLockStore(string.IsNullOrEmpty(applicationPaths.DataPath)
+                ? null : Path.Combine(applicationPaths.DataPath, "tunein-fork-settings-lock.xml"));
             Instance = this;
         }
+
+        internal TuneInSettingsLockStore SettingsLock { get; }
 
         public IEnumerable<PluginPageInfo> GetPages()
         {
@@ -50,11 +54,11 @@ namespace MediaBrowser.Plugins.TuneIn
             var value = (PluginConfiguration)configuration;
             ConfigurationSnapshot.Validate(value);
             // The signing key is server-owned; clients cannot replace it when saving settings.
-            TuneInRefreshService.UpdateConfiguration(() =>
+            TuneInRefreshService.UpdateConfiguration(() => SettingsLock.SaveConfiguration(() =>
             {
                 value.NavigationSecret = Configuration.NavigationSecret;
                 base.UpdateConfiguration(value);
-            });
+            }));
         }
 
         private Guid _id = new Guid("10b82431-f939-4507-a8e2-9509dd3fd6ae");

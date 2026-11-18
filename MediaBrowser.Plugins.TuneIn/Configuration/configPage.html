@@ -82,6 +82,11 @@
     <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
 
         <form class="auto-center">
+            <label class="emby-checkbox-label">
+                <input type="checkbox" is="emby-checkbox" role="switch" class="settingsLocked" aria-describedby="tuneInLockStatus" disabled />
+                <span>Lock settings</span>
+            </label>
+            <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
             <p class="status" role="status" aria-live="polite"></p>
             <fieldset class="configurationFields" disabled>
             <legend>Configured browsing</legend>
