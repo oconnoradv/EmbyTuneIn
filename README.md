@@ -99,19 +99,19 @@ path. Playback still resolves live and old IDs cannot bypass the saved scopes.
 
 Refresh discovers changes at the **category level**. If an import is needed,
 the plugin sends Emby the **complete channel tree** so Emby doesn't drop sibling
-categories. A single-category refresh reuses saved listings for the other
-categories. If any listing is missing, the plugin discovers that category first.
+categories. A single-category refresh discovers only the requested category
+and reuses saved listings for its siblings. If a sibling listing is missing
+or the baseline is outdated, select **Refresh all enabled categories** to
+build the baseline before retrying the individual refresh.
 Incomplete discovery blocks the import, and unchanged catalogs skip import
 unless the library needs reconciliation.
-The error report identifies the category where discovery stopped, which can
-differ from the requested category when building or repairing the baseline.
-Music discovery follows verified TuneIn genre aliases (such as Metal) for
+The error report identifies the category where discovery stopped.
+Music discovery follows verified TuneIn genre aliases (such as Metal and Punk) for
 station and show pagination, but rejects page links into unrelated genres.
 
-The first refresh after upgrading from an earlier RC1 rebuilds all enabled
-categories, even if you start it from one category. During the Emby import,
-channel callbacks receive the complete staged tree, including callbacks on
-separate workers.
+After upgrading from an earlier RC1 with an outdated baseline, use **Refresh
+all enabled categories** to rebuild it. During the Emby import, channel
+callbacks receive the complete staged tree, including callbacks on separate workers.
 
 Category folders use the bundled TuneIn artwork. Emby may keep older folder
 images after an upgrade; explicitly refresh the affected category to update
@@ -120,9 +120,10 @@ updates the saved Primary, Thumb, and first Backdrop images on the top-level
 TuneIn library item to **Powered by TuneIn**.
 
 Emby's import isn't transactional. If cancellation, failure, or restart
-interrupts an import, some metadata may already have changed. The next refresh
-rediscovers and imports all enabled categories even if their catalogs appear
-unchanged. Browse availability during Emby's import isn't guaranteed.
+interrupts an import, some metadata may already have changed. The next valid
+refresh imports the complete catalog even if the requested listings are
+unchanged. A category-only repair uses the saved sibling listings if the
+baseline is current. Browse availability during Emby's import isn't guaranteed.
 
 If a category refresh failed or an import was interrupted, selecting a
 different category lets you **Retry previous first** (the new request waits)

@@ -185,12 +185,12 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 else if (resumeFirst.HasValue)
                     throw new InvalidOperationException("The TuneIn recovery choice is no longer current.");
-                Begin(snapshot, category, resumeFirst.HasValue);
+                Begin(snapshot, category);
                 return Status();
             }
         }
 
-        private void Begin(ConfigurationSnapshot snapshot, string category, bool prioritize = false)
+        private void Begin(ConfigurationSnapshot snapshot, string category)
         {
             Prepare(category);
             work = Task.Run(async () =>
@@ -198,7 +198,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 var next = category;
                 while (true)
                 {
-                    try { await ExecuteAsync(snapshot, next, prioritize, cancellation.Token).ConfigureAwait(false); }
+                    try { await ExecuteAsync(snapshot, next, cancellation.Token).ConfigureAwait(false); }
                     catch (Exception error)
                     {
                         logger?.Error("TuneIn refresh worker could not finish ({0}).", error.GetType().Name);
@@ -219,7 +219,6 @@ namespace MediaBrowser.Plugins.TuneIn
                             return;
                         }
                         next = queue.Dequeue();
-                        prioritize = true;
                         Prepare(next);
                     }
                 }
@@ -396,7 +395,7 @@ namespace MediaBrowser.Plugins.TuneIn
             return new CommittedCatalogue(key, folders);
         }
 
-        private async Task ExecuteAsync(ConfigurationSnapshot snapshot, string requestedCategory, bool prioritize, CancellationToken serverToken)
+        private async Task ExecuteAsync(ConfigurationSnapshot snapshot, string requestedCategory, CancellationToken serverToken)
         {
             TuneInCatalogueSession session = null;
             TuneInRefreshCheckpoint checkpoint = null;
@@ -440,11 +439,19 @@ namespace MediaBrowser.Plugins.TuneIn
                     var enabled = snapshot.Categories.ToArray();
                     var listings = checkpoint.Categories.ToDictionary(category => category.Category, StringComparer.Ordinal);
                     var needsRebuild = checkpoint.ChannelImportVersion != ChannelImportVersion;
-                    var firstCategory = prioritize ? requestedCategory ?? dirtyAtStart : dirtyAtStart;
+                    if (requestedCategory != null && enabled.Any(category => category != requestedCategory &&
+                        (needsRebuild || !listings.ContainsKey(category))))
+                    {
+                        lock (gate)
+                        {
+                            status.State = "BaselineRequired";
+                            status.Phase = "Select Refresh all enabled categories to build the catalog baseline first";
+                        }
+                        return;
+                    }
                     var categories = enabled
-                        .Where(category => requestedCategory == null || dirtyAtStart != null || needsRebuild || category == requestedCategory ||
-                            !listings.ContainsKey(category))
-                        .OrderBy(category => category == firstCategory ? 0 : 1)
+                        .Where(category => requestedCategory == null || category == requestedCategory)
+                        .OrderBy(category => category == dirtyAtStart ? 0 : 1)
                         .ToArray();
                     lock (gate) status.CategoriesTotal = categories.Length;
                     if (requestedCategory != null && categories.Length == 0)

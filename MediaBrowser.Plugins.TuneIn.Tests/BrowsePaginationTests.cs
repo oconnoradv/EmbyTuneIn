@@ -70,6 +70,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("g22", "c57954", "26", "s", "nextStations")]
         [InlineData("g373", "c100002519", "26", "s", "nextStations")]
         [InlineData("g373", "c100002519", "6", "p", "nextShows")]
+        [InlineData("g2698", "c100002520", "26", "s", "nextStations")]
         public async Task LegacyGenrePaginationFollowsItsCanonicalMusicCategory(
             string genre, string category, string offset, string filter, string key)
         {
@@ -85,6 +86,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("g19", "offset=26&id=c57954&filter=s")]
         [InlineData("g19", "id=c57951&filter=s")]
         [InlineData("g19", "offset=26&id=c100002519&filter=s")]
+        [InlineData("g2698", "offset=26&id=c100002519&filter=s")]
         public async Task LegacyGenrePaginationRejectsUnrelatedIdsAndNonPageLinks(string genre, string query)
         {
             var error = await Assert.ThrowsAsync<InvalidDataException>(() =>

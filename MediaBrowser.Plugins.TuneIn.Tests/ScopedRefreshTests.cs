@@ -187,7 +187,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     Assert.Throws<ArgumentException>(() => refresh.Start("https://example.test/"));
                     Assert.Empty(fetched);
 
-                    refresh.Start("talk");
+                    refresh.Start();
                     await WaitUntilIdle(refresh);
                     Assert.Equal(new[] { "talk", "sports" }, fetched);
                     Assert.Equal(new[] { "Talk", "Sports" }, Assert.Single(imported).Keys);
@@ -220,6 +220,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     fetched.Clear();
                     refresh.Start("sports");
                     await WaitUntilIdle(refresh);
+                    Assert.Equal("BaselineRequired", refresh.Status().State);
+                    Assert.Empty(fetched);
+                    Assert.Equal(2, imported.Count);
+                    refresh.Start();
+                    await WaitUntilIdle(refresh);
                     Assert.Equal("Completed", refresh.Status().State);
                     Assert.Equal(new[] { "Talk", "Sports" }, imported[2].Keys);
                     Assert.Equal(new[] { "talk", "sports" }, fetched);
@@ -236,8 +241,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 };
                 const string first = "<outline type='audio' guide_id='s1' text='Existing'/>";
                 var listing = first;
-                var directory = new TuneInDirectory(() => config, (_, __) =>
-                    Task.FromResult(XDocument.Parse("<opml><body>" + listing + "</body></opml>")));
+                var fetched = new List<string>();
+                var directory = new TuneInDirectory(() => config, (request, _) =>
+                {
+                    fetched.Add(request.Parameters["c"]);
+                    return Task.FromResult(XDocument.Parse("<opml><body>" + listing + "</body></opml>"));
+                });
                 var channel = new TuneInChannel(directory);
                 var path = Path.Combine(Path.GetTempPath(), $"tunein-refresh-{Guid.NewGuid():N}.xml");
                 var store = new TuneInRefreshStore(path);
@@ -272,7 +281,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     using (var refresh = Make())
                     {
                         Assert.Equal("NeverRun", refresh.Status().State);
-                        refresh.Start("talk");
+                        refresh.Start();
                         await WaitUntilIdle(refresh);
                         Assert.Equal("Completed", refresh.Status().State);
                         Assert.Single(Assert.Single(imported));
@@ -299,6 +308,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     }
                     interrupt = false;
                     listing = first; // Same as the last successful import, but a dirty category cannot skip.
+                    fetched.Clear();
                     using (var restarted = Make())
                     {
                         Assert.Equal("talk", restarted.Status().DirtyCategory);
@@ -312,6 +322,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         Assert.Equal(0, restarted.Status().CategoriesSkipped);
                         Assert.Null(store.Read().DirtyCategory);
                         Assert.Equal(3, imported.Count);
+                        Assert.Equal(new[] { "sports" }, fetched);
                     }
                 }
                 finally { File.Delete(path); }
@@ -451,15 +462,19 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         };
         var entered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var fail = true;
+        var fail = false;
+        var pause = false;
         var fetched = new List<string>();
         var directory = new TuneInDirectory(() => config, async (request, token) =>
         {
             if (fail) throw new InvalidDataException("Discovery failed");
             var name = request.Parameters.TryGetValue("c", out var category) ? category : "(no category)";
             fetched.Add(name);
-            entered.TrySetResult(name);
-            await release.Task.WaitAsync(token);
+            if (pause)
+            {
+                entered.TrySetResult(name);
+                await release.Task.WaitAsync(token);
+            }
             return XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>");
         });
         var channel = new TuneInChannel(directory);
@@ -473,6 +488,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     ReadStagedTree(staged, token);
                     return Task.CompletedTask;
                 }, null);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            var baselinePodcastRequest = fetched[2];
+            fetched.Clear();
+            fail = true;
             refresh.Start("talk");
             await WaitUntilIdle(refresh);
             var choice = refresh.Start("sports");
@@ -481,6 +502,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal("talk", choice.RecoveryCategory);
             Assert.Null(choice.DirtyCategory);
             fail = false;
+            pause = true;
             var started = refresh.Start("sports", choice.RecoveryId, retry);
             Assert.Equal(first, started.ActiveRequest);
             Assert.Equal(first, await entered.Task.WaitAsync(TimeSpan.FromSeconds(5)));
@@ -494,9 +516,38 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             await WaitUntilIdle(refresh);
             Assert.Equal("Completed", refresh.Status().State);
             Assert.Empty(refresh.Status().QueuedRequests);
-            Assert.Equal(new[] { retry ? "sports" : "talk", fetched[2] }, fetched.Skip(3));
+            Assert.Equal(new[] { first, retry ? "sports" : "talk", baselinePodcastRequest }, fetched);
         }
         finally { File.Delete(path); }
+        }
+
+        [Fact]
+        public async Task FavoritesWithoutABaselineDoesNotDiscoverMusicOrImport()
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, Username = "tester",
+                EnableFavorites = true, EnableMusic = true
+            };
+            config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
+            var requests = 0;
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                Interlocked.Increment(ref requests);
+                throw new InvalidOperationException("No discovery expected before the baseline exists.");
+            });
+            var channel = new TuneInChannel(directory);
+            using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(null), () => channel,
+                (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                (_, __, ___, ____) => throw new InvalidOperationException("No import expected."), null);
+            refresh.Start("presets");
+            await WaitUntilIdle(refresh);
+            var status = refresh.Status();
+            Assert.Equal("presets", status.Category);
+            Assert.Equal("BaselineRequired", status.State);
+            Assert.Contains("Refresh all enabled categories", status.Phase);
+            Assert.Equal(0, requests);
+            Assert.Null(status.DirtyCategory);
         }
 
         private static async Task WaitUntilIdle(TuneInRefresh refresh)
