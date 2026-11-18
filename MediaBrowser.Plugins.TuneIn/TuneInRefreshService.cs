@@ -23,6 +23,8 @@ namespace MediaBrowser.Plugins.TuneIn
     public sealed class StartTuneInRefresh : IReturn<TuneInRefreshStatus>
     {
         public string Category { get; set; }
+        public string ExpectedRecoveryId { get; set; }
+        public bool? ResumeFirst { get; set; }
     }
 
     [Route("/TuneIn/Refresh/Cancel", "POST")]
@@ -70,7 +72,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public TuneInRefreshStatus Post(StartTuneInRefresh request)
         {
             EnsureAdmin();
-            return refresh.Start(request.Category);
+            return refresh.Start(request.Category, request.ExpectedRecoveryId, request.ResumeFirst);
         }
 
         public TuneInRefreshStatus Post(CancelTuneInRefresh request)

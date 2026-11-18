@@ -118,17 +118,25 @@ updates the saved Primary, Thumb, and first Backdrop images on the top-level
 TuneIn library item to **Powered by TuneIn**.
 
 Emby's import isn't transactional. If cancellation, failure, or restart
-interrupts an import, some metadata may already have changed. Refresh that
-category or refresh all to reconcile it before refreshing a different
-category on its own. Reconciliation rediscovers and imports all enabled
-categories even if their catalogs appear unchanged. Browse availability during Emby's import isn't
-guaranteed.
+interrupts an import, some metadata may already have changed. The next refresh
+rediscovers and imports all enabled categories even if their catalogs appear
+unchanged. Browse availability during Emby's import isn't guaranteed.
+
+If a category refresh failed or an import was interrupted, selecting a
+different category lets you **Retry previous first** (the new request waits)
+or **Prioritize new refresh** (no separate retry is queued). An interrupted
+import still needs the complete catalog repair whichever option you choose.
+One refresh runs at a time, with up to two distinct requests waiting in order.
+**Cancel refresh** cancels the active run and clears the waiting requests;
+waiting requests also don't survive a server restart.
 
 ### Manual testing
 
 Use a test server. Run **Refresh all enabled categories** from the TuneIn
 Control Panel, then reload the Emby client. Confirm that the top-level library
 tile shows **Powered by TuneIn** and category images are still distinct.
+After a failed refresh, select another category, check both choices in the
+prompt, and confirm the waiting list and buttons update as slots become free.
 After installing, open, leave, and
 reopen TuneIn settings while a response is pending: the native transition and
 loader should settle,

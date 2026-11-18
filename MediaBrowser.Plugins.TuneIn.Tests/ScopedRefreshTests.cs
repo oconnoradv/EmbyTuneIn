@@ -289,10 +289,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         refresh.Start("talk");
                         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
                         Assert.Throws<InvalidOperationException>(() => refresh.UpdateConfiguration(() => config.EnableTalk = false));
-                        Assert.Throws<InvalidOperationException>(() => refresh.Start());
+                        Assert.Equal(new[] { "all" }, refresh.Start().QueuedRequests);
                         refresh.Cancel();
                         await WaitUntilIdle(refresh);
                         Assert.Equal("Cancelled", refresh.Status().State);
+                        Assert.Empty(refresh.Status().QueuedRequests);
                         Assert.Equal("talk", store.Read().DirtyCategory);
                         Assert.Equal(2, imported.Last().Length);
                     }
@@ -301,8 +302,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     using (var restarted = Make())
                     {
                         Assert.Equal("talk", restarted.Status().DirtyCategory);
-                        Assert.Throws<InvalidOperationException>(() => restarted.Start("sports"));
-                        restarted.Start("talk");
+                        var choice = restarted.Start("sports");
+                        Assert.True(choice.RecoveryChoiceRequired);
+                        Assert.False(choice.Busy);
+                        Assert.Throws<InvalidOperationException>(() => restarted.Start("sports", "stale", false));
+                        restarted.Start("sports", choice.RecoveryId, false);
                         await WaitUntilIdle(restarted);
                         Assert.Equal("Completed", restarted.Status().State);
                         Assert.Equal(0, restarted.Status().CategoriesSkipped);
@@ -433,6 +437,66 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal(1, fetches);
             }
             finally { File.Delete(path); }
+        }
+
+        [Theory]
+        [InlineData(true, "talk")]
+        [InlineData(false, "sports")]
+        public async Task DiscoveryFailureRequiresAChoiceAndWaitingRequestsRunInOrder(bool retry, string first)
+        {
+        var config = new PluginConfiguration
+        {
+            SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true,
+            EnableSports = true, EnablePodcasts = true
+        };
+        var entered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fail = true;
+        var fetched = new List<string>();
+        var directory = new TuneInDirectory(() => config, async (request, token) =>
+        {
+            if (fail) throw new InvalidDataException("Discovery failed");
+            var name = request.Parameters.TryGetValue("c", out var category) ? category : "(no category)";
+            fetched.Add(name);
+            entered.TrySetResult(name);
+            await release.Task.WaitAsync(token);
+            return XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>");
+        });
+        var channel = new TuneInChannel(directory);
+        var path = Path.Combine(Path.GetTempPath(), $"tunein-queued-{Guid.NewGuid():N}.xml");
+        try
+        {
+            using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                (_, staged, __, token) =>
+                {
+                    ReadStagedTree(staged, token);
+                    return Task.CompletedTask;
+                }, null);
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            var choice = refresh.Start("sports");
+            Assert.True(choice.RecoveryChoiceRequired);
+            Assert.False(choice.Busy);
+            Assert.Equal("talk", choice.RecoveryCategory);
+            Assert.Null(choice.DirtyCategory);
+            fail = false;
+            var started = refresh.Start("sports", choice.RecoveryId, retry);
+            Assert.Equal(first, started.ActiveRequest);
+            Assert.Equal(first, await entered.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+            if (!retry) refresh.Start("talk");
+            var queued = refresh.Start("podcast");
+            Assert.Equal(new[] { retry ? "sports" : "talk", "podcast" }, queued.QueuedRequests);
+            Assert.Equal(0, queued.QueueSlotsAvailable);
+            Assert.Throws<InvalidOperationException>(() => refresh.Start());
+            Assert.Throws<InvalidOperationException>(() => refresh.Start("sports"));
+            release.TrySetResult(true);
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Empty(refresh.Status().QueuedRequests);
+            Assert.Equal(new[] { retry ? "sports" : "talk", fetched[2] }, fetched.Skip(3));
+        }
+        finally { File.Delete(path); }
         }
 
         private static async Task WaitUntilIdle(TuneInRefresh refresh)

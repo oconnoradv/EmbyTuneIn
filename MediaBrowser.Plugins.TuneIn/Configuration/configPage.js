@@ -276,6 +276,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             talk: 'Talk', sports: 'Sports', podcast: 'Podcasts', presets: 'My Favorites' })[status.Category];
         var description = status.State === 'NeverRun' ? 'No Control Panel refresh has run.' :
             [status.State, status.Phase, category].filter(Boolean).join(' - ');
+        if (status.ActiveRequest && status.ActiveRequest !== status.Category)
+            description += ' (requested: ' + refreshName(status, status.ActiveRequest) + ')';
         if (status.CategoriesTotal) description += '. ' + status.CategoriesCompleted + ' of ' + status.CategoriesTotal + ' categories checked';
         if (status.CategoriesSkipped) description += '; ' + status.CategoriesSkipped + ' unchanged';
         if (status.LastHttpStatus) description += '. TuneIn returned HTTP ' + status.LastHttpStatus;
@@ -283,6 +285,13 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (status.ImportMayHavePartiallyApplied && status.Phase !== 'Importing')
             description += '. An interrupted import may have changed Emby metadata.';
         instance.view.querySelector('.refreshStatus').textContent = description;
+        var queued = status.QueuedRequests || [];
+        var queueNote = instance.view.querySelector('.refreshQueueNote');
+        queueNote.hidden = !queued.length;
+        queueNote.textContent = queued.length ?
+            'Waiting to refresh (' + queued.length + '/2): ' + queued.map(function (key) {
+                return refreshName(status, key);
+            }).join(', ') : '';
         if (status.State !== 'Error' || !previousStatus || status.FinishedUtc !== previousStatus.FinishedUtc) {
             instance.view.querySelector('.refreshFailureLog').textContent = '';
             instance.view.querySelector('.refreshFailureLog').hidden = true;
@@ -299,7 +308,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (!categories.length) note = 'No categories are enabled in the saved browsing settings.';
         else if (status.DirtyCategory && !status.Busy) {
             var dirty = categories.find(function (category) { return category.Category === status.DirtyCategory; });
-            if (dirty) note = 'Refresh ' + dirty.Name + ' or refresh all to reconcile an interrupted import.';
+            if (dirty) note = dirty.Name + ' was interrupted. You can retry it or prioritize another category.';
         }
         instance.view.querySelector('.refreshCategoryNote').textContent = note;
         var rows = instance.refreshCategoryRows;
@@ -336,7 +345,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             $(list).trigger('create');
         }
         categories.forEach(function (item) {
-            var text = item.Name + ': ' + item.State;
+            var text = item.Name + ': ' + ((status.QueuedRequests || []).includes(item.Category) ? 'Queued' : item.State);
             if (!status.Busy && item.Category === status.DirtyCategory) text += ' (reconciliation needed)';
             var caption = rows.get(item.Category).caption;
             if (caption.textContent !== text) caption.textContent = text;
@@ -344,15 +353,20 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     }
 
     function refreshControls(instance, available) {
-        var cannotStart = !available || !instance.config || instance.refreshBusy || !!instance.refreshAction || instance.saving;
+        var cannotStart = !available || !instance.config || !!instance.refreshAction || instance.saving;
         var status = instance.refreshStatus;
         instance.refreshAvailable = available;
-        instance.view.querySelector('.refreshStart').disabled = cannotStart || !status || !(status.Categories || []).length;
+        var queued = status && status.QueuedRequests || [];
+        function blocked(key) {
+            return cannotStart || !status || status.QueueSlotsAvailable === 0 || status.Cancelling ||
+                status.ActiveRequest === key || queued.includes(key);
+        }
+        instance.view.querySelector('.refreshStart').disabled = blocked('all') || !(status.Categories || []).length;
         instance.view.querySelector('.refreshCancel').disabled = !available || !instance.refreshBusy || !!instance.refreshAction;
         instance.view.querySelector('.refreshLogButton').disabled = !available || !status || status.State !== 'Error'
             || status.Busy || !status.FinishedUtc || !!instance.refreshAction || !!instance.refreshLogAction;
         instance.refreshCategoryRows.forEach(function (row, category) {
-            row.control.disabled = cannotStart || !!(status && status.DirtyCategory && status.DirtyCategory !== category);
+            row.control.disabled = blocked(category);
         });
         editing(instance);
     }
@@ -427,11 +441,29 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         return instance.refreshPoll;
     }
 
-    function doRefresh(instance, action, category) {
+    function refreshName(status, key) {
+        var category = (status.Categories || []).find(function (item) { return item.Category === key; });
+        return category ? category.Name : key === 'all' ? 'All enabled categories' : key;
+    }
+
+    function showRecoveryChoice(instance, status, category) {
+        var dialog = instance.view.querySelector('.tuneInRecoveryDialog');
+        var previous = refreshName(status, status.RecoveryCategory);
+        var requested = refreshName(status, category);
+        instance.refreshRecovery = { category: category, id: status.RecoveryId };
+        instance.view.querySelector('.refreshRecoveryText').textContent =
+            previous + ' did not finish. Retry it first and queue ' + requested +
+            ', or refresh ' + requested + ' first without queuing a retry.' +
+            (status.DirtyCategory ? ' Emby still needs a complete catalog import to repair the interruption.' : '');
+        if (!dialog.open) dialog.showModal();
+    }
+
+    function doRefresh(instance, action, category, recovery) {
         if (!instance.refreshVisible || !instance.refreshSection.open || instance.refreshAction || !instance.refreshAvailable) return;
+        var row = category ? instance.refreshCategoryRows.get(category) : null;
         var control = action === 'Cancel' ? instance.view.querySelector('.refreshCancel') :
-            category ? instance.refreshCategoryRows.get(category).control : instance.view.querySelector('.refreshStart');
-        if (control.disabled) return;
+            category ? row && row.control : instance.view.querySelector('.refreshStart');
+        if (!control || control.disabled) return;
         var epoch = instance.viewEpoch;
         instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
         instance.refreshAction = true;
@@ -440,12 +472,21 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.refreshLogMessage').textContent = '';
         refreshControls(instance, false);
         instance.view.querySelector('.refreshError').textContent = '';
+        var params = category ? { Category: category } : undefined;
+        if (recovery) {
+            params.ExpectedRecoveryId = recovery.id;
+            params.ResumeFirst = recovery.resume;
+        }
         return ApiClient.ajax({
             type: 'POST', dataType: 'json',
-            url: ApiClient.getUrl('TuneIn/Refresh/' + action, category ? { Category: category } : undefined)
+            url: ApiClient.getUrl('TuneIn/Refresh/' + action, params)
         })
             .then(function (status) {
-                if (epoch === instance.viewEpoch) renderRefresh(instance, status);
+                if (epoch === instance.viewEpoch) {
+                    renderRefresh(instance, status);
+                    if (status.RecoveryChoiceRequired && instance.refreshSection.open)
+                        showRecoveryChoice(instance, status, category);
+                }
             }).catch(function () {
                 if (epoch === instance.viewEpoch)
                     instance.view.querySelector('.refreshError').textContent = 'Could not ' + action.toLowerCase() + ' refresh. Check the current status before retrying.';
@@ -529,7 +570,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             bindDisclosure(view.querySelector(selector));
         });
         view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });
+        var dialog = view.querySelector('.tuneInRecoveryDialog');
         instance.refreshSection.addEventListener('toggle', function () {
+            if (!instance.refreshSection.open && dialog.open) dialog.close();
             if (!instance.refreshSection.open || !instance.refreshVisible) return;
             instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
             view.querySelector('.refreshStatus').textContent = 'Reading refresh status...';
@@ -541,6 +584,18 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         view.querySelector('.refreshStart').addEventListener('click', function () { return doRefresh(instance, 'Start'); });
         view.querySelector('.refreshCancel').addEventListener('click', function () { return doRefresh(instance, 'Cancel'); });
         view.querySelector('.refreshLogButton').addEventListener('click', function () { return retrieveRefreshLog(instance); });
+        dialog.addEventListener('close', function () {
+            if (!dialog.open) instance.refreshRecovery = null;
+        });
+        [['.refreshResumeFirst', true], ['.refreshNewFirst', false]].forEach(function (choice) {
+            view.querySelector(choice[0]).addEventListener('click', function () {
+                var recovery = instance.refreshRecovery;
+                instance.refreshRecovery = null;
+                dialog.close();
+                if (recovery) return doRefresh(instance, 'Start', recovery.category,
+                    { id: recovery.id, resume: choice[1] });
+            });
+        });
     }
 
     Object.assign(View.prototype, BaseView.prototype);
@@ -625,6 +680,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     View.prototype.onPause = function () {
         this.viewEpoch = (this.viewEpoch || 0) + 1;
         this.refreshVisible = false;
+        this.refreshRecovery = null;
+        var dialog = this.view.querySelector('.tuneInRecoveryDialog');
+        if (dialog.open) dialog.close();
         clearTimeout(this.refreshTimer);
         this.view.querySelector('.refreshFailureLog').textContent = '';
         this.view.querySelector('.refreshFailureLog').hidden = true;

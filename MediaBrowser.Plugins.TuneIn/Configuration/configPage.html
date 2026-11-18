@@ -8,6 +8,30 @@
         .tuneInLoginRow > div {
             min-width: 0;
         }
+        .tuneInApiIntervalRow {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: .5em;
+        }
+        .tuneInApiIntervalRow .apiRequestIntervalSeconds {
+            box-sizing: content-box;
+            inline-size: 4ch;
+            text-align: center;
+        }
+        .tuneInRecoveryDialog {
+            color-scheme: light dark;
+            max-inline-size: min(28rem, calc(100% - 3rem));
+            border: 1px solid currentColor;
+            border-radius: .25em;
+            background: Canvas;
+            color: CanvasText;
+        }
+        .tuneInRecoveryActions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: .5em;
+        }
         .tuneInSection {
             margin-block: 1em;
         }
@@ -154,7 +178,10 @@
             <legend>Catalog browsing</legend>
             <p>Enable browsing and choose categories before opening TuneIn. Existing username and coordinates are retained, but do not enable browsing automatically.</p>
             <div class="inputContainer">
-                <input type="number" is="emby-input" class="apiRequestIntervalSeconds" label="API request interval (seconds):" min="1" max="30" step="1" aria-describedby="tuneInApiIntervalHint" required />
+                <div class="tuneInApiIntervalRow">
+                    <label for="tuneInApiInterval">API request interval (seconds):</label>
+                    <input id="tuneInApiInterval" type="number" class="apiRequestIntervalSeconds" min="1" max="30" step="1" aria-describedby="tuneInApiIntervalHint" required />
+                </div>
                 <div class="fieldDescription" id="tuneInApiIntervalHint">Minimum delay between TuneIn API requests: 1 to 30 seconds (default: 3). TuneIn retry delays are always honored.</div>
             </div>
             <label class="emby-checkbox-label">
@@ -187,11 +214,21 @@
             <button is="emby-button" type="button" class="raised refreshStart" disabled>Refresh all enabled categories</button>
             <button type="button" class="refreshCancel" disabled>Cancel refresh</button>
             <button is="emby-button" type="button" class="raised refreshLogButton" disabled>Retrieve refresh log</button>
+            <p class="refreshQueueNote" role="status" hidden></p>
             <p class="refreshLogMessage" role="status"></p>
             <p class="fieldDescription">The latest failed refresh report is capped at 64 KB and may contain private server details. Redact it before sharing.</p>
             <pre class="refreshFailureLog" aria-label="Latest failed refresh report" tabindex="0" hidden></pre>
             <p class="refreshCategoryNote" role="status"></p>
             <ul class="tuneInRefreshCategories" aria-label="Category refresh status"></ul>
+            <dialog class="tuneInRecoveryDialog" aria-labelledby="tuneInRecoveryTitle" aria-describedby="tuneInRecoveryText">
+                <h3 id="tuneInRecoveryTitle">Choose which refresh runs first</h3>
+                <p id="tuneInRecoveryText" class="refreshRecoveryText"></p>
+                <form method="dialog" class="tuneInRecoveryActions">
+                    <button is="emby-button" type="button" class="raised refreshResumeFirst">Retry previous first</button>
+                    <button is="emby-button" type="button" class="raised refreshNewFirst">Prioritize new refresh</button>
+                    <button is="emby-button" type="submit" class="refreshDismiss" autofocus>Back</button>
+                </form>
+            </dialog>
         </details>
     </div>
 </div>

@@ -32,6 +32,8 @@ class Element {
     appendChild(child) { this.childNodes.push(child); child.parentNode = this; return child; }
     setAttribute(name, value) { this.attributes[name] = value; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
+    showModal() { this.open = true; }
+    close() { this.open = false; if (this.handlers.close) this.handlers.close(); }
     descendants() { return this.childNodes.flatMap(child => [child, ...child.descendants()]); }
 }
 
@@ -48,7 +50,8 @@ function harness(manualStatus = false) {
         '.loginFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
         '.localSelector', '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
-        '.settingsLockStatus']) elements[name] = new Element();
+        '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
+        '.refreshResumeFirst', '.refreshNewFirst']) elements[name] = new Element();
     for (const [section, summary, open] of [
         ['.categoriesSection', '.categoriesSummary', true],
         ['.localSection', '.localSummary', true],
@@ -586,13 +589,13 @@ test('Catalog Refresh opens by default and can collapse and reopen with fresh st
     const [talk, sports] = list.childNodes;
     assert.match(talk.textContent, /Talk.*Unchanged/);
     assert.match(sports.textContent, /Sports.*reconciliation needed/);
-    assert.equal(control(talk).disabled, true);
+    assert.equal(control(talk).disabled, false);
     assert.equal(control(sports).disabled, false);
     const action = control(sports).handlers.click();
     assert.equal(app.refresh[2].options.type, 'POST');
     assert.equal(app.refresh[2].options.url.route, 'TuneIn/Refresh/Start');
     assert.equal(app.refresh[2].options.url.params.Category, 'sports');
-    app.refresh[2].resolve({ State: 'Running', Busy: true, Categories: categories });
+    app.refresh[2].resolve({ State: 'Running', Busy: true, ActiveRequest: 'sports', Categories: categories });
     await action;
     assert.equal(control(sports).disabled, true);
     section.open = false;
@@ -609,6 +612,52 @@ test('Catalog Refresh opens by default and can collapse and reopen with fresh st
     assert.match(sports.textContent, /Sports.*Imported/);
     assert.equal(control(sports).disabled, false);
 });
+
+for (const resume of [true, false]) {
+    test(`recovery prompt submits explicit choice (${resume ? 'retry' : 'prioritize'}) and respects queue capacity`, async () => {
+        const app = harness(true);
+        const section = app.elements['.tuneInRefresh'];
+        section.open = true;
+        const visit = app.instance.onResume();
+        app.reads[0].resolve({});
+        const categories = [
+            { Category: 'local', Name: 'Local Radio' }, { Category: 'presets', Name: 'My Favorites' },
+            { Category: 'sports', Name: 'Sports' }
+        ];
+        const failure = { State: 'Error', RecoveryCategory: 'local', RecoveryId: 'generation', Categories: categories };
+        app.refresh[0].resolve(failure);
+        await visit;
+        const rows = app.elements['.tuneInRefreshCategories'].childNodes;
+        const [local, favorites, sports] = rows.map(row => row.childNodes[1].childNodes[0]);
+        const action = favorites.handlers.click();
+        app.refresh[1].resolve({ ...failure, RecoveryChoiceRequired: true });
+        await action;
+        const dialog = app.elements['.tuneInRecoveryDialog'];
+        assert.equal(dialog.open, true);
+        assert.match(app.elements['.refreshRecoveryText'].textContent, /Local Radio.*My Favorites/);
+        assert.equal(app.refresh.filter(request => request.options.type === 'POST').length, 1);
+        const confirm = app.elements[resume ? '.refreshResumeFirst' : '.refreshNewFirst'].handlers.click();
+        const request = app.refresh.at(-1);
+        assert.equal(request.options.url.params.ExpectedRecoveryId, 'generation');
+        assert.equal(request.options.url.params.ResumeFirst, resume);
+        request.resolve({ State: 'Running', Busy: true, ActiveRequest: resume ? 'local' : 'presets',
+            QueuedRequests: resume ? ['presets'] : [], QueueSlotsAvailable: resume ? 1 : 2, Categories: categories });
+        await confirm;
+        assert.equal(dialog.open, false);
+        assert.equal(local.disabled, resume);
+        assert.equal(favorites.disabled, true);
+        assert.equal(sports.disabled, false);
+        // The outstanding poll predates the confirmation and cannot replace its response.
+        app.refresh[2].resolve(failure);
+        await settle();
+        app.refresh.at(-1).resolve({ State: 'Running', Busy: true, ActiveRequest: 'local',
+            QueuedRequests: ['presets', 'all'], QueueSlotsAvailable: 0, Categories: categories });
+        await settle();
+        assert.equal(sports.disabled, true);
+        assert.match(app.elements['.refreshQueueNote'].textContent, /2\/2.*My Favorites.*All enabled categories/);
+        app.instance.onPause();
+    });
+}
 
 test('category interval dropdowns restore saved values and save changes without starting a refresh', async () => {
     const app = harness(true);
