@@ -222,6 +222,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function editing(instance) {
         var disabled = !!editingBlocked(instance);
+        instance.view.querySelector('.loginFields').disabled = disabled;
         instance.view.querySelector('.configurationFields').disabled = disabled;
         instance.view.querySelector('.button-submit').disabled = disabled;
         var toggle = instance.view.querySelector('.settingsLocked');

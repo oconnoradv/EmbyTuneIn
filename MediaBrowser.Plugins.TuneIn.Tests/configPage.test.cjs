@@ -43,7 +43,7 @@ function harness(manualStatus = false) {
     const form = { addEventListener: (event, handler) => { formHandlers[event] = handler; } };
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon };
     for (const name of ['.localSource', '.configurationCompleted', '.categories', '.selectors',
-        '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
+        '.loginFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.refreshStart', '.refreshCancel', '.localSelector', '.tuneInRefreshCategories',
         '.refreshCategoryNote', '.settingsLocked', '.settingsLockStatus']) elements[name] = new Element();
     for (const [section, summary, open] of [
@@ -214,7 +214,7 @@ test('selector retry is bounded and does not send requests after leaving setting
 test('native view lifecycle loads labeled upstream settings on each visit', async () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /data-controller="__plugin\/tuneinjs"/);
-    assert.match(html, /class="txtUsername"[^>]*label="Your TuneIn username:"[\s\S]*class="categoriesSummary"/);
+    assert.match(html, /<legend>Your TuneIn Login<\/legend>[\s\S]*class="txtUsername"[^>]*label="TuneIn User:"[\s\S]*class="localSource"[\s\S]*class="txtLatLon"[\s\S]*class="settingsLocked"/);
     assert.doesNotMatch(html, /<h2>Favorites<\/h2>/);
     assert.match(html, /class="txtLatLon"[^>]*label="Your LatLon:"/);
     const app = harness();
@@ -586,9 +586,11 @@ test('settings lock protects pending edits and saves without blocking catalogue 
     await visit;
     assert.equal(toggle.disabled, true);
     assert.equal(save.disabled, true);
+    assert.equal(app.elements['.loginFields'].disabled, true);
     app.refresh[0].resolve({ SettingsLocked: false, Categories: categories });
     await settle();
     assert.equal(save.disabled, false);
+    assert.equal(app.elements['.loginFields'].disabled, false);
     const language = app.elements['.selectors'].childNodes[0];
     const selection = language.childNodes[1];
     app.username.value = 'unsaved';
@@ -596,6 +598,7 @@ test('settings lock protects pending edits and saves without blocking catalogue 
     const locking = toggle.handlers.change();
     assert.deepEqual(JSON.parse(app.locks[0].options.data), { Locked: true });
     assert.equal(save.disabled, true);
+    assert.equal(app.elements['.loginFields'].disabled, true);
     app.locks[0].resolve({ Locked: true });
     await locking;
     app.formHandlers.submit({ preventDefault() {} });
@@ -610,6 +613,7 @@ test('settings lock protects pending edits and saves without blocking catalogue 
     const unlocking = toggle.handlers.change();
     app.locks[1].resolve({ Locked: false });
     await unlocking;
+    assert.equal(app.elements['.loginFields'].disabled, false);
     app.formHandlers.submit({ preventDefault() {} });
     assert.equal(app.writes[0].config.Username, 'unsaved');
 });

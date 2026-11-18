@@ -1,5 +1,13 @@
 ﻿<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/tuneinjs" data-title="TuneIn">
     <style>
+        .tuneInLoginRow {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+            gap: 1em;
+        }
+        .tuneInLoginRow > div {
+            min-width: 0;
+        }
         .tuneInSection {
             margin-block: 1em;
         }
@@ -99,6 +107,28 @@
     <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
 
         <form class="auto-center">
+            <fieldset class="loginFields" disabled>
+                <legend>Your TuneIn Login</legend>
+                <div class="tuneInLoginRow">
+                    <div class="inputContainer">
+                        <input type="text" is="emby-input" class="txtUsername" label="TuneIn User:" maxlength="128" />
+                    </div>
+                    <div class="selectContainer">
+                        <select is="emby-select" class="localSource" label="Local Radio source:">
+                            <option value="">Choose a source</option>
+                            <option value="regions">Saved cities and regions</option>
+                            <option value="coordinates">Coordinates</option>
+                        </select>
+                        <div class="fieldDescription">When Local Radio is enabled, choose one source. Switching sources keeps your saved regions and coordinate text.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input type="text" is="emby-input" class="txtLatLon" label="Your LatLon:" />
+                        <div class="fieldDescription">
+                            Your LatLon can be found at <a is="emby-linkbutton" class="button-link" target="_blank" href="https://www.latlong.net">https://www.latlong.net</a>.
+                        </div>
+                    </div>
+                </div>
+            </fieldset>
             <label class="emby-checkbox-label">
                 <input type="checkbox" is="emby-checkbox" role="switch" class="settingsLocked" aria-describedby="tuneInLockStatus" disabled />
                 <span>Lock settings</span>
@@ -112,29 +142,12 @@
                 <input type="checkbox" is="emby-checkbox" class="configurationCompleted" />
                 <span>Enable configured browsing after saving</span>
             </label>
-            <div class="inputContainer">
-                <input type="text" is="emby-input" class="txtUsername" label="Your TuneIn username:" maxlength="128" />
-            </div>
             <details class="tuneInSection">
                 <summary class="categoriesSummary">Categories</summary>
                 <div class="categories"></div>
             </details>
             <details class="tuneInSection">
                 <summary class="localSummary">Local Radio</summary>
-                <div class="selectContainer">
-                    <select is="emby-select" class="localSource" label="Local Radio source:">
-                        <option value="">Choose a source</option>
-                        <option value="regions">Saved cities and regions</option>
-                        <option value="coordinates">Coordinates</option>
-                    </select>
-                    <div class="fieldDescription">When Local Radio is enabled, choose one source. Switching sources keeps your saved regions and coordinate text.</div>
-                </div>
-                <div class="inputContainer">
-                    <input type="text" is="emby-input" class="txtLatLon" label="Your LatLon:" />
-                    <div class="fieldDescription">
-                        Your LatLon can be found at <a is="emby-linkbutton" class="button-link" target="_blank" href="https://www.latlong.net">https://www.latlong.net</a>.
-                    </div>
-                </div>
                 <div class="localSelector tuneInSelectors"></div>
             </details>
             <h2>Saved selections</h2>
