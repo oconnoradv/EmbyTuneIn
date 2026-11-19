@@ -265,11 +265,16 @@ namespace MediaBrowser.Plugins.TuneIn
             staged.folders.Add(string.Empty, new ChannelItemResult { Items = rootItems });
             foreach (var category in categories)
             {
+                token.ThrowIfCancellationRequested();
                 if (!rootItems.Any(root => root.Id == category.RootId))
                     throw new InvalidOperationException("The saved TuneIn category does not match the channel root.");
                 foreach (var folder in category.Folders)
+                {
+                    token.ThrowIfCancellationRequested();
                     staged.folders.Add(folder.Id, RestoreFolder(folder));
+                }
             }
+            token.ThrowIfCancellationRequested();
             if (rootItems.Any(root => !staged.folders.ContainsKey(root.Id)) ||
                 staged.folders.Values.SelectMany(folder => folder.Items).Any(item =>
                     item.Type == ChannelItemType.Folder && !staged.folders.ContainsKey(item.Id)))

@@ -500,6 +500,126 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             }
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task DiscoveryDeadlineBeforeImportAutomaticallyResumesUnlessCancelled(bool cancel)
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true, AllowPartialCatalogImport = true
+            };
+            config.Music.Add(new CatalogSelection { Id = "g71", Enabled = true });
+            TuneInRefresh runningRefresh = null;
+            CancellationToken attemptToken = default;
+            var delayed = false;
+            var requests = 0;
+            var imports = 0;
+            var directory = new TuneInDirectory(() =>
+            {
+                if (!delayed && runningRefresh?.Status().Categories.Single().StationCounts?.AvailableStations == 1)
+                {
+                    delayed = true;
+                    if (cancel) runningRefresh.Cancel();
+                    else Assert.True(attemptToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(5)));
+                }
+                return config;
+            }, (_, __) =>
+            {
+                requests++;
+                return Task.FromResult(XDocument.Parse("<opml><body>"
+                    + "<outline type='audio' guide_id='s1' text='Radio'/>"
+                    + "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c1&amp;filter=s:~%00'/>"
+                    + "</body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-preimport-timeout-{Guid.NewGuid():N}.xml");
+            var store = new TuneInRefreshStore(path);
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        imports++;
+                        Assert.True(runningRefresh.Status().Resumed);
+                        Assert.Equal(1, runningRefresh.Status().AutomaticRetry);
+                        Assert.Single(ReadStagedTree(staged, token)["Music"]);
+                        return Task.CompletedTask;
+                    }, null, timeoutOverride: TimeSpan.FromSeconds(1),
+                    countStations: (_, __, token) => { attemptToken = token; return 0; });
+                runningRefresh = refresh;
+                refresh.Start("music");
+                await WaitUntilIdle(refresh);
+                Assert.True(delayed);
+                Assert.Equal(1, requests);
+                if (cancel)
+                {
+                    Assert.Equal("Cancelled", refresh.Status().State);
+                    Assert.Equal(0, refresh.Status().DiscoveryTimeouts);
+                    Assert.Equal(0, imports);
+                    Assert.Null(store.Read());
+                    return;
+                }
+                Assert.Equal("Partial", refresh.Status().State);
+                Assert.Equal(1, refresh.Status().DiscoveryTimeouts);
+                Assert.Equal(1, refresh.Status().CacheHits);
+                Assert.Equal(1, refresh.Status().SkippedBrowseLinks);
+                Assert.Equal(1, imports);
+                Assert.True(store.Read().Categories.Single().DiscoveryPartial);
+                Assert.Null(store.ReadDiscovery(directory.Snapshot().DiscoveryKey, "music", DateTime.UtcNow, TimeSpan.FromHours(48)));
+            }
+            finally
+            {
+                File.Delete(path);
+                store.ClearDiscovery();
+            }
+        }
+
+        [Fact]
+        public async Task ImportDeadlineDoesNotRetryAndReportsTheStoppedPhaseWithoutSkippedLinks()
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var requests = 0;
+            var imports = 0;
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                requests++;
+                return Task.FromResult(XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-import-timeout-{Guid.NewGuid():N}.xml");
+            var store = new TuneInRefreshStore(path);
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    async (_, staged, __, token) =>
+                    {
+                        imports++;
+                        ReadStagedTree(staged, token);
+                        await Task.Delay(Timeout.Infinite, token);
+                    }, null, timeoutOverride: TimeSpan.FromSeconds(1));
+                refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("TimedOut", refresh.Status().State);
+                Assert.Equal(0, refresh.Status().DiscoveryTimeouts);
+                Assert.Equal(1, requests);
+                Assert.Equal(1, imports);
+                Assert.True(refresh.Status().ImportMayHavePartiallyApplied);
+                Assert.Equal("talk", store.Read().DirtyCategory);
+                var report = refresh.GetFailureLog().Text;
+                Assert.Contains("Stopped during: Importing", report);
+                Assert.Contains("not retried automatically", report);
+                Assert.Contains("Import may have partially applied: True", report);
+            }
+            finally
+            {
+                File.Delete(path);
+                store.ClearDiscovery();
+            }
+        }
+
         [Fact]
         public async Task ParallelRequestsKeepGlobalSpacingAndDrainAfterRateLimit()
         {

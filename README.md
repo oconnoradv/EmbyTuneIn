@@ -181,14 +181,17 @@ polling does not recrawl TuneIn or query the library inventory.
 
 ### Diagnostic reports
 
-After a failed refresh or a run with skipped entries, select **Retrieve refresh
-log**. This administrator-only report covers the latest attempt, not the full
-Emby server log. It is also available for **Partial** outcomes.
+After a failed or timed-out refresh, or a run with skipped entries, select
+**Retrieve refresh log**. This administrator-only report covers the latest
+attempt, not the full Emby server log. It is also available for **Partial**
+outcomes.
 
 Reports include the outcome, grouped skip counts, and up to 100 skipped-entry
 examples within a 64 KB report. Examples record the timestamp, category,
 rejection reason, source page, and rejected navigation query values and
-fragment. Duplicate parameters and truncation are identified.
+fragment. Duplicate parameters and truncation are identified. Timeout reports
+record the phase that stopped, discovery timeout count, checkpoint time, and
+whether an import may have partially applied.
 
 Non-navigation parameters, including usernames, coordinates, serials, partner
 IDs, and tokens, are omitted. Embedded credential-like assignments are
@@ -221,12 +224,15 @@ requests. Every 20 consecutive successful responses restores overlap and
 reduces the learned interval by one second toward the configured minimum.
 Saved settings and ordinary playback intervals are unchanged.
 
-A discovery timeout saves additional validated pages when possible, then
-retries after active work drains. The interrupted page may be requested again.
+A discovery or pre-import staging timeout saves additional validated pages
+when possible, then retries after active work drains. Checkpoints remain
+available until the import boundary. The interrupted page may be requested again.
 After a server restart, starting the same refresh can reuse a matching
 checkpoint. Cancellation stops automatic retries; import timeouts are not
 automatically retried. Host operations that ignore cancellation can delay
-draining. Discovery timeouts do not publish incomplete trees.
+draining. Discovery timeouts do not publish incomplete trees. Once import
+begins, timeout status identifies the stopped phase rather than starting an
+automatic retry; an interrupted import requires a new refresh to reconcile.
 
 The server log records automatic retries and per-attempt timings for discovery,
 HTTP fetching, pacing, backoff, cached parsing, and import. Rate adaptation

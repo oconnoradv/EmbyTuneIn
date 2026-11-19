@@ -565,6 +565,7 @@ namespace MediaBrowser.Plugins.TuneIn
             var timedOut = false;
             var discovering = false;
             var discoveryTimedOut = false;
+            string stoppedPhase = null;
             Exception failure = null;
             var timings = new TuneInRefreshTimings();
             var discoveryTime = new Stopwatch();
@@ -786,12 +787,11 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
 
                     directory.CheckCurrent(snapshot, linked.Token);
-                    discovering = false;
                     discoveryTime.Stop();
-                    store.ClearDiscovery();
                     if (cannotApply)
                     {
                         directory.CheckCurrent(snapshot, linked.Token);
+                        store.ClearDiscovery();
                         Update(() =>
                         {
                             foreach (var category in completed) categoryStates[category] = "Checked (not applied)";
@@ -805,6 +805,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     var didImport = importRequired || changed.Count != 0;
                     if (didImport)
                     {
+                        Update(() => status.Phase = "Preparing import");
                         // Only newly enabled, never-imported categories may wait outside the complete saved tree.
                         var importedCategories = enabled.Where(listings.ContainsKey).ToArray();
                         var importedRoots = roots.Where(root => importedCategories.Any(category => listings[category].RootId == root.Id)).ToArray();
@@ -820,9 +821,13 @@ namespace MediaBrowser.Plugins.TuneIn
                         currentCategory = requestedCategory ?? dirtyAtStart ?? categories.First();
                         linked.Token.ThrowIfCancellationRequested();
                         directory.CheckCurrent(snapshot, linked.Token);
+                        linked.Token.ThrowIfCancellationRequested();
+                        // Retain resumable pages and retry eligibility until the import boundary.
+                        discovering = false;
                         // Keep the earlier interruption recorded until the complete repair succeeds.
                         checkpoint.DirtyCategory = dirtyAtStart ?? currentCategory;
                         Persist(snapshot, checkpoint, started);
+                        store.ClearDiscovery();
                         Update(() =>
                         {
                             status.Category = currentCategory;
@@ -852,6 +857,9 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
                     else
                     {
+                        discovering = false;
+                        store.ClearDiscovery();
+                        Update(() => status.Phase = "Finishing refresh");
                         foreach (var category in categories)
                         {
                             updateArtwork?.Invoke(channel, roots[Array.IndexOf(enabled, category)].Id, linked.Token);
@@ -886,6 +894,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 catch (Exception error)
                 {
+                    lock (gate) stoppedPhase = status.Phase;
                     var stalled = error is TuneInCatalogTimeoutException;
                     timedOut = (timeout.IsCancellationRequested || stalled) && !serverToken.IsCancellationRequested;
                     discoveryTimedOut = timedOut && discovering;
@@ -919,6 +928,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             ? (status.DiscoveryCheckpointUtc.HasValue
                                 ? "Discovery timed out; checkpoint saved"
                                 : "Discovery timed out before a checkpoint was saved")
+                            : timedOut ? $"Timed out during {stoppedPhase}; not retried automatically"
                             : cancelled ? "Stopped and drained" : status.Phase;
                         if (!cancelled && error is TuneInProviderResponseException provider && provider.StatusCode == 429)
                             status.Phase += " (TuneIn rate limit reached; wait before retrying or increase the API request interval)";
@@ -953,8 +963,8 @@ namespace MediaBrowser.Plugins.TuneIn
                             status.Phase = "Completed";
                             status.Progress = 100;
                         }
-                        failureLog = failure != null || status.SkippedBrowseLinks > 0
-                            ? CreateFailureLog(failure, status, skippedEntries, skippedEntriesOmitted) : null;
+                        failureLog = failure != null || timedOut || status.SkippedBrowseLinks > 0
+                            ? CreateFailureLog(failure, status, skippedEntries, skippedEntriesOmitted, stoppedPhase) : null;
                     }
                 }
             }
@@ -973,7 +983,7 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         private static TuneInRefreshFailureLog CreateFailureLog(Exception error, TuneInRefreshStatus failedStatus,
-            IEnumerable<string> skippedEntries = null, int skippedEntriesOmitted = 0)
+            IEnumerable<string> skippedEntries = null, int skippedEntriesOmitted = 0, string stoppedPhase = null)
         {
             var lines = new List<string>
             {
@@ -983,8 +993,12 @@ namespace MediaBrowser.Plugins.TuneIn
                 "State: " + failedStatus.State,
                 "Category: " + (failedStatus.Category ?? "preparation"),
                 "Phase: " + (failedStatus.Phase ?? "unknown"),
+                "Discovery timeouts: " + failedStatus.DiscoveryTimeouts + " (automatic retry limit: " + DiscoveryResumeLimit + ")",
+                "Discovery checkpoint (UTC): " + (failedStatus.DiscoveryCheckpointUtc?.ToString("O") ?? "none"),
+                "Import may have partially applied: " + failedStatus.ImportMayHavePartiallyApplied,
                 "Import with exclusions allowed: " + failedStatus.PartialImportAllowed
             };
+            if (stoppedPhase != null) lines.Add("Stopped during: " + stoppedPhase);
             if (failedStatus.LastHttpStatus.HasValue)
                 lines.Add("TuneIn HTTP status: " + failedStatus.LastHttpStatus.Value);
             if (failedStatus.SkippedBrowseLinks != 0)
