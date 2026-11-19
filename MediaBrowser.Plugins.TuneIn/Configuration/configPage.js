@@ -300,6 +300,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             description += ' (requested: ' + refreshName(status, status.ActiveRequest) + ')';
         if (status.AutomaticRetry && status.AutomaticRetryLimit)
             description += '. Automatic retry ' + status.AutomaticRetry + ' of ' + status.AutomaticRetryLimit + ' after discovery timed out';
+        if (status.Busy && status.Activity) description += '. ' + status.Activity;
+        if (status.Busy && status.LastProgressUtc) {
+            var lastProgress = new Date(status.LastProgressUtc);
+            if (!isNaN(lastProgress.getTime())) description += '. Last progress: ' + lastProgress.toLocaleTimeString();
+        }
         if (status.CategoriesTotal) description += '. ' + status.CategoriesCompleted + ' of ' + status.CategoriesTotal + ' categories checked';
         if (status.CategoriesSkipped) description += '; ' + status.CategoriesSkipped + ' unchanged';
         if (status.SkippedBrowseLinks) {
@@ -561,6 +566,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         config.Username = instance.view.querySelector('.txtUsername').value.trim() || null;
         config.LatLon = coordinates || null;
         config.ApiRequestIntervalSeconds = Number(requestInterval);
+        config.HideRegionalGenres = instance.view.querySelector('.hideRegionalGenres').checked;
         config.RefreshSchedules = Array.from(instance.refreshSchedules)
             .filter(function (entry) { return entry[1] > 0; })
             .map(function (entry) { return { Category: entry[0], IntervalHours: entry[1] }; });
@@ -674,6 +680,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.txtLatLon').value = config.LatLon || '';
             view.querySelector('.apiRequestIntervalSeconds').value =
                 config.ApiRequestIntervalSeconds == null ? 3 : Math.min(config.ApiRequestIntervalSeconds, 30);
+            view.querySelector('.hideRegionalGenres').checked = !!config.HideRegionalGenres;
             var hasRegions = (config.LocalCities || []).some(function (item) {
                 return item && item.Enabled !== false && /^r[1-9][0-9]{0,9}$/.test(item.Id);
             });

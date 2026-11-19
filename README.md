@@ -86,6 +86,11 @@ cached pages while another response is pending. All requests still share the
 same minimum spacing between starts. On HTTP 429 or a `Retry-After` cooldown,
 new requests wait and catalog discovery uses one request at a time until 20
 successful catalog responses. Pagination still follows each validated page.
+
+**Hide genre folders in Local Radio and By Location** is off by default. When
+enabled, it skips recognized regional genre links while keeping stations,
+popular listings and pagination. Refresh the affected categories to update
+their imported listings. The option does not change existing navigation IDs.
 Cancellation and the overall refresh timeout still apply during waits.
 If the retry budget is exhausted, no partial catalog is imported. Wait before
 retrying; adaptation cannot guarantee acceptance by TuneIn or bypass its limits.
@@ -116,6 +121,11 @@ shows the active retry number, for example **Automatic retry 2 of 10 after
 discovery timed out**. The server log records each automatic retry as it starts.
 Retries begin without administrator action after the timed-out attempt drains.
 An HTTP or host operation that ignores cancellation can delay that drain.
+Catalog HTTP requests have a 90-second response deadline, including body reads
+but excluding pacing and provider cooldowns. A response deadline during
+discovery uses the same checkpoint and automatic retry path. The Control Panel
+shows the last progress time and distinguishes a provider wait from a request
+that has reached its deadline.
 Before retrying, a discovery timeout also saves any
 additional validated pages, if the checkpoint can still be saved. Retries reuse
 checkpointed pages without requesting them again; the interrupted page may be

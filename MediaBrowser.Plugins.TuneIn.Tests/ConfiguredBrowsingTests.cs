@@ -26,6 +26,37 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
     public class ConfiguredBrowsingTests
     {
         private static PluginConfiguration Ready() => new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true };
+
+        [Fact]
+        public async Task RegionalGenreOptOutKeepsExistingIdsAndOrdinaryListings()
+        {
+            var config = Ready();
+            config.EnableLocation = true;
+            config.Locations.Add(new CatalogSelection { Id = "r10" });
+            var directory = new TuneInDirectory(() => config, (_, __) => Task.FromResult(Opml(
+                "<outline type='link' text='Rock' URL='https://opml.radiotime.com/Browse.ashx?id=r10&amp;filter=g79'/>"
+                + "<outline type='link' text='Country' URL='https://opml.radiotime.com/Browse.ashx?id=r10&amp;filter=s:g2754:country'/>"
+                + "<outline type='link' text='Popular' URL='https://opml.radiotime.com/Browse.ashx?id=r10&amp;filter=s:popular'/>"
+                + "<outline type='audio' text='Radio' guide_id='s1'/>")));
+            var before = directory.Snapshot();
+            var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
+            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "HideRegionalGenres" })
+                legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });
+            using (var xml = new StringWriter(System.Globalization.CultureInfo.InvariantCulture))
+            {
+                new System.Xml.Serialization.XmlSerializer(typeof(PluginConfiguration), legacyOverrides).Serialize(xml, before.Value);
+                Assert.Equal(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(xml.ToString()))), before.Key);
+            }
+            var folder = directory.Register(before, TuneInBrowsing.StartingEntries(before, "location").Single());
+            var browser = new TuneInBrowsing(directory, _ => null);
+            Assert.Equal(4, (await browser.GetItemsAsync(folder, Token)).Items.Count);
+            config.HideRegionalGenres = true;
+            var after = directory.Snapshot();
+            Assert.Equal(before.Key, after.Key);
+            Assert.NotEqual(before.DiscoveryKey, after.DiscoveryKey);
+            Assert.Equal(new[] { "Popular", "Radio" },
+                (await browser.GetItemsAsync(folder, Token)).Items.Select(item => item.Name).OrderBy(name => name));
+        }
         private static CatalogSelection Selection(string id, params string[] parents) =>
             new CatalogSelection { Id = id, Name = id, AncestorIds = parents.ToList() };
         private static XDocument Opml(string rows) => TuneInDirectory.ParseCatalogue(Encoding.UTF8.GetBytes(

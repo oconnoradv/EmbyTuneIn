@@ -49,6 +49,8 @@ namespace MediaBrowser.Plugins.TuneIn
         public int QueueSlotsAvailable { get; set; }
         public TuneInCategoryRefreshStatus[] Categories { get; set; }
         public bool? SettingsLocked { get; set; }
+        public DateTime? LastProgressUtc { get; set; }
+        public string Activity { get; set; }
         internal TuneInRefreshStatus Copy() => (TuneInRefreshStatus)MemberwiseClone();
     }
 
@@ -87,6 +89,9 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Func<DateTime> clock;
         private readonly TimeSpan? timeoutOverride;
         private TuneInRefreshStatus status = new TuneInRefreshStatus();
+        private TuneInRefreshStatus lastStatus = new TuneInRefreshStatus();
+        private ConfigurationSnapshot statusConfiguration;
+        private TuneInRefreshTimings activeTimings;
         private TuneInRefreshFailureLog failureLog;
         private readonly Dictionary<string, (int IntervalHours, DateTime DueUtc)> scheduled =
             new Dictionary<string, (int, DateTime)>(StringComparer.Ordinal);
@@ -131,14 +136,22 @@ namespace MediaBrowser.Plugins.TuneIn
             this.clock = clock ?? (() => DateTime.UtcNow);
             this.timeoutOverride = timeoutOverride;
             this.updateArtwork = updateArtwork;
+            statusConfiguration = directory.Snapshot();
+            LoadCategoryStates(statusConfiguration);
         }
 
         internal TuneInRefreshStatus Status()
         {
-            lock (gate)
+            if (!Monitor.TryEnter(gate))
             {
-                var snapshot = directory.Snapshot();
-                LoadCategoryStates(snapshot);
+                var previous = Volatile.Read(ref lastStatus).Copy();
+                previous.Busy = true;
+                previous.Activity = "Waiting for refresh state";
+                return previous;
+            }
+            try
+            {
+                var snapshot = statusConfiguration;
                 var copy = status.Copy();
                 copy.Busy = work != null && !work.IsCompleted;
                 if (!copy.Busy && copy.DiscoveryTimeouts > 0)
@@ -150,6 +163,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 copy.RecoveryId = copy.RecoveryCategory == null ? null : recoveryId;
                 copy.ActiveRequest = copy.Busy ? activeRequest ?? "all" : null;
                 copy.Cancelling = copy.Busy && cancellation.IsCancellationRequested;
+                if (copy.Busy && copy.Activity == null && copy.Phase == "Discovering")
+                    copy.Activity = activeTimings?.DescribeWait();
                 if (copy.Busy && copy.State == "Running" && !copy.Cancelling && copy.DiscoveryTimeouts > 0)
                 {
                     copy.AutomaticRetry = copy.DiscoveryTimeouts;
@@ -164,8 +179,10 @@ namespace MediaBrowser.Plugins.TuneIn
                     State = copy.Busy && copy.State == "Running" && copy.Category == category ? copy.Phase :
                         categoryStates.TryGetValue(category, out var state) ? state : "No recorded refresh"
                 }).ToArray();
-                return copy;
+                Volatile.Write(ref lastStatus, copy);
+                return copy.Copy();
             }
+            finally { Monitor.Exit(gate); }
         }
 
         internal TuneInRefreshStatus Start(string category = null, string expectedRecoveryId = null, bool? resumeFirst = null)
@@ -174,6 +191,8 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 if (disposed) throw new ObjectDisposedException(nameof(TuneInRefresh));
                 var snapshot = directory.Snapshot();
+                statusConfiguration = snapshot;
+                LoadCategoryStates(snapshot);
                 if (category != null && !snapshot.Enabled(category))
                     throw new ArgumentException("Choose a category enabled by the saved TuneIn configuration.", nameof(category));
                 var current = Status();
@@ -296,6 +315,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 var checkpoint = store.Read();
                 update();
                 var current = directory.Snapshot();
+                statusConfiguration = current;
                 if (current.Key == previous.Key) return;
                 if (checkpoint?.ConfigurationKey == previous.Key)
                 {
@@ -331,8 +351,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 else store.Clear();
                 categoryStateKey = null;
-                categoryStates.Clear();
-                dirtyCategory = null;
+                LoadCategoryStates(current);
                 status = new TuneInRefreshStatus();
                 recoveryId = Guid.NewGuid().ToString("N");
                 failureLog = null;
@@ -346,6 +365,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 if (disposed) return;
                 var snapshot = directory.Snapshot();
+                statusConfiguration = snapshot;
                 var now = clock();
                 var enabled = (snapshot.Value.RefreshSchedules ?? new List<Configuration.CategoryRefreshSchedule>())
                     .Where(schedule => ConfigurationSnapshot.ValidSchedule(schedule) && snapshot.Enabled(schedule.Category))
@@ -496,7 +516,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 directory.CheckCurrent(snapshot, token);
                 store.WriteDiscovery(new TuneInDiscoveryCheckpoint
                 {
-                    ConfigurationKey = snapshot.Key, RequestedCategory = requestedCategory,
+                    ConfigurationKey = snapshot.DiscoveryKey, RequestedCategory = requestedCategory,
                     StartedUtc = discoveryStarted, SavedUtc = savedAt, Pages = pages
                 });
                 savedPageCount = pages.Count;
@@ -506,6 +526,8 @@ namespace MediaBrowser.Plugins.TuneIn
 
             using (var timeout = new CancellationTokenSource())
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(serverToken, timeout.Token))
+            using (timeout.Token.Register(() => Update(() =>
+                status.Activity = "Attempt deadline reached; waiting for active work to stop")))
             {
                 try
                 {
@@ -559,7 +581,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (requestedCategory != null && categories.Length == 0)
                         throw new InvalidOperationException("The selected TuneIn category is no longer enabled.");
                     var now = clock();
-                    var savedDiscovery = LoadDiscovery(snapshot.Key, requestedCategory, now);
+                    var savedDiscovery = LoadDiscovery(snapshot.DiscoveryKey, requestedCategory, now);
                     discoveryStarted = savedDiscovery?.StartedUtc ?? now;
                     nextCheckpoint = now + DiscoveryCheckpointInterval;
                     savedPageCount = savedDiscovery?.Pages.Count ?? 0;
@@ -587,6 +609,11 @@ namespace MediaBrowser.Plugins.TuneIn
                             if (otherCount > 0) status.SkippedBrowseLinkDetails += $"; {otherCount} other";
                         }), maxPages: TuneInCatalogueSession.MaxRefreshPages,
                         maxBytes: TuneInCatalogueSession.MaxRefreshBytes, timings: timings);
+                    Update(() =>
+                    {
+                        activeTimings = timings;
+                        status.LastProgressUtc = clock();
+                    });
 
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");
@@ -619,7 +646,11 @@ namespace MediaBrowser.Plugins.TuneIn
                             (folder, catalogue, strict, token) => getItems(channel, folder, catalogue, strict, token),
                             null,
                             () => directory.CheckCurrent(snapshot, linked.Token), IsForwardPage,
-                            () => SaveDiscovery(linked.Token)).ConfigureAwait(false);
+                            () =>
+                            {
+                                Update(() => status.LastProgressUtc = clock());
+                                SaveDiscovery(linked.Token);
+                            }).ConfigureAwait(false);
                         directory.CheckCurrent(snapshot, linked.Token);
                         lock (gate)
                             if (status.RequestsCompleted + status.CacheHits == requestsBefore)
@@ -685,6 +716,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             {
                                 status.ImportFoldersTotal = total;
                                 status.ImportFoldersServed = served;
+                                status.LastProgressUtc = clock();
                             }), () => directory.CheckCurrent(snapshot, linked.Token));
                         currentCategory = requestedCategory ?? dirtyAtStart ?? categories.First();
                         linked.Token.ThrowIfCancellationRequested();
@@ -745,7 +777,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 catch (Exception error)
                 {
-                    timedOut = timeout.IsCancellationRequested && !serverToken.IsCancellationRequested;
+                    var stalled = error is TuneInCatalogTimeoutException;
+                    timedOut = (timeout.IsCancellationRequested || stalled) && !serverToken.IsCancellationRequested;
                     discoveryTimedOut = timedOut && discovering;
                     discoveryTime.Stop();
                     if (discoveryTimedOut)
@@ -759,17 +792,20 @@ namespace MediaBrowser.Plugins.TuneIn
                             logger?.Warn("TuneIn could not save additional pages at discovery timeout ({0}); earlier checkpoints are unaffected.",
                                 saveError.GetType().Name);
                         }
+                        if (stalled && timedOut)
+                            logger?.Warn("TuneIn catalog response deadline reached during {0}.", currentCategory ?? requestedCategory ?? "discovery");
                     }
                     var cancelled = serverToken.IsCancellationRequested || timeout.IsCancellationRequested
                         || error is OperationCanceledException;
                     lock (gate)
                     {
                         status.State = timedOut ? "TimedOut" : cancelled ? "Cancelled" : "Error";
+                        status.Activity = stalled && timedOut ? "TuneIn catalog response deadline reached" : null;
                         if (discoveryTimedOut) status.DiscoveryTimeouts++;
                         failure = status.State == "Error" ? error : null;
                         if (currentCategory != null && categoryStateKey == snapshot.Key)
                             categoryStates[currentCategory] = timedOut ? "Timed out" : cancelled ? "Cancelled" : "Failed";
-                        status.ErrorCode = cancelled ? status.State : error.GetType().Name;
+                        status.ErrorCode = timedOut || cancelled ? status.State : error.GetType().Name;
                         status.Phase = discoveryTimedOut
                             ? (status.DiscoveryCheckpointUtc.HasValue
                                 ? "Discovery timed out; checkpoint saved"

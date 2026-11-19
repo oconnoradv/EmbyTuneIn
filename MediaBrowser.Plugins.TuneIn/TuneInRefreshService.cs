@@ -59,7 +59,7 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             EnsureAdmin();
             var status = refresh.Status();
-            status.SettingsLocked = Plugin.Instance.SettingsLock.IsLocked;
+            status.SettingsLocked = Plugin.Instance.SettingsLock.TryReadStatus();
             return status;
         }
 

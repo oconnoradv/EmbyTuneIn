@@ -17,6 +17,7 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public String LatLon { get; set; }
         public string NavigationSecret { get; set; } = CreateSecret();
         public int ApiRequestIntervalSeconds { get; set; } = 3;
+        public bool HideRegionalGenres { get; set; }
         public List<CategoryRefreshSchedule> RefreshSchedules { get; set; } = new List<CategoryRefreshSchedule>();
         public int SchemaVersion { get; set; }
         public bool ConfigurationCompleted { get; set; }

@@ -320,7 +320,35 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task ParallelDiscoveryAutomaticallyReplaysCompletedSiblingAfterTimeout()
+        public async Task CatalogDeadlineCancelsAStalledResponseButNotPacerWaits()
+        {
+            var now = DateTime.UtcNow;
+            var pacer = new TuneInRequestPacer(() => now, async (wait, token) =>
+            {
+                await Task.Delay(150, token);
+                now += wait;
+            });
+            using var initial = await pacer.SendAsync(() => Task.FromResult(new HttpResponseInfo
+                { StatusCode = (HttpStatusCode)429 }), 3, CancellationToken.None, catalogueRequest: true);
+            var timings = new TuneInRefreshTimings();
+            var sentAt = DateTime.MinValue;
+            await Assert.ThrowsAsync<TuneInCatalogTimeoutException>(() => TuneInRequests.ReadCatalogAsync(pacer,
+                async token =>
+                {
+                    sentAt = now;
+                    Assert.False(token.IsCancellationRequested);
+                    await Task.Delay(Timeout.Infinite, token);
+                    return null;
+                }, 3, CancellationToken.None, TimeSpan.FromMilliseconds(100), timings));
+            Assert.True(sentAt != DateTime.MinValue);
+            Assert.True(timings.Backoff > TimeSpan.Zero);
+            Assert.Null(timings.DescribeWait());
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task ParallelDiscoveryAutomaticallyReplaysCompletedSiblingAfterTimeout(bool responseDeadline)
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
             var requests = new System.Collections.Concurrent.ConcurrentQueue<string>();
@@ -341,6 +369,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     if (++slowReads == 1)
                     {
                         firstSlowRead.TrySetResult(true);
+                        if (responseDeadline)
+                        {
+                            await Task.Delay(100, token);
+                            throw new TuneInCatalogTimeoutException();
+                        }
                         await Task.Delay(Timeout.Infinite, token);
                     }
                     retryObserved.TrySetResult(runningRefresh.Status().AutomaticRetry);

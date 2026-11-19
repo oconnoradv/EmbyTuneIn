@@ -20,6 +20,13 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal TuneInSettingsLockStore(string path) { this.path = path; }
 
+        internal bool? TryReadStatus()
+        {
+            if (!System.Threading.Monitor.TryEnter(gate)) return null;
+            try { return IsLocked; }
+            finally { System.Threading.Monitor.Exit(gate); }
+        }
+
         internal bool IsLocked
         {
             get

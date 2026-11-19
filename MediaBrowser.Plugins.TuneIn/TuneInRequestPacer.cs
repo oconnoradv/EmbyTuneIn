@@ -20,6 +20,15 @@ namespace MediaBrowser.Plugins.TuneIn
         internal TimeSpan CacheReplay;
         internal int? MinIntervalSeconds;
         internal int? MaxIntervalSeconds;
+        internal int BackoffWaiters;
+        internal int ActiveResponses;
+        internal int ExpiredResponses;
+
+        internal string DescribeWait() => Volatile.Read(ref ExpiredResponses) != 0
+            ? "TuneIn response deadline reached; waiting for the request to stop"
+            : Volatile.Read(ref ActiveResponses) != 0
+            ? "Waiting for TuneIn catalog response"
+            : Volatile.Read(ref BackoffWaiters) != 0 ? "Waiting for TuneIn retry delay" : null;
 
         internal void RecordInterval(int seconds)
         {
@@ -101,6 +110,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         }
                     }
                     var elapsed = timings == null ? null : Stopwatch.StartNew();
+                    if (backoff && timings != null) Interlocked.Increment(ref timings.BackoffWaiters);
                     try
                     {
                         if (slot != null)
@@ -114,12 +124,15 @@ namespace MediaBrowser.Plugins.TuneIn
                     finally
                     {
                         if (timings != null)
+                        {
+                            if (backoff) Interlocked.Decrement(ref timings.BackoffWaiters);
                             lock (timings.Gate)
                             {
                                 if (slot != null) timings.PacerQueue += elapsed.Elapsed;
                                 else if (backoff) timings.Backoff += elapsed.Elapsed;
                                 else timings.Pacing += elapsed.Elapsed;
                             }
+                        }
                     }
                 }
             }

@@ -41,10 +41,29 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private static XmlSerializer CreateScopeSerializer()
         {
+            // Preserve the legacy XML identity, including its readiness fields and element order.
+            var members = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "Username", "LatLon", "NavigationSecret", "SchemaVersion", "ConfigurationCompleted",
+                "EnableLocalRadio", "EnableMusic", "EnableLanguage", "EnableLocation", "EnableTalk",
+                "EnableSports", "EnablePodcasts", "EnableFavorites", "UseCoordinates", "LocalRadioSource",
+                "Languages", "Locations", "Music", "LocalCities"
+            };
             var overrides = new XmlAttributeOverrides();
-            overrides.Add(typeof(PluginConfiguration), nameof(PluginConfiguration.RefreshSchedules), new XmlAttributes { XmlIgnore = true });
-            overrides.Add(typeof(PluginConfiguration), nameof(PluginConfiguration.ApiRequestIntervalSeconds), new XmlAttributes { XmlIgnore = true });
+            foreach (var property in typeof(PluginConfiguration).GetProperties())
+                if (!members.Contains(property.Name))
+                    overrides.Add(property.DeclaringType, property.Name, new XmlAttributes { XmlIgnore = true });
             return new XmlSerializer(typeof(PluginConfiguration), overrides);
+        }
+
+        internal string DiscoveryKey
+        {
+            get
+            {
+                if (!Value.HideRegionalGenres) return Key;
+                using (var hash = SHA256.Create())
+                    return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(Key + ":hide-regional-genres"))).Replace("-", "");
+            }
         }
 
         public bool Ready => Value.ConfigurationCompleted && Value.SchemaVersion == 1;

@@ -46,7 +46,7 @@ function harness(manualStatus = false, manualSave = false) {
     const form = { addEventListener: (event, handler) => { formHandlers[event] = handler; } };
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon,
         '.apiRequestIntervalSeconds': requestInterval };
-    for (const name of ['.localSource', '.configurationCompleted', '.categories', '.selectors',
+    for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.categories', '.selectors',
         '.loginFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
         '.localSelector', '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
