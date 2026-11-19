@@ -38,8 +38,10 @@ namespace MediaBrowser.Plugins.TuneIn
         public bool ImportMayHavePartiallyApplied { get; set; }
         public bool Resumed { get; set; }
         public int DiscoveryTimeouts { get; set; }
+        public int ImportTimeouts { get; set; }
         public int? AutomaticRetry { get; set; }
         public int? AutomaticRetryLimit { get; set; }
+        public string AutomaticRetryPhase { get; set; }
         public DateTime? DiscoveryCheckpointUtc { get; set; }
         public double Progress { get; set; }
         public string ErrorCode { get; set; }
@@ -82,6 +84,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private static readonly TimeSpan DiscoveryCheckpointInterval = TimeSpan.FromMinutes(20);
         private static readonly TimeSpan DiscoveryCheckpointMaxAge = TimeSpan.FromHours(48);
         private const int DiscoveryResumeLimit = 10;
+        private const int ImportRetryLimit = 3;
         private const int FailureReportLimit = 64 * 1024;
         private const int SkipReasonDisplayLimit = 5;
         private const int SkippedEntryReportLimit = 100;
@@ -171,6 +174,9 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (!copy.Busy && copy.DiscoveryTimeouts > 0)
                     copy.Phase += copy.DiscoveryTimeouts == 1
                         ? " (1 discovery timeout)" : $" ({copy.DiscoveryTimeouts} discovery timeouts)";
+                if (!copy.Busy && copy.ImportTimeouts > 0)
+                    copy.Phase += copy.ImportTimeouts == 1
+                        ? " (1 import timeout)" : $" ({copy.ImportTimeouts} import timeouts)";
                 copy.DirtyCategory = dirtyCategory;
                 copy.RecoveryCategory = copy.Busy ? null : (snapshot.Enabled(dirtyCategory) ? dirtyCategory : null) ??
                     (copy.State == "Error" && snapshot.Enabled(activeRequest ?? copy.Category) ? activeRequest ?? copy.Category : null);
@@ -180,10 +186,13 @@ namespace MediaBrowser.Plugins.TuneIn
                 copy.ActiveRequests = activeTimings == null ? 0 : Volatile.Read(ref activeTimings.ActiveResponses);
                 if (copy.Busy && copy.Activity == null && copy.Phase == "Discovering")
                     copy.Activity = activeTimings?.DescribeWait();
-                if (copy.Busy && copy.State == "Running" && !copy.Cancelling && copy.DiscoveryTimeouts > 0)
+                if (copy.Busy && copy.State == "Running" && !copy.Cancelling
+                    && (copy.DiscoveryTimeouts > 0 || copy.ImportTimeouts > 0))
                 {
-                    copy.AutomaticRetry = copy.DiscoveryTimeouts;
-                    copy.AutomaticRetryLimit = DiscoveryResumeLimit;
+                    var importing = copy.ImportTimeouts > 0;
+                    copy.AutomaticRetry = importing ? copy.ImportTimeouts : copy.DiscoveryTimeouts;
+                    copy.AutomaticRetryLimit = importing ? ImportRetryLimit : DiscoveryResumeLimit;
+                    copy.AutomaticRetryPhase = importing ? "import" : "discovery";
                 }
                 copy.QueuedRequests = queue.Select(category => category ?? "all").ToArray();
                 copy.QueueSlotsAvailable = QueueCapacity - queue.Count;
@@ -565,6 +574,7 @@ namespace MediaBrowser.Plugins.TuneIn
             var timedOut = false;
             var discovering = false;
             var discoveryTimedOut = false;
+            var importTimedOut = false;
             string stoppedPhase = null;
             Exception failure = null;
             var timings = new TuneInRefreshTimings();
@@ -809,44 +819,92 @@ namespace MediaBrowser.Plugins.TuneIn
                         // Only newly enabled, never-imported categories may wait outside the complete saved tree.
                         var importedCategories = enabled.Where(listings.ContainsKey).ToArray();
                         var importedRoots = roots.Where(root => importedCategories.Any(category => listings[category].RootId == root.Id)).ToArray();
-                        var full = TuneInStagedImport.ForChannel(
-                            importedRoots,
-                            importedCategories.Select(category => listings[category]),
-                            linked.Token, (total, served) => Update(() =>
-                            {
-                                status.ImportFoldersTotal = total;
-                                status.ImportFoldersServed = served;
-                                status.LastProgressUtc = clock();
-                            }), () => directory.CheckCurrent(snapshot, linked.Token));
+                        var importedListings = importedCategories.Select(category => listings[category]).ToArray();
                         currentCategory = requestedCategory ?? dirtyAtStart ?? categories.First();
-                        linked.Token.ThrowIfCancellationRequested();
                         directory.CheckCurrent(snapshot, linked.Token);
+                        timeout.CancelAfter(Timeout.InfiniteTimeSpan);
                         linked.Token.ThrowIfCancellationRequested();
-                        // Retain resumable pages and retry eligibility until the import boundary.
                         discovering = false;
-                        // Keep the earlier interruption recorded until the complete repair succeeds.
-                        checkpoint.DirtyCategory = dirtyAtStart ?? currentCategory;
-                        Persist(snapshot, checkpoint, started);
-                        store.ClearDiscovery();
-                        Update(() =>
+                        var importPrepared = false;
+                        for (var attempt = 0; ; attempt++)
                         {
-                            status.Category = currentCategory;
-                            status.Phase = "Importing";
-                            status.ImportFoldersTotal = full.Count;
-                            status.ImportFoldersServed = 0;
-                        });
-                        importTime.Start();
-                        try { await import(channel, full, null, linked.Token).ConfigureAwait(false); }
-                        finally { importTime.Stop(); }
-                        full.Verify();
-                        linked.Token.ThrowIfCancellationRequested();
-                        foreach (var root in importedRoots)
-                            updateArtwork?.Invoke(channel, root.Id, linked.Token);
-                        foreach (var category in importedCategories)
-                        {
-                            ReadEmbyStationCount(snapshot, channel, category, listings[category].RootId, linked.Token);
-                            lock (gate) listings[category].StationCounts = categoryCounts[category].Copy();
+                            using (var importDeadline = new CancellationTokenSource())
+                            using (var importCancellation = CancellationTokenSource.CreateLinkedTokenSource(serverToken, importDeadline.Token))
+                            using (importDeadline.Token.Register(() => Update(() =>
+                                status.Activity = "Import deadline reached; waiting for active work to stop")))
+                            {
+                                var importToken = importCancellation.Token;
+                                importDeadline.CancelAfter(timeoutOverride ?? DefaultTimeout);
+                                try
+                                {
+                                    directory.CheckCurrent(snapshot, importToken);
+                                    Update(() =>
+                                    {
+                                        status.Category = currentCategory;
+                                        status.Phase = "Preparing import";
+                                        status.Activity = null;
+                                        status.ImportFoldersTotal = 0;
+                                        status.ImportFoldersServed = 0;
+                                        status.LastProgressUtc = clock();
+                                    });
+                                    // Each attempt needs its own token, served-folder tracking and failure state.
+                                    var full = TuneInStagedImport.ForChannel(importedRoots, importedListings, importToken,
+                                        (total, served) => Update(() =>
+                                        {
+                                            status.ImportFoldersTotal = total;
+                                            status.ImportFoldersServed = served;
+                                            status.LastProgressUtc = clock();
+                                        }), () => directory.CheckCurrent(snapshot, importToken));
+                                    directory.CheckCurrent(snapshot, importToken);
+                                    if (!importPrepared)
+                                    {
+                                        // Keep an earlier interruption recorded until the complete repair succeeds.
+                                        checkpoint.DirtyCategory = dirtyAtStart ?? currentCategory;
+                                        Persist(snapshot, checkpoint, started);
+                                        store.ClearDiscovery();
+                                        importPrepared = true;
+                                    }
+                                    importToken.ThrowIfCancellationRequested();
+                                    Update(() =>
+                                    {
+                                        status.Phase = "Importing";
+                                        status.ImportFoldersTotal = full.Count;
+                                    });
+                                    importTime.Start();
+                                    try { await import(channel, full, null, importToken).ConfigureAwait(false); }
+                                    finally { importTime.Stop(); }
+                                    full.Verify();
+                                    importToken.ThrowIfCancellationRequested();
+                                    foreach (var root in importedRoots)
+                                        updateArtwork?.Invoke(channel, root.Id, importToken);
+                                    foreach (var category in importedCategories)
+                                    {
+                                        ReadEmbyStationCount(snapshot, channel, category, listings[category].RootId, importToken);
+                                        lock (gate) listings[category].StationCounts = categoryCounts[category].Copy();
+                                    }
+                                    directory.CheckCurrent(snapshot, importToken);
+                                    importToken.ThrowIfCancellationRequested();
+                                    break;
+                                }
+                                catch (Exception error) when (importDeadline.IsCancellationRequested
+                                    && !serverToken.IsCancellationRequested
+                                    && (error is OperationCanceledException || error is TimeoutException))
+                                {
+                                    Update(() => status.ImportTimeouts++);
+                                    directory.CheckCurrent(snapshot, serverToken);
+                                    if (attempt >= ImportRetryLimit)
+                                    {
+                                        importTimedOut = true;
+                                        throw;
+                                    }
+                                    logger?.Info("TuneIn import for {0}: starting automatic retry {1} of {2} after the timed-out attempt drained.",
+                                        requestedCategory ?? "all", attempt + 1, ImportRetryLimit);
+                                }
+                            }
                         }
+                        if (status.ImportTimeouts > 0)
+                            logger?.Info("TuneIn import for {0} completed after {1} import timeout(s).",
+                                requestedCategory ?? "all", status.ImportTimeouts);
                         directory.CheckCurrent(snapshot, linked.Token);
                         checkpoint.Categories = importedCategories.Select(category => listings[category]).ToList();
                         checkpoint.PendingCategories.RemoveAll(listings.ContainsKey);
@@ -896,7 +954,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     lock (gate) stoppedPhase = status.Phase;
                     var stalled = error is TuneInCatalogTimeoutException;
-                    timedOut = (timeout.IsCancellationRequested || stalled) && !serverToken.IsCancellationRequested;
+                    timedOut = (timeout.IsCancellationRequested || stalled || importTimedOut) && !serverToken.IsCancellationRequested;
                     discoveryTimedOut = timedOut && discovering;
                     discoveryTime.Stop();
                     if (discoveryTimedOut)
@@ -928,7 +986,9 @@ namespace MediaBrowser.Plugins.TuneIn
                             ? (status.DiscoveryCheckpointUtc.HasValue
                                 ? "Discovery timed out; checkpoint saved"
                                 : "Discovery timed out before a checkpoint was saved")
-                            : timedOut ? $"Timed out during {stoppedPhase}; not retried automatically"
+                            : timedOut ? (importTimedOut
+                                ? "Import timed out; automatic retry limit reached; refresh again to reconcile"
+                                : $"Timed out during {stoppedPhase}; not retried automatically")
                             : cancelled ? "Stopped and drained" : status.Phase;
                         if (!cancelled && error is TuneInProviderResponseException provider && provider.StatusCode == 429)
                             status.Phase += " (TuneIn rate limit reached; wait before retrying or increase the API request interval)";
@@ -963,7 +1023,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             status.Phase = "Completed";
                             status.Progress = 100;
                         }
-                        failureLog = failure != null || timedOut || status.SkippedBrowseLinks > 0
+                        failureLog = failure != null || timedOut || status.ImportTimeouts > 0 || status.SkippedBrowseLinks > 0
                             ? CreateFailureLog(failure, status, skippedEntries, skippedEntriesOmitted, stoppedPhase) : null;
                     }
                 }
@@ -994,6 +1054,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 "Category: " + (failedStatus.Category ?? "preparation"),
                 "Phase: " + (failedStatus.Phase ?? "unknown"),
                 "Discovery timeouts: " + failedStatus.DiscoveryTimeouts + " (automatic retry limit: " + DiscoveryResumeLimit + ")",
+                "Import timeouts: " + failedStatus.ImportTimeouts + " (automatic retry limit: " + ImportRetryLimit + ")",
                 "Discovery checkpoint (UTC): " + (failedStatus.DiscoveryCheckpointUtc?.ToString("O") ?? "none"),
                 "Import may have partially applied: " + failedStatus.ImportMayHavePartiallyApplied,
                 "Import with exclusions allowed: " + failedStatus.PartialImportAllowed

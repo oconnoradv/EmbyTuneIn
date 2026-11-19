@@ -340,7 +340,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (status.ActiveRequest && status.ActiveRequest !== status.Category)
             description += ' (requested: ' + refreshName(status, status.ActiveRequest) + ')';
         if (status.AutomaticRetry && status.AutomaticRetryLimit)
-            description += '. Automatic retry ' + status.AutomaticRetry + ' of ' + status.AutomaticRetryLimit + ' after discovery timed out';
+            description += '. Automatic retry ' + status.AutomaticRetry + ' of ' + status.AutomaticRetryLimit
+                + ' after ' + (status.AutomaticRetryPhase === 'import' ? 'import' : 'discovery') + ' timed out';
         if (status.Busy && status.Activity) description += '. ' + status.Activity;
         var work = '-';
         if (status.Busy && status.Phase === 'Importing' && status.ImportFoldersTotal)
@@ -366,6 +367,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (typeof status.ActiveRequests === 'number')
             diagnostics.push(status.ActiveRequests + ' active HTTP ' + (status.ActiveRequests === 1 ? 'request' : 'requests'));
         if (typeof status.RateLimitRetries === 'number') diagnostics.push(status.RateLimitRetries + ' rate-limit retries');
+        if (status.ImportTimeouts)
+            diagnostics.push('Import timeouts: ' + status.ImportTimeouts
+                + ((status.State === 'Completed' || status.State === 'Partial') && !status.ImportMayHavePartiallyApplied
+                    ? ' (recovered)' : ''));
         if (typeof status.PartialImportAllowed === 'boolean')
             diagnostics.push('Import valid results with exclusions: ' + (status.PartialImportAllowed ? 'allowed' : 'off'));
         if (status.Resumed) {

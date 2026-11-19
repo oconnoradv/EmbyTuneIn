@@ -902,17 +902,21 @@ test('settings lock protects pending edits and saves without blocking catalog re
     assert.equal(app.writes[0].config.Username, 'unsaved');
 });
 
-test('refresh status shows the active automatic retry alongside the current phase', async () => {
+for (const phase of ['discovery', 'import']) test('refresh status identifies the automatic ' + phase + ' retry', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     app.refresh[0].resolve({
         State: 'Running', Phase: 'Importing', Category: 'music', Busy: true,
-        AutomaticRetry: 2, AutomaticRetryLimit: 10, ImportMayHavePartiallyApplied: true
+        AutomaticRetry: 2, AutomaticRetryLimit: phase === 'import' ? 3 : 10,
+        AutomaticRetryPhase: phase, ImportTimeouts: phase === 'import' ? 2 : 0,
+        ImportMayHavePartiallyApplied: true
     });
     await visit;
     const text = app.elements['.refreshStatus'].textContent;
-    assert.match(text, /Running - Importing - Music\. Automatic retry 2 of 10 after discovery timed out/);
+    assert.ok(text.includes('Running - Importing - Music. Automatic retry 2 of '
+        + (phase === 'import' ? 3 : 10) + ' after ' + phase + ' timed out'));
+    if (phase === 'import') assert.match(app.elements['.refreshDiagnosticsText'].textContent, /Import timeouts: 2/);
     assert.doesNotMatch(text, /interrupted import/);
     app.instance.onPause();
 });

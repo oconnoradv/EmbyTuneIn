@@ -181,17 +181,18 @@ polling does not recrawl TuneIn or query the library inventory.
 
 ### Diagnostic reports
 
-After a failed or timed-out refresh, or a run with skipped entries, select
-**Retrieve refresh log**. This administrator-only report covers the latest
-attempt, not the full Emby server log. It is also available for **Partial**
-outcomes.
+After a failed or timed-out refresh, or a run with skipped entries or recovered
+import timeouts, select **Retrieve refresh log**. This administrator-only report
+covers the latest discovery and its import attempts, not the full Emby server
+log. It is also available for **Partial** outcomes.
 
 Reports include the outcome, grouped skip counts, and up to 100 skipped-entry
 examples within a 64 KB report. Examples record the timestamp, category,
 rejection reason, source page, and rejected navigation query values and
 fragment. Duplicate parameters and truncation are identified. Timeout reports
-record the phase that stopped, discovery timeout count, checkpoint time, and
-whether an import may have partially applied.
+record the phase that stopped, discovery/import timeout counts and retry limits,
+checkpoint time, and whether an import may have partially applied. Live status
+identifies whether an automatic retry is for discovery or import.
 
 Non-navigation parameters, including usernames, coordinates, serials, partner
 IDs, and tokens, are omitted. Embedded credential-like assignments are
@@ -207,11 +208,13 @@ summary logs and cannot be reconstructed from past aggregate skip counts.
 
 | Limit | Behavior |
 | --- | --- |
-| Refresh attempt | Up to 60 minutes for discovery and import combined |
+| Discovery attempt | Up to 60 minutes, independent of import time |
+| Import attempt | A fresh 60 minutes for staging, importing and verification/finalization |
 | Catalog cache | Up to 5,000 pages and 40 MiB per refresh |
 | Catalog HTTP response | 90 seconds including body reads, excluding pacing and provider cooldowns |
 | Discovery checkpoint | At the first completed folder after each 20-minute interval, and on discovery timeout when possible |
 | Automatic discovery retries | Up to 10 after the initial attempt, reusing validated checkpoint pages |
+| Automatic import retries | Up to 3 after the initial attempt, replaying the complete validated staged catalog without provider requests |
 | Checkpoint resume window | 48 hours from discovery start, with matching settings and requested category scope |
 | Folder depth | Eight levels; forward pagination does not consume depth but still consumes page and folder budgets |
 
@@ -224,15 +227,26 @@ requests. Every 20 consecutive successful responses restores overlap and
 reduces the learned interval by one second toward the configured minimum.
 Saved settings and ordinary playback intervals are unchanged.
 
-A discovery or pre-import staging timeout saves additional validated pages
-when possible, then retries after active work drains. Checkpoints remain
-available until the import boundary. The interrupted page may be requested again.
+A discovery timeout saves additional validated pages when possible, then retries
+after active work drains. Checkpoints remain available until import preparation
+succeeds. The interrupted page may be requested again.
 After a server restart, starting the same refresh can reuse a matching
-checkpoint. Cancellation stops automatic retries; import timeouts are not
-automatically retried. Host operations that ignore cancellation can delay
-draining. Discovery timeouts do not publish incomplete trees. Once import
-begins, timeout status identifies the stopped phase rather than starting an
-automatic retry; an interrupted import requires a new refresh to reconcile.
+checkpoint. Discovery timeouts do not publish incomplete trees.
+
+An import deadline cancels the current attempt and waits for it to drain before
+retrying. Each retry has a fresh deadline and fresh folder-consumption tracking,
+but reuses the same complete validated catalog, including saved siblings and
+any Partial outcome. It does not recrawl TuneIn or continue halfway through
+Emby's nontransactional import. The interrupted-import marker remains set until
+the entire import and verification succeed.
+
+Cancellation, scope changes, and actual import failures stop automatic recovery.
+Host operations that ignore cancellation can delay draining; another import
+never starts while the prior import task is still running. Once all three
+automatic retries are exhausted, the refresh reports **TimedOut**, retains the
+repair requirement, and makes a diagnostic report available. Automatic import
+replay is in-memory only: after a restart or an exhausted/failed run, start a
+new refresh to rediscover and reconcile.
 
 The server log records automatic retries and per-attempt timings for discovery,
 HTTP fetching, pacing, backoff, cached parsing, and import. Rate adaptation
