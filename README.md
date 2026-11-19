@@ -95,6 +95,12 @@ the plugin supplies Emby with the **complete staged channel tree**, including
 saved sibling categories. A single-category refresh fetches only that category.
 Unchanged catalogs skip import unless reconciliation is needed.
 
+The import asks Emby to traverse the depth of the staged tree, including
+forward pagination folders. The separate discovery limit on nested folders
+still applies. If Emby leaves folders unread, the refresh remains incomplete
+and the diagnostic report records the served and expected folder counts and
+the requested refresh level.
+
 Saving additional enabled categories preserves listings and refresh history for
 unchanged scopes. Categories not yet imported remain pending until their first
 successful refresh. If a previously imported sibling listing is unavailable or
@@ -244,9 +250,12 @@ Cancellation, scope changes, and actual import failures stop automatic recovery.
 Host operations that ignore cancellation can delay draining; another import
 never starts while the prior import task is still running. Once all three
 automatic retries are exhausted, the refresh reports **TimedOut**, retains the
-repair requirement, and makes a diagnostic report available. Automatic import
-replay is in-memory only: after a restart or an exhausted/failed run, start a
-new refresh to rediscover and reconcile.
+repair requirement, and makes a diagnostic report available. After a failed
+import, manually refreshing the same scope replays the staged catalog without
+discovery if it is still in memory, compatible with the saved settings, and
+less than 48 hours old from discovery start. Changing settings, cancelling,
+starting a different refresh, or restarting Emby discards that in-memory
+catalog; the next refresh then runs discovery before repairing the library.
 
 The server log records automatic retries and per-attempt timings for discovery,
 HTTP fetching, pacing, backoff, cached parsing, and import. Rate adaptation

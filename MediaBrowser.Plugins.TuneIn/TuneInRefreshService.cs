@@ -140,7 +140,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         channel.GetRefreshChannelItems(folder, session, strict, token),
                     (channel, staged, folder, token) =>
                         channel.ImportAsync(staged,
-                            () => manager.RefreshChannelContent(channel, 9, null, token)),
+                            () => manager.RefreshChannelContent(channel, staged.ImportRefreshLevel, null, token)),
                     logManager.GetLogger(typeof(TuneInRefreshService).Name),
                     updateArtwork: (channel, folder, token) => channel.UpdateCategoryArtwork(folder, token));
                 return shared;

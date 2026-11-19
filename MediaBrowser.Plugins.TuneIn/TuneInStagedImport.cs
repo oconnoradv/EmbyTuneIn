@@ -29,6 +29,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal ChannelItemInfo Root { get; private set; }
         internal int Count => folders.Count;
+        internal int ImportRefreshLevel { get; private set; }
         internal bool DiscoveryIncomplete => incompleteFolders.Count != 0;
         internal int CountStations(Func<string, string> stationId) => folders.Values
             .SelectMany(folder => folder.Items).Where(item => item.Type == ChannelItemType.Media)
@@ -274,12 +275,50 @@ namespace MediaBrowser.Plugins.TuneIn
                     staged.folders.Add(folder.Id, RestoreFolder(folder));
                 }
             }
-            token.ThrowIfCancellationRequested();
-            if (rootItems.Any(root => !staged.folders.ContainsKey(root.Id)) ||
-                staged.folders.Values.SelectMany(folder => folder.Items).Any(item =>
-                    item.Type == ChannelItemType.Folder && !staged.folders.ContainsKey(item.Id)))
-                throw new InvalidOperationException("The staged TuneIn channel is incomplete.");
+            staged.ImportRefreshLevel = staged.MeasureImportRefreshLevel();
             return staged;
+        }
+
+        private int MeasureImportRefreshLevel()
+        {
+            var incoming = folders.Keys.ToDictionary(id => id, _ => 0, StringComparer.Ordinal);
+            foreach (var listing in folders.Values)
+            {
+                token.ThrowIfCancellationRequested();
+                foreach (var item in listing.Items.Where(item => item.Type == ChannelItemType.Folder))
+                {
+                    if (!incoming.TryGetValue(item.Id, out var references))
+                        throw new InvalidOperationException("The staged TuneIn channel is incomplete.");
+                    incoming[item.Id] = references + 1;
+                }
+            }
+
+            // Emby counts real folder levels, including each forward pagination folder.
+            if (incoming[string.Empty] != 0)
+                throw new InvalidOperationException("The staged TuneIn channel contains cyclic folders.");
+
+            var levels = new Dictionary<string, int>(StringComparer.Ordinal) { [string.Empty] = 1 };
+            var pending = new Queue<string>();
+            pending.Enqueue(string.Empty);
+            var visited = 0;
+            var deepest = 1;
+            while (pending.Count != 0)
+            {
+                token.ThrowIfCancellationRequested();
+                var id = pending.Dequeue();
+                visited++;
+                var next = levels[id] + 1;
+                foreach (var item in folders[id].Items.Where(item => item.Type == ChannelItemType.Folder))
+                {
+                    levels.TryGetValue(item.Id, out var level);
+                    levels[item.Id] = Math.Max(level, next);
+                    deepest = Math.Max(deepest, next);
+                    if (--incoming[item.Id] == 0) pending.Enqueue(item.Id);
+                }
+            }
+            if (visited != folders.Count)
+                throw new InvalidOperationException("The staged TuneIn channel contains cyclic or unreachable folders.");
+            return deepest;
         }
 
         internal static ChannelItemResult RestoreFolder(TuneInFolderSnapshot folder) => new ChannelItemResult
@@ -325,7 +364,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (failure != null)
                     throw new InvalidOperationException("Emby suppressed a staged TuneIn import failure.", failure);
                 if (served.Count != folders.Count)
-                    throw new InvalidOperationException("Emby did not consume every staged TuneIn folder; import is incomplete.");
+                    throw new InvalidOperationException($"Emby did not consume every staged TuneIn folder; import is incomplete. "
+                        + $"Folders served: {served.Count}/{folders.Count}; requested refresh level: {ImportRefreshLevel}.");
             }
         }
     }

@@ -1049,7 +1049,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
                     (_, staged, __, token) =>
                     {
-                        Assert.Single(ReadStagedTree(staged, token)[TuneInBrowsing.CategoryName(category)]);
+                        // A host honoring RC1's former fixed level cannot reach the last page.
+                        Assert.Empty(ReadStagedTree(staged, token, 9)[TuneInBrowsing.CategoryName(category)]);
+                        var incomplete = Assert.Throws<InvalidOperationException>(staged.Verify);
+                        Assert.Contains("Folders served:", incomplete.Message);
+                        Assert.Single(ReadStagedTree(staged, token, staged.ImportRefreshLevel)[TuneInBrowsing.CategoryName(category)]);
+                        staged.Verify();
                         imports++;
                         return Task.CompletedTask;
                     }, null);
@@ -2414,11 +2419,68 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             while (refresh.Status().Busy) await Task.Delay(10, timeout.Token);
         }
 
-        private static Dictionary<string, string[]> ReadStagedTree(TuneInStagedImport staged, CancellationToken token)
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task ManualRetryReusesFailedImportOnlyWhileDiscoveryIsFresh(bool expired)
         {
-            string[] ReadDescendants(string id) => staged.Read(id, token).Items.SelectMany(item =>
-                item.Type == ChannelItemType.Folder ? ReadDescendants(item.Id) : new[] { item.Id }).ToArray();
-            return staged.Read(null, token).Items.ToDictionary(root => root.Name, root => ReadDescendants(root.Id));
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, AllowPartialCatalogImport = true
+            };
+            var now = DateTime.UtcNow;
+            var fetches = 0;
+            var imports = 0;
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                fetches++;
+                return Task.FromResult(XDocument.Parse("<opml><body>"
+                    + "<outline type='audio' guide_id='s1' text='Radio'/>"
+                    + "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c1#bad'/>"
+                    + "</body></opml>"));
+            });
+            var store = new TuneInRefreshStore(Path.Combine(Path.GetTempPath(), $"tunein-manual-retry-{Guid.NewGuid():N}.xml"));
+            var channel = new TuneInChannel(directory);
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        if (++imports == 1) staged.Read(null, token);
+                        else Assert.Single(ReadStagedTree(staged, token)["Talk"]);
+                        return Task.CompletedTask;
+                    }, null, clock: () => now);
+                refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Error", refresh.Status().State);
+                Assert.Contains("Folders served: 1/2", refresh.GetFailureLog().Text);
+                Assert.Equal("talk", store.Read().DirtyCategory);
+                if (expired) now = now.AddHours(48);
+
+                refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Partial", refresh.Status().State);
+                Assert.Equal(1, refresh.Status().SkippedBrowseLinks);
+                Assert.Equal(expired ? 2 : 1, fetches);
+                Assert.Equal(2, imports);
+                Assert.True(store.Read().Categories.Single().DiscoveryPartial);
+                Assert.Null(store.Read().DirtyCategory);
+            }
+            finally
+            {
+                store.Clear();
+                store.ClearDiscovery();
+            }
+        }
+
+        private static Dictionary<string, string[]> ReadStagedTree(TuneInStagedImport staged, CancellationToken token,
+            int maxRefreshLevel = int.MaxValue)
+        {
+            string[] ReadDescendants(string id, int level) => level > maxRefreshLevel ? Array.Empty<string>()
+                : staged.Read(id, token).Items.SelectMany(item => item.Type == ChannelItemType.Folder
+                    ? ReadDescendants(item.Id, level + 1) : new[] { item.Id }).ToArray();
+            return staged.Read(null, token).Items.ToDictionary(root => root.Name, root => ReadDescendants(root.Id, 2));
         }
     }
 }

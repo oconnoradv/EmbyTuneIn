@@ -106,6 +106,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private ConfigurationSnapshot statusConfiguration;
         private TuneInRefreshTimings activeTimings;
         private TuneInRefreshFailureLog failureLog;
+        private PendingImport pendingImport;
         private readonly Dictionary<string, (int IntervalHours, DateTime DueUtc)> scheduled =
             new Dictionary<string, (int, DateTime)>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> categoryStates = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -121,6 +122,19 @@ namespace MediaBrowser.Plugins.TuneIn
         private string activeRequest;
         private string recoveryId = Guid.NewGuid().ToString("N");
         private bool disposed;
+
+        private sealed class PendingImport
+        {
+            internal string DiscoveryKey;
+            internal string RequestedCategory;
+            internal bool AllowPartial;
+            internal DateTime DiscoveryStarted;
+            internal TuneInCategorySnapshot[] Listings;
+            internal HashSet<string> Partial;
+            internal TuneInRefreshStatus DiscoveryStatus;
+            internal List<string> SkippedEntries;
+            internal int SkippedEntriesOmitted;
+        }
 
         private sealed class CommittedCatalogue
         {
@@ -341,6 +355,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 update();
                 var current = directory.Snapshot();
                 statusConfiguration = current;
+                pendingImport = null;
                 if (current.Key == previous.Key) return;
                 if (checkpoint?.ConfigurationKey == previous.Key)
                 {
@@ -408,6 +423,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         (dirtyCategory == null || dirtyCategory == entry.Key))
                     .OrderBy(entry => entry.Value.DueUtc).ThenBy(entry => entry.Key, StringComparer.Ordinal).FirstOrDefault();
                 if (due.Key == null) return;
+                pendingImport = null;
                 Begin(snapshot, due.Key);
                 scheduled[due.Key] = (due.Value.IntervalHours, now.AddHours(due.Value.IntervalHours));
             }
@@ -639,7 +655,15 @@ namespace MediaBrowser.Plugins.TuneIn
                     var dirtyAtStart = checkpoint.DirtyCategory;
                     var listings = checkpoint.Categories.ToDictionary(category => category.Category, StringComparer.Ordinal);
                     var needsRebuild = checkpoint.ChannelImportVersion != ChannelImportVersion;
-                    if (requestedCategory != null && (needsRebuild && enabled.Length > 1 ||
+                    var now = clock();
+                    var replay = pendingImport;
+                    pendingImport = null;
+                    if (replay != null && (dirtyAtStart == null || !compatible ||
+                        replay.DiscoveryKey != snapshot.DiscoveryKey || replay.RequestedCategory != requestedCategory ||
+                        replay.AllowPartial != snapshot.Value.AllowPartialCatalogImport ||
+                        now < replay.DiscoveryStarted || now - replay.DiscoveryStarted >= DiscoveryCheckpointMaxAge))
+                        replay = null;
+                    if (replay == null && requestedCategory != null && (needsRebuild && enabled.Length > 1 ||
                         enabled.Any(category => category != requestedCategory &&
                             !listings.ContainsKey(category) &&
                             (!checkpoint.PendingCategories.Contains(category) || category == dirtyAtStart))))
@@ -658,161 +682,177 @@ namespace MediaBrowser.Plugins.TuneIn
                     lock (gate) status.CategoriesTotal = categories.Length;
                     if (requestedCategory != null && categories.Length == 0)
                         throw new InvalidOperationException("The selected TuneIn category is no longer enabled.");
-                    var now = clock();
-                    var savedDiscovery = LoadDiscovery(snapshot.DiscoveryKey, requestedCategory, now);
-                    discoveryStarted = savedDiscovery?.StartedUtc ?? now;
-                    nextCheckpoint = now + DiscoveryCheckpointInterval;
-                    savedPageCount = savedDiscovery?.Pages.Count ?? 0;
-                    if (savedDiscovery != null)
-                        Update(() =>
-                        {
-                            status.Resumed = true;
-                            status.DiscoveryCheckpointUtc = savedDiscovery.SavedUtc;
-                        });
-                    // Admitted pages must stay cached for the entire attempt, including near the resume age limit.
-                    session = new TuneInCatalogueSession(savedDiscovery?.Pages, DiscoveryCheckpointMaxAge + DefaultTimeout, clock,
-                        hit => Update(() => { if (hit) status.CacheHits++; else status.RequestsStarted++; }),
-                        () => Update(() =>
-                        {
-                            status.RequestsCompleted++;
-                            status.CatalogPagesCached = session.PageCount;
-                        }),
-                        code => Update(() => status.LastHttpStatus = code), retryRateLimit: true,
-                        skippedBrowseLink: (category, reason, details) => Update(() =>
-                        {
-                            status.SkippedBrowseLinks++;
-                            var label = TuneInBrowsing.CategoryName(category) + ": " + reason.TrimEnd('.');
-                            skipReasons.TryGetValue(label, out var count);
-                            skipReasons[label] = count + 1;
-                            var displayed = skipReasons.OrderByDescending(pair => pair.Value)
-                                .ThenBy(pair => pair.Key, StringComparer.Ordinal).Take(SkipReasonDisplayLimit).ToArray();
-                            status.SkippedBrowseLinkDetails = string.Join("; ", displayed.Select(pair => $"{pair.Value} x {pair.Key}"));
-                            var otherCount = status.SkippedBrowseLinks - displayed.Sum(pair => pair.Value);
-                            if (otherCount > 0) status.SkippedBrowseLinkDetails += $"; {otherCount} other";
-                            var diagnostic = $"Entry {status.SkippedBrowseLinks} ({clock():O}): {label}"
-                                + Environment.NewLine + details;
-                            if (skippedEntries.Count < SkippedEntryReportLimit
-                                && skippedEntryCharacters + diagnostic.Length <= SkippedEntryCharacterLimit)
-                            {
-                                skippedEntries.Add(diagnostic);
-                                skippedEntryCharacters += diagnostic.Length;
-                            }
-                            else skippedEntriesOmitted++;
-                        }), maxPages: TuneInCatalogueSession.MaxRefreshPages,
-                        maxBytes: TuneInCatalogueSession.MaxRefreshBytes, timings: timings,
-                        rateLimitRetry: () => Update(() => status.RateLimitRetries++));
-                    Update(() =>
-                    {
-                        activeTimings = timings;
-                        status.CatalogPagesCached = session.PageCount;
-                        status.LastProgressUtc = clock();
-                    });
-
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");
                     var roots = enabled.Select(category => channel.GetCategoryRoot(snapshot, category)).ToArray();
-                    foreach (var category in categories)
-                        ReadEmbyStationCount(snapshot, channel, category, roots[Array.IndexOf(enabled, category)].Id, linked.Token);
-                    var importRequired = categories.Length != 0 && (needsRebuild || dirtyAtStart != null || checkpoint.NeedsImport);
-                    var changed = new HashSet<string>(StringComparer.Ordinal);
-                    var partial = new HashSet<string>(StringComparer.Ordinal);
-                    var cannotApply = false;
-                    bool IsForwardPage(string parent, string child) => TuneInBrowsing.IsForwardPage(snapshot,
-                        directory.Resolve(snapshot, parent), directory.Resolve(snapshot, child));
-                    discovering = true;
-                    discoveryTime.Start();
-                    foreach (var category in categories)
+                    var partial = replay?.Partial ?? new HashSet<string>(StringComparer.Ordinal);
+                    var didImport = true;
+                    if (replay != null)
                     {
-                        linked.Token.ThrowIfCancellationRequested();
-                        directory.CheckCurrent(snapshot, linked.Token);
-                        currentCategory = category;
-                        int requestsBefore;
-                        lock (gate) requestsBefore = status.RequestsCompleted + status.CacheHits;
+                        foreach (var listing in replay.Listings) listings[listing.Category] = listing;
+                        skippedEntries = replay.SkippedEntries;
+                        skippedEntriesOmitted = replay.SkippedEntriesOmitted;
+                        discoveryStarted = replay.DiscoveryStarted;
                         Update(() =>
                         {
-                            status.Category = category;
-                            status.Phase = "Discovering";
-                            status.ImportFoldersServed = 0;
-                            status.ImportFoldersTotal = 0;
+                            status.CategoriesCompleted = replay.DiscoveryStatus.CategoriesCompleted;
+                            status.SkippedBrowseLinks = replay.DiscoveryStatus.SkippedBrowseLinks;
+                            status.SkippedBrowseLinkDetails = replay.DiscoveryStatus.SkippedBrowseLinkDetails;
+                        });
+                    }
+                    else
+                    {
+                        var savedDiscovery = LoadDiscovery(snapshot.DiscoveryKey, requestedCategory, now);
+                        discoveryStarted = savedDiscovery?.StartedUtc ?? now;
+                        nextCheckpoint = now + DiscoveryCheckpointInterval;
+                        savedPageCount = savedDiscovery?.Pages.Count ?? 0;
+                        if (savedDiscovery != null)
+                            Update(() =>
+                            {
+                                status.Resumed = true;
+                                status.DiscoveryCheckpointUtc = savedDiscovery.SavedUtc;
+                            });
+                        // Admitted pages must stay cached for the entire attempt, including near the resume age limit.
+                        session = new TuneInCatalogueSession(savedDiscovery?.Pages, DiscoveryCheckpointMaxAge + DefaultTimeout, clock,
+                            hit => Update(() => { if (hit) status.CacheHits++; else status.RequestsStarted++; }),
+                            () => Update(() =>
+                            {
+                                status.RequestsCompleted++;
+                                status.CatalogPagesCached = session.PageCount;
+                            }),
+                            code => Update(() => status.LastHttpStatus = code), retryRateLimit: true,
+                            skippedBrowseLink: (category, reason, details) => Update(() =>
+                            {
+                                status.SkippedBrowseLinks++;
+                                var label = TuneInBrowsing.CategoryName(category) + ": " + reason.TrimEnd('.');
+                                skipReasons.TryGetValue(label, out var count);
+                                skipReasons[label] = count + 1;
+                                var displayed = skipReasons.OrderByDescending(pair => pair.Value)
+                                    .ThenBy(pair => pair.Key, StringComparer.Ordinal).Take(SkipReasonDisplayLimit).ToArray();
+                                status.SkippedBrowseLinkDetails = string.Join("; ", displayed.Select(pair => $"{pair.Value} x {pair.Key}"));
+                                var otherCount = status.SkippedBrowseLinks - displayed.Sum(pair => pair.Value);
+                                if (otherCount > 0) status.SkippedBrowseLinkDetails += $"; {otherCount} other";
+                                var diagnostic = $"Entry {status.SkippedBrowseLinks} ({clock():O}): {label}"
+                                    + Environment.NewLine + details;
+                                if (skippedEntries.Count < SkippedEntryReportLimit
+                                    && skippedEntryCharacters + diagnostic.Length <= SkippedEntryCharacterLimit)
+                                {
+                                    skippedEntries.Add(diagnostic);
+                                    skippedEntryCharacters += diagnostic.Length;
+                                }
+                                else skippedEntriesOmitted++;
+                            }), maxPages: TuneInCatalogueSession.MaxRefreshPages,
+                            maxBytes: TuneInCatalogueSession.MaxRefreshBytes, timings: timings,
+                            rateLimitRetry: () => Update(() => status.RateLimitRetries++));
+                        Update(() =>
+                        {
+                            activeTimings = timings;
+                            status.CatalogPagesCached = session.PageCount;
+                            status.LastProgressUtc = clock();
                         });
 
-                        var root = roots[Array.IndexOf(enabled, category)];
-                        var staged = await TuneInStagedImport.DiscoverAsync(channel, root, session, linked.Token,
-                            (folder, catalogue, strict, token) => getItems(channel, folder, catalogue, strict, token),
-                            null,
-                            () => directory.CheckCurrent(snapshot, linked.Token), IsForwardPage,
-                            () =>
-                            {
-                                Update(() => status.LastProgressUtc = clock());
-                                SaveDiscovery(linked.Token);
-                            }).ConfigureAwait(false);
-                        directory.CheckCurrent(snapshot, linked.Token);
-                        lock (gate)
-                            if (status.RequestsCompleted + status.CacheHits == requestsBefore)
-                                throw new InvalidOperationException("TuneIn category discovery returned no successful provider fetch.");
-
-                        listings.TryGetValue(category, out var previous);
-                        var availableStations = staged.CountStations(id =>
+                        foreach (var category in categories)
+                            ReadEmbyStationCount(snapshot, channel, category, roots[Array.IndexOf(enabled, category)].Id, linked.Token);
+                        var importRequired = categories.Length != 0 && (needsRebuild || dirtyAtStart != null || checkpoint.NeedsImport);
+                        var changed = new HashSet<string>(StringComparer.Ordinal);
+                        var cannotApply = false;
+                        bool IsForwardPage(string parent, string child) => TuneInBrowsing.IsForwardPage(snapshot,
+                            directory.Resolve(snapshot, parent), directory.Resolve(snapshot, child));
+                        discovering = true;
+                        discoveryTime.Start();
+                        foreach (var category in categories)
                         {
                             linked.Token.ThrowIfCancellationRequested();
-                            return directory.Resolve(snapshot, id).StationId;
-                        });
-                        Update(() =>
-                        {
-                            var counts = categoryCounts[category];
-                            counts.AvailableStations = availableStations;
-                            counts.AvailablePartial = staged.DiscoveryIncomplete;
-                            counts.AvailableCheckedUtc = clock();
-                        });
-                        var allowExclusions = snapshot.Value.AllowPartialCatalogImport;
-                        var categorySnapshot = staged.DiscoveryIncomplete
-                            ? (allowExclusions || category == "music" && !importRequired
-                                ? staged.MergePartialCategory(category, previous,
-                                    id => directory.Resolve(snapshot, id).StationId, IsForwardPage, allowExclusions) : null)
-                            : staged.CreateSnapshot(category);
-                        if (categorySnapshot == null)
-                        {
-                            Update(() => categoryStates[category] = "Incomplete (catalog links skipped)");
-                            cannotApply = true;
-                            continue;
-                        }
-                        lock (gate) categorySnapshot.StationCounts = categoryCounts[category].Copy();
+                            directory.CheckCurrent(snapshot, linked.Token);
+                            currentCategory = category;
+                            int requestsBefore;
+                            lock (gate) requestsBefore = status.RequestsCompleted + status.CacheHits;
+                            Update(() =>
+                            {
+                                status.Category = category;
+                                status.Phase = "Discovering";
+                                status.ImportFoldersServed = 0;
+                                status.ImportFoldersTotal = 0;
+                            });
 
-                        if (previous == null || previous.Fingerprint != categorySnapshot.Fingerprint
-                            || previous.DiscoveryPartial != categorySnapshot.DiscoveryPartial)
-                            changed.Add(category);
-                        listings[category] = categorySnapshot;
-                        if (categorySnapshot.DiscoveryPartial)
-                        {
-                            partial.Add(category);
-                            Update(() => categoryStates[category] = "Incomplete (catalog links skipped)");
-                            continue;
-                        }
-                        completed.Add(category);
-                        Update(() =>
-                        {
-                            status.CategoriesCompleted = completed.Count;
-                            status.Progress = 99d * completed.Count / categories.Length;
-                        });
-                    }
+                            var root = roots[Array.IndexOf(enabled, category)];
+                            var staged = await TuneInStagedImport.DiscoverAsync(channel, root, session, linked.Token,
+                                (folder, catalogue, strict, token) => getItems(channel, folder, catalogue, strict, token),
+                                null,
+                                () => directory.CheckCurrent(snapshot, linked.Token), IsForwardPage,
+                                () =>
+                                {
+                                    Update(() => status.LastProgressUtc = clock());
+                                    SaveDiscovery(linked.Token);
+                                }).ConfigureAwait(false);
+                            directory.CheckCurrent(snapshot, linked.Token);
+                            lock (gate)
+                                if (status.RequestsCompleted + status.CacheHits == requestsBefore)
+                                    throw new InvalidOperationException("TuneIn category discovery returned no successful provider fetch.");
 
-                    directory.CheckCurrent(snapshot, linked.Token);
-                    discoveryTime.Stop();
-                    if (cannotApply)
-                    {
+                            listings.TryGetValue(category, out var previous);
+                            var availableStations = staged.CountStations(id =>
+                            {
+                                linked.Token.ThrowIfCancellationRequested();
+                                return directory.Resolve(snapshot, id).StationId;
+                            });
+                            Update(() =>
+                            {
+                                var counts = categoryCounts[category];
+                                counts.AvailableStations = availableStations;
+                                counts.AvailablePartial = staged.DiscoveryIncomplete;
+                                counts.AvailableCheckedUtc = clock();
+                            });
+                            var allowExclusions = snapshot.Value.AllowPartialCatalogImport;
+                            var categorySnapshot = staged.DiscoveryIncomplete
+                                ? (allowExclusions || category == "music" && !importRequired
+                                    ? staged.MergePartialCategory(category, previous,
+                                        id => directory.Resolve(snapshot, id).StationId, IsForwardPage, allowExclusions) : null)
+                                : staged.CreateSnapshot(category);
+                            if (categorySnapshot == null)
+                            {
+                                Update(() => categoryStates[category] = "Incomplete (catalog links skipped)");
+                                cannotApply = true;
+                                continue;
+                            }
+                            lock (gate) categorySnapshot.StationCounts = categoryCounts[category].Copy();
+
+                            if (previous == null || previous.Fingerprint != categorySnapshot.Fingerprint
+                                || previous.DiscoveryPartial != categorySnapshot.DiscoveryPartial)
+                                changed.Add(category);
+                            listings[category] = categorySnapshot;
+                            if (categorySnapshot.DiscoveryPartial)
+                            {
+                                partial.Add(category);
+                                Update(() => categoryStates[category] = "Incomplete (catalog links skipped)");
+                                continue;
+                            }
+                            completed.Add(category);
+                            Update(() =>
+                            {
+                                status.CategoriesCompleted = completed.Count;
+                                status.Progress = 99d * completed.Count / categories.Length;
+                            });
+                        }
+
                         directory.CheckCurrent(snapshot, linked.Token);
-                        store.ClearDiscovery();
-                        Update(() =>
+                        discoveryTime.Stop();
+                        if (cannotApply)
                         {
-                            foreach (var category in completed) categoryStates[category] = "Checked (not applied)";
-                            status.State = "Partial";
-                            status.Phase = "Discovery incomplete; existing library left unchanged";
-                            status.Category = requestedCategory;
-                        });
-                        return false;
-                    }
+                            directory.CheckCurrent(snapshot, linked.Token);
+                            store.ClearDiscovery();
+                            Update(() =>
+                            {
+                                foreach (var category in completed) categoryStates[category] = "Checked (not applied)";
+                                status.State = "Partial";
+                                status.Phase = "Discovery incomplete; existing library left unchanged";
+                                status.Category = requestedCategory;
+                            });
+                            return false;
+                        }
 
-                    var didImport = importRequired || changed.Count != 0;
+                        didImport = importRequired || changed.Count != 0;
+                    }
                     if (didImport)
                     {
                         Update(() => status.Phase = "Preparing import");
@@ -842,7 +882,7 @@ namespace MediaBrowser.Plugins.TuneIn
                                     {
                                         status.Category = currentCategory;
                                         status.Phase = "Preparing import";
-                                        status.Activity = null;
+                                        status.Activity = replay == null ? null : "Reusing staged catalog without discovery";
                                         status.ImportFoldersTotal = 0;
                                         status.ImportFoldersServed = 0;
                                         status.LastProgressUtc = clock();
@@ -863,6 +903,18 @@ namespace MediaBrowser.Plugins.TuneIn
                                         Persist(snapshot, checkpoint, started);
                                         store.ClearDiscovery();
                                         importPrepared = true;
+                                        pendingImport = new PendingImport
+                                        {
+                                            DiscoveryKey = snapshot.DiscoveryKey,
+                                            RequestedCategory = requestedCategory,
+                                            AllowPartial = snapshot.Value.AllowPartialCatalogImport,
+                                            DiscoveryStarted = discoveryStarted,
+                                            Listings = importedListings,
+                                            Partial = partial,
+                                            DiscoveryStatus = status.Copy(),
+                                            SkippedEntries = skippedEntries,
+                                            SkippedEntriesOmitted = skippedEntriesOmitted
+                                        };
                                     }
                                     importToken.ThrowIfCancellationRequested();
                                     Update(() =>
@@ -912,6 +964,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         checkpoint.DirtyCategory = null;
                         checkpoint.ChannelImportVersion = ChannelImportVersion;
                         Persist(snapshot, checkpoint, started, BuildCommitted(checkpoint, snapshot.Key));
+                        pendingImport = null;
                     }
                     else
                     {
@@ -1011,11 +1064,12 @@ namespace MediaBrowser.Plugins.TuneIn
                             timings.MinIntervalSeconds?.ToString() ?? "n/a", timings.MaxIntervalSeconds?.ToString() ?? "n/a",
                             status.RequestsStarted, status.CacheHits);
                     }
-                    if (session?.SkippedBrowseLinks > 0)
+                    if (status.SkippedBrowseLinks > 0)
                         logger?.Warn("TuneIn refresh skipped {0} malformed catalog link(s). By reason: {1}",
                             status.SkippedBrowseLinks, status.SkippedBrowseLinkDetails);
                     lock (gate)
                     {
+                        if (serverToken.IsCancellationRequested || status.State == "Cancelled") pendingImport = null;
                         status.FinishedUtc = clock();
                         if (status.State == "Running")
                         {
