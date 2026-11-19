@@ -216,6 +216,8 @@ namespace MediaBrowser.Plugins.TuneIn
         internal const int MaxRefreshBytes = 40 * 1024 * 1024;
         private readonly object gate = new object();
         private readonly Dictionary<string, TuneInCachedPage> pages = new Dictionary<string, TuneInCachedPage>();
+        private readonly Dictionary<string, TaskCompletionSource<bool>> pending = new Dictionary<string, TaskCompletionSource<bool>>();
+        private readonly AsyncLocal<FolderRead> currentFolder = new AsyncLocal<FolderRead>();
         private readonly Func<DateTime> clock;
         private readonly TimeSpan lifetime;
         private readonly Action<bool> requested;
@@ -230,6 +232,20 @@ namespace MediaBrowser.Plugins.TuneIn
         internal int SkippedBrowseLinks { get; private set; }
         internal int SkippedStationUrls { get; private set; }
         internal TuneInRefreshTimings Timings { get; }
+
+        internal sealed class FolderRead
+        {
+            internal bool SkippedLink;
+            internal bool SkippedStation;
+        }
+
+        internal async Task<(T Result, FolderRead Skips)> ReadFolderAsync<T>(Func<Task<T>> read)
+        {
+            var skips = new FolderRead();
+            currentFolder.Value = skips;
+            try { return (await read().ConfigureAwait(false), skips); }
+            finally { currentFolder.Value = null; }
+        }
 
         internal TuneInCatalogueSession(IEnumerable<TuneInCachedPage> cached, TimeSpan lifetime, Func<DateTime> clock,
             Action<bool> requested = null, Action completed = null, Action<int> received = null,
@@ -268,8 +284,17 @@ namespace MediaBrowser.Plugins.TuneIn
         internal bool TrySkipCatalogLink(string category, string reason, bool stationUrl = false)
         {
             if (skippedBrowseLink == null) return false;
-            SkippedBrowseLinks++;
-            if (stationUrl) SkippedStationUrls++;
+            lock (gate)
+            {
+                SkippedBrowseLinks++;
+                if (stationUrl) SkippedStationUrls++;
+            }
+            var folder = currentFolder.Value;
+            if (folder != null)
+            {
+                folder.SkippedLink = true;
+                folder.SkippedStation |= stationUrl;
+            }
             skippedBrowseLink(category, stationUrl ? "station URL: " + reason : reason);
             return true;
         }
@@ -289,6 +314,36 @@ namespace MediaBrowser.Plugins.TuneIn
             using (var hash = SHA256.Create())
                 key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(request.Url))).Replace("-", "");
 
+            if (Timings == null) return await FetchPageAsync(key, fetch, token).ConfigureAwait(false);
+
+            TaskCompletionSource<bool> reservation;
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                lock (gate)
+                {
+                    if (!pending.TryGetValue(key, out reservation))
+                    {
+                        if (!pages.ContainsKey(key) && pages.Count + pending.Keys.Count(k => !pages.ContainsKey(k)) >= maxPages)
+                            throw new InvalidDataException($"TuneIn refresh exceeds its {maxPages}-page catalog limit.");
+                        reservation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        pending.Add(key, reservation);
+                        break;
+                    }
+                }
+                // Both discovery readers share the same batch cancellation token.
+                await reservation.Task.ConfigureAwait(false);
+            }
+            try { return await FetchPageAsync(key, fetch, token).ConfigureAwait(false); }
+            finally
+            {
+                lock (gate) pending.Remove(key);
+                reservation.TrySetResult(true);
+            }
+        }
+
+        private async Task<XDocument> FetchPageAsync(string key, Func<Task<XDocument>> fetch, CancellationToken token)
+        {
             TuneInCachedPage cached;
             lock (gate) pages.TryGetValue(key, out cached);
             if (cached != null && Fresh(cached))
@@ -297,7 +352,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 token.ThrowIfCancellationRequested();
                 var replay = Timings == null ? null : Stopwatch.StartNew();
                 try { return TuneInDirectory.ParseCatalogue(cached.Bytes); }
-                finally { if (Timings != null) Timings.CacheReplay += replay.Elapsed; }
+                finally { if (Timings != null) lock (Timings.Gate) Timings.CacheReplay += replay.Elapsed; }
             }
 
             lock (gate)
@@ -320,7 +375,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (failure.StatusCode != 429 || Interlocked.Decrement(ref rateLimitRetriesRemaining) < 0)
                         throw;
                 }
-                finally { if (Timings != null) Timings.Fetch += elapsed.Elapsed; }
+                finally { if (Timings != null) lock (Timings.Gate) Timings.Fetch += elapsed.Elapsed; }
             }
             token.ThrowIfCancellationRequested();
             var bytes = Encoding.UTF8.GetBytes(document.ToString(SaveOptions.DisableFormatting));

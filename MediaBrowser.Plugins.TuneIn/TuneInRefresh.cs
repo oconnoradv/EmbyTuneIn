@@ -233,6 +233,8 @@ namespace MediaBrowser.Plugins.TuneIn
                                     StartedUtc = status.StartedUtc, DiscoveryTimeouts = status.DiscoveryTimeouts
                                 };
                             }
+                            logger?.Info("TuneIn refresh for {0}: starting automatic retry {1} of {2} after discovery timed out.",
+                                next ?? "all", attempt + 1, DiscoveryResumeLimit);
                         }
                     }
                     catch (Exception error)
@@ -785,7 +787,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     {
                         var wait = timings.PacerQueue + timings.Pacing + timings.Backoff;
                         var fetchMs = Math.Max(0, (timings.Fetch - wait).TotalMilliseconds);
-                        logger?.Info("TuneIn refresh attempt for {0}: discovery {1:F0} ms; HTTP fetch and parse excluding waits {2:F0} ms; "
+                        logger?.Info("TuneIn refresh attempt for {0}: discovery {1:F0} ms wall time; summed request timings: HTTP fetch and parse excluding waits {2:F0} ms; "
                             + "request queue {3:F0} ms; pacing {4:F0} ms; provider backoff {5:F0} ms; cached page parsing {6:F0} ms; "
                             + "Emby import {7:F0} ms; effective catalog interval {8} s min / {9} s max; {10} requests started, {11} cache hits.",
                             requestedCategory ?? "all", discoveryTime.Elapsed.TotalMilliseconds, fetchMs,

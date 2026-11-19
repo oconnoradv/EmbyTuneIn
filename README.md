@@ -81,6 +81,11 @@ Each catalogue rate limit also doubles the effective catalogue request interval,
 up to 30 seconds. After every 20 consecutive successful catalogue responses, the
 learned interval drops by one second toward the configured minimum. This does
 not change saved settings or ordinary playback request intervals.
+Refresh discovery can overlap two independent catalog requests and process
+cached pages while another response is pending. All requests still share the
+same minimum spacing between starts. On HTTP 429 or a `Retry-After` cooldown,
+new requests wait and catalog discovery uses one request at a time until 20
+successful catalog responses. Pagination still follows each validated page.
 Cancellation and the overall refresh timeout still apply during waits.
 If the retry budget is exhausted, no partial catalog is imported. Wait before
 retrying; adaptation cannot guarantee acceptance by TuneIn or bypass its limits.
@@ -108,7 +113,10 @@ catalog pages separately from the imported library at the first completed
 folder after each 20-minute interval. A discovery timeout is recorded and
 automatically retried up to ten times after the initial attempt. The Control Panel
 shows the active retry number, for example **Automatic retry 2 of 10 after
-discovery timed out**. Before retrying, a discovery timeout also saves any
+discovery timed out**. The server log records each automatic retry as it starts.
+Retries begin without administrator action after the timed-out attempt drains.
+An HTTP or host operation that ignores cancellation can delay that drain.
+Before retrying, a discovery timeout also saves any
 additional validated pages, if the checkpoint can still be saved. Retries reuse
 checkpointed pages without requesting them again; the interrupted page may be
 requested again.

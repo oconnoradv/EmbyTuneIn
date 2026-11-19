@@ -320,6 +320,99 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public async Task ParallelDiscoveryAutomaticallyReplaysCompletedSiblingAfterTimeout()
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var requests = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            var retryObserved = new TaskCompletionSource<int?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var firstSlowRead = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var slowReads = 0;
+            TuneInRefresh runningRefresh = null;
+            var directory = new TuneInDirectory(() => config, async (request, token) =>
+            {
+                var id = request.Parameters.GetValueOrDefault("id") ?? "root";
+                requests.Enqueue(id);
+                if (id == "root")
+                    return XDocument.Parse("<opml><body>"
+                        + "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c1'/>"
+                        + "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c2'/></body></opml>");
+                if (id == "c1")
+                {
+                    if (++slowReads == 1)
+                    {
+                        firstSlowRead.TrySetResult(true);
+                        await Task.Delay(Timeout.Infinite, token);
+                    }
+                    retryObserved.TrySetResult(runningRefresh.Status().AutomaticRetry);
+                }
+                else Assert.True(firstSlowRead.Task.IsCompleted);
+                return XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>");
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-parallel-retry-{Guid.NewGuid():N}.xml");
+            var store = new TuneInRefreshStore(path);
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        Assert.Equal(2, ReadStagedTree(staged, token)["Talk"].Length);
+                        return Task.CompletedTask;
+                    }, null, timeoutOverride: TimeSpan.FromSeconds(2));
+                runningRefresh = refresh;
+                refresh.Start("talk");
+                Assert.Equal(1, await retryObserved.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(1, refresh.Status().DiscoveryTimeouts);
+                Assert.Equal(2, refresh.Status().CacheHits);
+                Assert.Equal(new[] { "root", "c1", "c2", "c1" }, requests);
+            }
+            finally
+            {
+                File.Delete(path);
+                store.ClearDiscovery();
+            }
+        }
+
+        [Fact]
+        public async Task ParallelRequestsKeepGlobalSpacingAndDrainAfterRateLimit()
+        {
+            var now = new DateTime(2026, 11, 18, 8, 0, 0, DateTimeKind.Utc);
+            var start = now;
+            var pacer = new TuneInRequestPacer(() => now, (duration, _) =>
+            {
+                now += duration;
+                return Task.CompletedTask;
+            });
+            var timings = new TuneInRefreshTimings();
+            var first = new TaskCompletionSource<HttpResponseInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var second = new TaskCompletionSource<HttpResponseInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var thirdStarted = new TaskCompletionSource<DateTime>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var one = pacer.SendAsync(() => first.Task, 3, CancellationToken.None, true, timings);
+            var two = pacer.SendAsync(() => second.Task, 3, CancellationToken.None, true, timings);
+            Assert.Equal(start.AddSeconds(3), now);
+            var three = pacer.SendAsync(() =>
+            {
+                thirdStarted.SetResult(now);
+                return Task.FromResult(new HttpResponseInfo { StatusCode = HttpStatusCode.OK });
+            }, 3, CancellationToken.None, true, timings);
+            Assert.False(thirdStarted.Task.IsCompleted);
+            second.SetResult(new HttpResponseInfo
+            {
+                StatusCode = (HttpStatusCode)429,
+                Headers = new Dictionary<string, string> { ["Retry-After"] = "75" }
+            });
+            using var limited = await two;
+            Assert.False(thirdStarted.Task.IsCompleted);
+            first.SetResult(new HttpResponseInfo { StatusCode = HttpStatusCode.OK });
+            using var initial = await one;
+            Assert.Equal(start.AddSeconds(78), await thirdStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+            using var recovered = await three;
+        }
+
+        [Fact]
         public async Task DiscoveryStopsAfterTenAutomaticRetriesAndLeavesExistingLibraryUntouched()
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };

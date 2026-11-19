@@ -1,6 +1,7 @@
 using MediaBrowser.Common.Net;
 using MediaBrowser.Plugins.TuneIn.Configuration;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
@@ -11,6 +12,7 @@ namespace MediaBrowser.Plugins.TuneIn
 {
     internal sealed class TuneInRefreshTimings
     {
+        internal readonly object Gate = new object();
         internal TimeSpan PacerQueue;
         internal TimeSpan Pacing;
         internal TimeSpan Backoff;
@@ -29,7 +31,12 @@ namespace MediaBrowser.Plugins.TuneIn
     internal sealed class TuneInRequestPacer
     {
         private const int SuccessesBeforeRecovery = 20;
-        private readonly SemaphoreSlim owner = new SemaphoreSlim(1, 1);
+        private readonly object gate = new object();
+        private readonly LinkedList<bool> waiting = new LinkedList<bool>();
+        private TaskCompletionSource<bool> slotChanged = NewSlotSignal();
+        private int active;
+        private bool exclusive;
+        private bool serialCatalogue;
         private readonly Func<DateTime> clock;
         private readonly Func<TimeSpan, CancellationToken, Task> delay;
         private DateTime nextRequestUtc;
@@ -50,93 +57,157 @@ namespace MediaBrowser.Plugins.TuneIn
             int intervalSeconds, CancellationToken token, bool catalogueRequest = false, TuneInRefreshTimings timings = null)
         {
             if (send == null) throw new ArgumentNullException(nameof(send));
-            var elapsed = timings == null ? null : Stopwatch.StartNew();
-            try { await owner.WaitAsync(token).ConfigureAwait(false); }
-            finally { if (timings != null) timings.PacerQueue += elapsed.Elapsed; }
+            var parallel = catalogueRequest && timings != null;
+            Task<HttpResponseInfo> request;
+            TimeSpan interval;
+            LinkedListNode<bool> turn;
+            lock (gate) turn = waiting.AddLast(parallel);
             try
             {
-                var interval = TimeSpan.FromSeconds(Math.Min(PluginConfiguration.MaxApiRequestIntervalSeconds,
-                    Math.Max(PluginConfiguration.MinApiRequestIntervalSeconds,
-                        Math.Max(intervalSeconds, catalogueRequest ? catalogueIntervalSeconds : 0))));
-                var earliest = lastRequestUtc == default(DateTime) ? clock() : lastRequestUtc + interval;
-                if (earliest > nextRequestUtc) nextRequestUtc = earliest;
-                elapsed?.Restart();
-                try { await WaitUntilAsync(nextRequestUtc, token).ConfigureAwait(false); }
-                finally { if (timings != null) timings.Pacing += elapsed.Elapsed; }
-                elapsed?.Restart();
-                try { await WaitUntilAsync(retryNotBeforeUtc, token).ConfigureAwait(false); }
-                finally { if (timings != null) timings.Backoff += elapsed.Elapsed; }
-
-                token.ThrowIfCancellationRequested();
-                timings?.RecordInterval((int)interval.TotalSeconds);
-                lastRequestUtc = clock();
-                nextRequestUtc = lastRequestUtc + interval;
-                var previousSuccesses = consecutiveCatalogueSuccesses;
-                if (catalogueRequest) consecutiveCatalogueSuccesses = 0;
-                var response = await send().ConfigureAwait(false);
-                if (response == null) return null;
-                if ((int)response.StatusCode == 429 || (int)response.StatusCode == 503)
+                while (true)
                 {
-                    var retryAfter = response.Headers?.FirstOrDefault(pair =>
-                        pair.Key.Equals("Retry-After", StringComparison.OrdinalIgnoreCase)).Value;
-                    var now = clock();
-                    var retryAt = RetryAt(retryAfter, now);
-                    if (catalogueRequest && (int)response.StatusCode == 429)
+                    Task slot = null;
+                    TimeSpan wait = TimeSpan.Zero;
+                    bool backoff = false;
+                    lock (gate)
                     {
-                        catalogueIntervalSeconds = Math.Min(PluginConfiguration.MaxApiRequestIntervalSeconds,
-                            (int)interval.TotalSeconds * 2);
-                        consecutiveCatalogueRateLimits = Math.Min(3, consecutiveCatalogueRateLimits + 1);
-                        var cooldown = now.AddSeconds(30 * (1 << (consecutiveCatalogueRateLimits - 1)));
-                        if (!retryAt.HasValue || retryAt.Value < cooldown) retryAt = cooldown;
-                    }
-                    if (retryAt.HasValue && retryAt.Value > retryNotBeforeUtc)
-                        retryNotBeforeUtc = retryAt.Value;
-                }
-                else if (catalogueRequest && (int)response.StatusCode == 200)
-                {
-                    consecutiveCatalogueRateLimits = 0;
-                    if (catalogueIntervalSeconds > intervalSeconds)
-                    {
-                        consecutiveCatalogueSuccesses = previousSuccesses + 1;
-                        if (consecutiveCatalogueSuccesses >= SuccessesBeforeRecovery)
+                        token.ThrowIfCancellationRequested();
+                        interval = TimeSpan.FromSeconds(Math.Min(PluginConfiguration.MaxApiRequestIntervalSeconds,
+                            Math.Max(PluginConfiguration.MinApiRequestIntervalSeconds,
+                                Math.Max(intervalSeconds, catalogueRequest ? catalogueIntervalSeconds : 0))));
+                        var now = clock();
+                        if (waiting.First != turn || (active != 0 && (!parallel || exclusive || serialCatalogue || active >= 2)))
+                            slot = slotChanged.Task;
+                        else
                         {
-                            catalogueIntervalSeconds--;
-                            consecutiveCatalogueSuccesses = 0;
-                            nextRequestUtc = lastRequestUtc.AddSeconds(Math.Max(PluginConfiguration.MinApiRequestIntervalSeconds,
-                                Math.Max(intervalSeconds, catalogueIntervalSeconds)));
+                            var earliest = lastRequestUtc == default(DateTime) ? now : lastRequestUtc + interval;
+                            var pacingUntil = earliest > nextRequestUtc ? earliest : nextRequestUtc;
+                            backoff = pacingUntil <= now && retryNotBeforeUtc > now;
+                            wait = (backoff ? retryNotBeforeUtc : pacingUntil) - now;
+                            if (wait <= TimeSpan.Zero)
+                            {
+                                if (timings != null)
+                                    lock (timings.Gate) timings.RecordInterval((int)interval.TotalSeconds);
+                                lastRequestUtc = now;
+                                nextRequestUtc = now + interval;
+                                active++;
+                                exclusive = !parallel;
+                                waiting.Remove(turn);
+                                SignalWaiters();
+                                try { request = send(); }
+                                catch (Exception error) { request = Task.FromException<HttpResponseInfo>(error); }
+                                break;
+                            }
                         }
                     }
+                    var elapsed = timings == null ? null : Stopwatch.StartNew();
+                    try
+                    {
+                        if (slot != null)
+                        {
+                            var cancelled = NewSlotSignal();
+                            using (token.Register(() => cancelled.TrySetCanceled()))
+                                await (await Task.WhenAny(slot, cancelled.Task).ConfigureAwait(false)).ConfigureAwait(false);
+                        }
+                        else await delay(wait > TimeSpan.FromDays(1) ? TimeSpan.FromDays(1) : wait, token).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        if (timings != null)
+                            lock (timings.Gate)
+                            {
+                                if (slot != null) timings.PacerQueue += elapsed.Elapsed;
+                                else if (backoff) timings.Backoff += elapsed.Elapsed;
+                                else timings.Pacing += elapsed.Elapsed;
+                            }
+                    }
                 }
-                return response;
             }
-            finally { owner.Release(); }
+            finally
+            {
+                lock (gate)
+                    if (turn.List != null)
+                    {
+                        waiting.Remove(turn);
+                        SignalWaiters();
+                    }
+            }
+
+            HttpResponseInfo response = null;
+            try { return response = await request.ConfigureAwait(false); }
+            finally
+            {
+                lock (gate)
+                {
+                    ObserveResponse(response, catalogueRequest, intervalSeconds, (int)interval.TotalSeconds);
+                    active--;
+                    SignalWaiters();
+                }
+            }
         }
 
-        private async Task WaitUntilAsync(DateTime deadline, CancellationToken token)
+        private void SignalWaiters()
         {
-            while (true)
-            {
-                token.ThrowIfCancellationRequested();
-                var remaining = deadline - clock();
-                if (remaining <= TimeSpan.Zero) return;
-                await delay(remaining > TimeSpan.FromDays(1) ? TimeSpan.FromDays(1) : remaining, token)
-                    .ConfigureAwait(false);
-            }
+            var signal = slotChanged;
+            slotChanged = NewSlotSignal();
+            signal.TrySetResult(true);
         }
 
-        private static DateTime? RetryAt(string value, DateTime now)
+        private static TaskCompletionSource<bool> NewSlotSignal() =>
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private void ObserveResponse(HttpResponseInfo response, bool catalogueRequest, int configured, int interval)
         {
-            if (string.IsNullOrWhiteSpace(value)) return null;
-            if (long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds))
-            {
-                if (seconds < 0) return null;
-                var maximum = (DateTime.MaxValue - now).Ticks / TimeSpan.TicksPerSecond;
-                return seconds > maximum ? DateTime.MaxValue : now.AddTicks(seconds * TimeSpan.TicksPerSecond);
-            }
-            if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var date))
-                return date.UtcDateTime;
-            return null;
+    var code = response == null ? 0 : (int)response.StatusCode;
+    if (code == 429 || code == 503)
+    {
+        var retryAfter = response.Headers?.FirstOrDefault(pair =>
+            pair.Key.Equals("Retry-After", StringComparison.OrdinalIgnoreCase)).Value;
+        var now = clock();
+        var retryAt = RetryAt(retryAfter, now);
+        if (catalogueRequest && code == 429)
+        {
+            catalogueIntervalSeconds = Math.Min(PluginConfiguration.MaxApiRequestIntervalSeconds,
+                Math.Max(catalogueIntervalSeconds, interval * 2));
+            consecutiveCatalogueRateLimits = Math.Min(3, consecutiveCatalogueRateLimits + 1);
+            var cooldown = now.AddSeconds(30 * (1 << (consecutiveCatalogueRateLimits - 1)));
+            if (!retryAt.HasValue || retryAt.Value < cooldown) retryAt = cooldown;
         }
+        if (code == 429 || retryAt.HasValue) serialCatalogue = true;
+        if (retryAt.HasValue && retryAt.Value > retryNotBeforeUtc) retryNotBeforeUtc = retryAt.Value;
+    }
+    if (!catalogueRequest) return;
+    if (code != 200) { consecutiveCatalogueSuccesses = 0; return; }
+    // A response already in flight when throttled must not count as recovery.
+    if (clock() < retryNotBeforeUtc || (serialCatalogue && active > 1)) return;
+    consecutiveCatalogueRateLimits = 0;
+    if ((serialCatalogue || catalogueIntervalSeconds > configured) &&
+        ++consecutiveCatalogueSuccesses >= SuccessesBeforeRecovery)
+    {
+        serialCatalogue = false;
+        consecutiveCatalogueSuccesses = 0;
+        if (catalogueIntervalSeconds > configured)
+        {
+            catalogueIntervalSeconds--;
+            nextRequestUtc = lastRequestUtc.AddSeconds(Math.Max(PluginConfiguration.MinApiRequestIntervalSeconds,
+                Math.Max(configured, catalogueIntervalSeconds)));
+        }
+    }
+}
+
+private static DateTime? RetryAt(string value, DateTime now)
+{
+    if (string.IsNullOrWhiteSpace(value)) return null;
+    if (long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds))
+    {
+        if (seconds < 0) return null;
+        var maximum = (DateTime.MaxValue - now).Ticks / TimeSpan.TicksPerSecond;
+        return seconds > maximum ? DateTime.MaxValue : now.AddTicks(seconds * TimeSpan.TicksPerSecond);
+    }
+    if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture,
+        DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var date))
+        return date.UtcDateTime;
+    return null;
+}
     }
 }

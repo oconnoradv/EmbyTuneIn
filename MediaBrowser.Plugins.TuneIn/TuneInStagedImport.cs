@@ -52,35 +52,72 @@ namespace MediaBrowser.Plugins.TuneIn
             long estimatedBytes = 0;
             var itemCount = 0;
 
-            while (pending.Count != 0)
+            using (var batch = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
-                token.ThrowIfCancellationRequested();
-                validate?.Invoke();
-                var current = pending.Dequeue();
-                if (!visited.Add(current.Key)) continue;
-                if (staged.folders.Count >= MaxFolders)
-                    throw new InvalidOperationException($"TuneIn discovery exceeded its {MaxFolders}-folder limit.");
-
-                var skippedBefore = session.SkippedBrowseLinks;
-                var stationsSkippedBefore = session.SkippedStationUrls;
-                var result = await getItems(current.Key, session, true, token).ConfigureAwait(false);
-                if (session.SkippedBrowseLinks != skippedBefore) staged.incompleteFolders.Add(current.Key);
-                if (session.SkippedStationUrls != stationsSkippedBefore) staged.incompleteStationListings.Add(current.Key);
-                token.ThrowIfCancellationRequested();
-                validate?.Invoke();
-                if (result?.Items == null) throw new InvalidOperationException("TuneIn returned an incomplete folder.");
-
-                CheckListingBudget(current.Key, result, ref estimatedBytes, ref itemCount);
-                foreach (var item in result.Items)
+                async Task<(ChannelItemResult Result, TuneInCatalogueSession.FolderRead Skips)> Read(string id)
                 {
-                    if (item.Type == ChannelItemType.Folder)
+                    try
                     {
-                        pending.Enqueue(new KeyValuePair<string, int>(item.Id,
-                            ChildDepth(current.Value, current.Key, item.Id, isForwardPage)));
+                        return await session.ReadFolderAsync(() => getItems(id, session, true, batch.Token)).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        batch.Cancel();
+                        throw;
                     }
                 }
-                staged.folders.Add(current.Key, new ChannelItemResult { Items = result.Items.ToList() });
-                checkpoint?.Invoke();
+
+                while (pending.Count != 0)
+                {
+                    token.ThrowIfCancellationRequested();
+                    validate?.Invoke();
+                    var entries = new List<KeyValuePair<string, int>>(2);
+                    while (pending.Count != 0 && entries.Count < Math.Min(2, MaxFolders - staged.folders.Count))
+                    {
+                        var entry = pending.Dequeue();
+                        if (visited.Add(entry.Key)) entries.Add(entry);
+                    }
+                    if (entries.Count == 0)
+                    {
+                        if (pending.Any(entry => !visited.Contains(entry.Key)))
+                            throw new InvalidOperationException($"TuneIn discovery exceeded its {MaxFolders}-folder limit.");
+                        break;
+                    }
+
+                    void Accept(KeyValuePair<string, int> entry, ChannelItemResult result, TuneInCatalogueSession.FolderRead skips)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        validate?.Invoke();
+                        if (result?.Items == null) throw new InvalidOperationException("TuneIn returned an incomplete folder.");
+                        if (skips.SkippedLink) staged.incompleteFolders.Add(entry.Key);
+                        if (skips.SkippedStation) staged.incompleteStationListings.Add(entry.Key);
+                        CheckListingBudget(entry.Key, result, ref estimatedBytes, ref itemCount);
+                        foreach (var item in result.Items)
+                            if (item.Type == ChannelItemType.Folder)
+                                pending.Enqueue(new KeyValuePair<string, int>(item.Id,
+                                    ChildDepth(entry.Value, entry.Key, item.Id, isForwardPage)));
+                        staged.folders.Add(entry.Key, new ChannelItemResult { Items = result.Items.ToList() });
+                        checkpoint?.Invoke();
+                    }
+
+                    var first = Read(entries[0].Key);
+                    if (entries.Count == 1 || first.IsCompleted)
+                    {
+                        var (result, skips) = await first.ConfigureAwait(false);
+                        Accept(entries[0], result, skips);
+                        if (entries.Count == 2)
+                        {
+                            var (second, secondSkips) = await Read(entries[1].Key).ConfigureAwait(false);
+                            Accept(entries[1], second, secondSkips);
+                        }
+                    }
+                    else
+                    {
+                        var results = await Task.WhenAll(first, Read(entries[1].Key)).ConfigureAwait(false);
+                        for (var i = 0; i < entries.Count; i++)
+                            Accept(entries[i], results[i].Result, results[i].Skips);
+                    }
+                }
             }
             return staged;
         }
