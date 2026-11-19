@@ -413,18 +413,22 @@ test('only explicit selector actions fetch branches and save multiple local sele
     assert.equal(app.selectors.length, 1);
 });
 
-test('admin partial import policy loads and saves without starting a refresh', async () => {
+test('browsing options default checked and preserve saved choices without starting a refresh', async () => {
     for (const enabled of [undefined, false, true]) {
         const app = harness();
         const visit = app.instance.onResume();
-        app.reads[0].resolve({ AllowPartialCatalogImport: enabled });
+        app.reads[0].resolve({ AllowPartialCatalogImport: enabled, HideRegionalGenres: enabled });
         await visit;
         const control = app.elements['.allowPartialCatalogImport'];
-        assert.equal(control.checked, !!enabled);
-        control.checked = !enabled;
+        assert.equal(control.checked, enabled !== false);
+        const genres = app.elements['.hideRegionalGenres'];
+        assert.equal(genres.checked, enabled !== false);
+        control.checked = !(enabled !== false);
+        genres.checked = !(enabled !== false);
         app.formHandlers.submit({ preventDefault() {} });
         await settle();
-        assert.equal(app.writes[0].config.AllowPartialCatalogImport, !enabled);
+        assert.equal(app.writes[0].config.AllowPartialCatalogImport, enabled === false);
+        assert.equal(app.writes[0].config.HideRegionalGenres, enabled === false);
         assert.ok(app.refresh.every(request => request.options.type === 'GET'));
     }
 });
@@ -621,7 +625,7 @@ test('partial reports survive same-run polls and stale retrievals cannot replace
     app.instance.onPause();
 });
 
-test('category counts sit left of Refresh and distinguish zero, partial, unavailable and unmeasured totals', async () => {
+test('category counts show only filtered availability and Emby inventory left of Refresh', async () => {
     const app = harness(true);
     app.elements['.tuneInRefresh'].open = true;
     const visit = app.instance.onResume();
@@ -644,11 +648,12 @@ test('category counts sit left of Refresh and distinguish zero, partial, unavail
     assert.equal(rows[0].childNodes[1].childNodes[1].textContent, 'Refresh');
     assert.equal(rows[0].childNodes[1].childNodes[1].attributes.is, 'emby-button');
     assert.match(rows[0].childNodes[1].childNodes[1].className, /\braised\b/);
-    assert.deepEqual(values(rows[0]).map(value => value.textContent), ['123 (partial)', '145', 'Not measured']);
+    assert.deepEqual(values(rows[0]).map(value => value.textContent), ['123 (partial)', '145']);
     assert.match(values(rows[0])[0].attributes.title, /lower bound/);
-    assert.deepEqual(values(rows[1]).map(value => value.textContent), ['0', '0', 'Not measured']);
-    assert.deepEqual(values(rows[2]).map(value => value.textContent), ['Not checked', 'Not checked', 'Not applicable']);
-    assert.deepEqual(values(rows[3]).map(value => value.textContent), ['4', 'Unavailable', 'Not applicable']);
+    assert.deepEqual(values(rows[1]).map(value => value.textContent), ['0', '0']);
+    assert.deepEqual(values(rows[2]).map(value => value.textContent), ['Not checked', 'Not checked']);
+    assert.deepEqual(values(rows[3]).map(value => value.textContent), ['4', 'Unavailable']);
+    assert.doesNotMatch(app.elements['.tuneInRefreshCategories'].textContent, /unfiltered|Not measured|Not applicable/i);
     assert.equal(values(rows[3])[1].childNodes.length, 0);
     assert.equal(app.selectors.length, 0);
     assert.equal(app.refresh.length, 1);

@@ -435,7 +435,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 counts.className = 'tuneInStationCounts';
                 counts.setAttribute('aria-label', item.Name + ' station counts');
                 var countValues = {};
-                [['available', 'Available (filtered)'], ['emby', 'In Emby'], ['unfiltered', 'TuneIn (unfiltered)']]
+                [['available', 'Available (filtered)'], ['emby', 'In Emby']]
                     .forEach(function (metric) {
                         var group = document.createElement('div');
                         var label = document.createElement('dt');
@@ -483,7 +483,6 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             values.available.textContent = count(metrics.AvailableStations)
                 + (metrics.AvailablePartial && typeof metrics.AvailableStations === 'number' ? ' (partial)' : '');
             values.emby.textContent = metrics.EmbyCountError ? 'Unavailable' : count(metrics.EmbyStations);
-            values.unfiltered.textContent = ['local', 'presets'].includes(item.Category) ? 'Not applicable' : 'Not measured';
             values.available.setAttribute('title', metrics.AvailableCheckedUtc
                 ? 'Discovery checked at ' + new Date(metrics.AvailableCheckedUtc).toLocaleString()
                     + (metrics.AvailablePartial ? '; skipped branches make this a lower bound.' : '')
@@ -491,8 +490,6 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             values.emby.setAttribute('title', metrics.EmbyCountError || (metrics.EmbyCheckedUtc
                 ? 'Emby inventory checked at ' + new Date(metrics.EmbyCheckedUtc).toLocaleString()
                 : 'Run a category refresh to check Emby inventory.'));
-            values.unfiltered.setAttribute('title',
-                'TuneIn does not provide a verified category-wide total through this catalog. No additional unfiltered crawl is performed.');
         });
     }
 
@@ -793,8 +790,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.txtLatLon').value = config.LatLon || '';
             view.querySelector('.apiRequestIntervalSeconds').value =
                 config.ApiRequestIntervalSeconds == null ? 3 : Math.min(config.ApiRequestIntervalSeconds, 30);
-            view.querySelector('.hideRegionalGenres').checked = !!config.HideRegionalGenres;
-            view.querySelector('.allowPartialCatalogImport').checked = !!config.AllowPartialCatalogImport;
+            view.querySelector('.hideRegionalGenres').checked = config.HideRegionalGenres !== false;
+            view.querySelector('.allowPartialCatalogImport').checked = config.AllowPartialCatalogImport !== false;
             var hasRegions = (config.LocalCities || []).some(function (item) {
                 return item && item.Enabled !== false && /^r[1-9][0-9]{0,9}$/.test(item.Id);
             });

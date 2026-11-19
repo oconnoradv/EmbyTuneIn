@@ -265,7 +265,7 @@
                 <input type="checkbox" is="emby-checkbox" class="allowPartialCatalogImport" aria-describedby="tuneInPartialImportHint" />
                 <span>Import valid results when catalog entries are skipped</span>
             </label>
-            <p class="fieldDescription" id="tuneInPartialImportHint">Off by default. Applies to all categories on the next manual or scheduled refresh after saving. Retains saved entries where possible; otherwise excludes rejected entries, which may represent whole branches. Results remain Partial. Does not bypass unsafe destinations, request failures, cancellation, or limits.</p>
+            <p class="fieldDescription" id="tuneInPartialImportHint">On by default. Applies to all categories on the next manual or scheduled refresh after saving. Retains saved entries where possible; otherwise excludes rejected entries, which may represent whole branches. Results remain Partial. Does not bypass unsafe destinations, request failures, cancellation, or limits.</p>
             <label class="emby-checkbox-label">
                 <input type="checkbox" is="emby-checkbox" class="configurationCompleted" />
                 <span>Enable configured browsing after saving</span>
@@ -309,7 +309,7 @@
             <p class="refreshLogMessage" role="status"></p>
             <p class="fieldDescription">Failed refreshes and skipped entries have a retrievable report (up to 64 KB). Link details omit non-navigation parameters; exception traces may contain private server details. Review before sharing. A new refresh or server restart clears the report.</p>
             <pre class="refreshFailureLog" aria-label="Latest refresh diagnostic report" tabindex="0" hidden></pre>
-            <p class="fieldDescription">Distinct stations at the last category refresh. Available uses saved filters; Partial is a lower bound. In Emby checks the library. TuneIn does not supply an unfiltered total; Local Radio and Favorites have no global total.</p>
+            <p class="fieldDescription">Distinct stations at the last category refresh. Available uses saved filters; Partial is a lower bound. In Emby checks the library.</p>
             <p class="refreshCategoryNote" role="status"></p>
             <ul class="tuneInRefreshCategories" aria-label="Category refresh status"></ul>
             <dialog class="tuneInRecoveryDialog" aria-labelledby="tuneInRecoveryTitle" aria-describedby="tuneInRecoveryText">

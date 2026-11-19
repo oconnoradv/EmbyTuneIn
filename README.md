@@ -95,7 +95,7 @@ active HTTP requests, rate-limit retries, checkpoint resume, and skipped-link
 details. Discovery does not show a percentage or ETA based on the page limit,
 because the limit is a safety cap rather than an expected catalog size.
 
-**Hide genre folders in Local Radio and By Location** is off by default. When
+**Hide genre folders in Local Radio and By Location** is on by default. When
 enabled, it skips recognized regional genre links while keeping stations,
 popular listings and pagination. Refresh the affected categories to update
 their imported listings. The option does not change existing navigation IDs.
@@ -113,10 +113,12 @@ If any links are skipped, the refresh reports
 reason. It shows up to five groups and combines the rest into an “other” count.
 In **Catalog browsing**, administrators can enable **Import valid results when
 catalog entries are skipped**, then **Save** and refresh again. This policy is
-off by default and applies to all categories on subsequent manual and scheduled
+on by default and applies to all categories on subsequent manual and scheduled
 refreshes; changing it does not invalidate existing navigation IDs or require a
 developer to add exceptions for each rejected query or fragment. It does not
 apply an earlier run's results directly: a new refresh is required.
+Both options default to checked for new configurations and configurations
+without these settings; explicitly saved unchecked choices remain unchanged.
 With the policy enabled, valid results can be imported even on the first refresh
 or when skipped entries have no saved counterpart. One rejected link can
 represent a whole branch, not just one station. Where compatible saved data
@@ -160,11 +162,8 @@ successful refresh survive server restarts. A withheld partial discovery updates
 the current dashboard count but leaves the saved catalog untouched.
 Unrecorded counts say **Not checked**, inventory failures say **Unavailable**,
 and interrupted imports require reconciliation rather than showing stale counts
-as authoritative. **TuneIn (unfiltered)** says **Not measured**: OPML category
-responses do not supply a verified category-wide station total, and filtered
-results are never extrapolated into one. Local Radio and Favorites are
-location/account-specific, so their unfiltered global total is **Not applicable**.
-No additional unfiltered catalog crawl is started by this feature.
+as authoritative. Only filtered availability and Emby inventory are shown;
+no unfiltered catalog crawl is started to calculate station counts.
 Dashboard actions use native Emby buttons, including Cancel and Back, so their
 normal, focused, and disabled colors follow the active user's Emby theme rather
 than plugin-defined button colors.

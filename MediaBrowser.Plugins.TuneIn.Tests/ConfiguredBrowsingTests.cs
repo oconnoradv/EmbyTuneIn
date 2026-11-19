@@ -31,6 +31,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public async Task RegionalGenreOptOutKeepsExistingIdsAndOrdinaryListings()
         {
             var config = Ready();
+            config.HideRegionalGenres = false;
             config.EnableLocation = true;
             config.Locations.Add(new CatalogSelection { Id = "r10" });
             var directory = new TuneInDirectory(() => config, (_, __) => Task.FromResult(Opml(
@@ -61,6 +62,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public async Task PartialImportPolicyPreservesNavigationAndDiscoveryIdentity()
         {
             var config = Ready();
+            config.AllowPartialCatalogImport = false;
             config.EnableTalk = true;
             var directory = new TuneInDirectory(() => config, (_, __) => Task.FromResult(Opml(
                 "<outline type='audio' guide_id='s1' text='Radio'/>")));
@@ -74,6 +76,26 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal(root.Id, browser.CategoryRoot(after, "talk").Id);
             Assert.Single((await browser.GetItemsAsync(root.Id, Token)).Items);
             Assert.True(after.Value.AllowPartialCatalogImport);
+        }
+
+        [Theory]
+        [InlineData("")]
+        [InlineData("<HideRegionalGenres>false</HideRegionalGenres><AllowPartialCatalogImport>false</AllowPartialCatalogImport>")]
+        [InlineData("<HideRegionalGenres>true</HideRegionalGenres><AllowPartialCatalogImport>true</AllowPartialCatalogImport>")]
+        public void BrowsingOptionsDefaultOnAndPreserveSavedChoices(string settings)
+        {
+            var serializer = new XmlSerializer(typeof(PluginConfiguration));
+            using var reader = new StringReader("<PluginConfiguration>" + settings + "</PluginConfiguration>");
+            var config = (PluginConfiguration)serializer.Deserialize(reader);
+            var expected = !settings.Contains("false");
+            Assert.Equal(expected, config.HideRegionalGenres);
+            Assert.Equal(expected, config.AllowPartialCatalogImport);
+            using var saved = new StringWriter();
+            serializer.Serialize(saved, config);
+            using var reloaded = new StringReader(saved.ToString());
+            var roundTrip = (PluginConfiguration)serializer.Deserialize(reloaded);
+            Assert.Equal(expected, roundTrip.HideRegionalGenres);
+            Assert.Equal(expected, roundTrip.AllowPartialCatalogImport);
         }
 
         private static CatalogSelection Selection(string id, params string[] parents) =>

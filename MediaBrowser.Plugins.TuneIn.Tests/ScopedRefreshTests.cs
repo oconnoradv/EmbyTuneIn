@@ -327,7 +327,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 return Task.FromResult(XDocument.Parse($"<opml><body>{rows}</body></opml>"));
             });
             var channel = new TuneInChannel(directory);
-            key = directory.Snapshot().Key;
+            key = directory.Snapshot().DiscoveryKey;
             var imports = 0;
             try
             {
@@ -645,7 +645,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     refresh.Start("talk");
                     await blocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
                     Assert.Equal(periodic ? initial.AddMinutes(20) : (DateTime?)null, refresh.Status().DiscoveryCheckpointUtc);
-                    var key = directory.Snapshot().Key;
+                    var key = directory.Snapshot().DiscoveryKey;
                     Assert.Equal(periodic, store.ReadDiscovery(key, "talk", now, TimeSpan.FromHours(48)) != null);
                     Assert.Null(store.ReadDiscovery(key, null, now, TimeSpan.FromHours(48)));
                     Assert.Null(store.ReadDiscovery(new string('0', 64), "talk", now, TimeSpan.FromHours(48)));
