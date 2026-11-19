@@ -68,8 +68,8 @@ namespace MediaBrowser.Plugins.TuneIn
         private const int ChannelImportVersion = 2;
         private static readonly TimeSpan DefaultTimeout = TimeSpan.FromHours(1);
         private static readonly TimeSpan DiscoveryCheckpointInterval = TimeSpan.FromMinutes(20);
-        private static readonly TimeSpan DiscoveryCheckpointMaxAge = TimeSpan.FromHours(24);
-        private const int DiscoveryResumeLimit = 3;
+        private static readonly TimeSpan DiscoveryCheckpointMaxAge = TimeSpan.FromHours(48);
+        private const int DiscoveryResumeLimit = 10;
         private const int FailureReportLimit = 64 * 1024;
         private const int SkipReasonDisplayLimit = 5;
         private readonly object gate = new object();

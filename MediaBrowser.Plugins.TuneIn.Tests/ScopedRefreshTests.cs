@@ -293,7 +293,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task FourDiscoveryTimeoutsLeaveExistingLibraryUntouched()
+        public async Task DiscoveryStopsAfterTenAutomaticRetriesAndLeavesExistingLibraryUntouched()
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
             var block = false;
@@ -327,10 +327,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 
                 block = true;
                 refresh.Start("talk");
-                await WaitUntilIdle(refresh);
+                await WaitUntilIdle(refresh, TimeSpan.FromSeconds(30));
                 Assert.Equal("TimedOut", refresh.Status().State);
-                Assert.Equal(4, refresh.Status().DiscoveryTimeouts);
-                Assert.Equal(4, attempts);
+                Assert.Equal(11, refresh.Status().DiscoveryTimeouts);
+                Assert.Equal(11, attempts);
                 Assert.Null(refresh.Status().DiscoveryCheckpointUtc);
                 Assert.Equal(1, imports);
                 Assert.Equal(checkpoint, File.ReadAllText(path));
@@ -393,10 +393,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     await blocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
                     Assert.Equal(initial.AddMinutes(20), refresh.Status().DiscoveryCheckpointUtc);
                     var key = directory.Snapshot().Key;
-                    Assert.NotNull(store.ReadDiscovery(key, "talk", now, TimeSpan.FromHours(24)));
-                    Assert.Null(store.ReadDiscovery(key, null, now, TimeSpan.FromHours(24)));
-                    Assert.Null(store.ReadDiscovery(new string('0', 64), "talk", now, TimeSpan.FromHours(24)));
-                    Assert.Null(store.ReadDiscovery(key, "talk", initial.AddHours(24), TimeSpan.FromHours(24)));
+                    Assert.NotNull(store.ReadDiscovery(key, "talk", now, TimeSpan.FromHours(48)));
+                    Assert.Null(store.ReadDiscovery(key, null, now, TimeSpan.FromHours(48)));
+                    Assert.Null(store.ReadDiscovery(new string('0', 64), "talk", now, TimeSpan.FromHours(48)));
+                    Assert.Null(store.ReadDiscovery(key, "talk", initial.AddHours(48), TimeSpan.FromHours(48)));
                     if (restart) refresh.Cancel();
                     await WaitUntilIdle(refresh);
                     if (restart)
@@ -414,6 +414,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 }
                 if (restart)
                 {
+                    now = initial.AddHours(47);
                     using var refresh = NewRefresh();
                     refresh.Start("talk");
                     await WaitUntilIdle(refresh);
@@ -1478,9 +1479,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Throws<InvalidOperationException>(() => directory.Resolve(disabled, id));
         }
 
-        private static async Task WaitUntilIdle(TuneInRefresh refresh)
+        private static async Task WaitUntilIdle(TuneInRefresh refresh, TimeSpan? wait = null)
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using var timeout = new CancellationTokenSource(wait ?? TimeSpan.FromSeconds(15));
             while (refresh.Status().Busy) await Task.Delay(10, timeout.Token);
         }
 
