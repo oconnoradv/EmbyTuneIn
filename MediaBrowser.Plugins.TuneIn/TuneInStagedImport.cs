@@ -151,16 +151,17 @@ namespace MediaBrowser.Plugins.TuneIn
             return CreateSnapshot(category, folders, false);
         }
 
-        internal TuneInCategorySnapshot MergePartialMusic(TuneInCategorySnapshot previous, Func<string, string> stationId,
-            Func<string, string, bool> isForwardPage)
+        internal TuneInCategorySnapshot MergePartialCategory(string category, TuneInCategorySnapshot previous,
+            Func<string, string> stationId, Func<string, string, bool> isForwardPage, bool allowExclusions)
         {
             if (!DiscoveryIncomplete)
                 return null;
             if (previous == null)
-                return CreateSnapshot("music", folders, true);
-            if (previous.Category != "music" || previous.RootId != Root.Id)
+                return allowExclusions ? CreateSnapshot(category, folders, true) : null;
+            if (previous.Category != category || previous.RootId != Root.Id)
                 return null;
             var saved = previous.Folders.ToDictionary(folder => folder.Id, StringComparer.Ordinal);
+            if (!allowExclusions && incompleteFolders.Any(id => !saved.ContainsKey(id))) return null;
             var merged = new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal);
             var pending = new Queue<(string Id, int Depth)>();
             pending.Enqueue((Root.Id, 0));

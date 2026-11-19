@@ -82,7 +82,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var retainsSavedBranch = baseline == "saved parent";
             var config = new PluginConfiguration
             {
-                SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true, EnableTalk = true
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true, EnableTalk = true,
+                AllowPartialCatalogImport = true
             };
             config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
             const string privateMarker = "not-for-diagnostics";
@@ -190,6 +191,102 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal("Completed", refresh.Status().State);
                 Assert.Equal("Changed", directory.Resolve(directory.Snapshot(), Assert.Single(imported["Music"])).Name);
                 Assert.False(new TuneInRefreshStore(path).Read().Categories.Single(category => category.Category == "music").DiscoveryPartial);
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Theory]
+        [InlineData("music", false, false)]
+        [InlineData("music", false, true)]
+        [InlineData("music", true, false)]
+        [InlineData("music", true, true)]
+        [InlineData("talk", false, false)]
+        [InlineData("talk", false, true)]
+        [InlineData("talk", true, false)]
+        [InlineData("talk", true, true)]
+        [InlineData("sports", false, false)]
+        [InlineData("sports", false, true)]
+        [InlineData("sports", true, false)]
+        [InlineData("sports", true, true)]
+        [InlineData("location", false, false)]
+        [InlineData("location", false, true)]
+        [InlineData("location", true, false)]
+        [InlineData("location", true, true)]
+        public async Task AdminPartialImportPolicyControlsExclusionsAcrossCategories(string category, bool allow, bool withBaseline)
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, AllowPartialCatalogImport = allow,
+                EnableMusic = category == "music", EnableTalk = category == "talk",
+                EnableSports = category == "sports", EnableLocation = category == "location"
+            };
+            if (category == "music") config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
+            if (category == "location") config.Locations.Add(new CatalogSelection { Id = "r10", Enabled = true });
+            var childId = category == "location" ? "r11" : "c123";
+            var skipped = false;
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                var child = request.Parameters.TryGetValue("id", out var id) && id == childId;
+                var rows = child ? "<outline type='audio' guide_id='s1' text='Retained'/>"
+                    : "<outline type='link' text='Branch' URL='https://opml.radiotime.com/Browse.ashx?id="
+                        + childId + (skipped ? "&amp;filter=invalid%2Fvalue" : "") + "'/>"
+                        + "<outline type='audio' guide_id='s2' text='" + (skipped ? "Updated" : "Original") + "'/>";
+                return Task.FromResult(XDocument.Parse("<opml><body>" + rows + "</body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-admin-partial-{Guid.NewGuid():N}.xml");
+            var imports = new List<string[]>();
+            try
+            {
+                var store = new TuneInRefreshStore(path);
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        imports.Add(ReadStagedTree(staged, token)[TuneInBrowsing.CategoryName(category)]
+                            .Select(item => directory.Resolve(directory.Snapshot(), item).Name)
+                            .OrderBy(name => name, StringComparer.Ordinal).ToArray());
+                        return Task.CompletedTask;
+                    }, null);
+                if (withBaseline)
+                {
+                    refresh.Start();
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("Completed", refresh.Status().State);
+                }
+                var before = withBaseline ? File.ReadAllText(path) : null;
+                skipped = true;
+                refresh.Start(category);
+                await WaitUntilIdle(refresh);
+                var status = refresh.Status();
+                Assert.Equal("Partial", status.State);
+                Assert.Equal(category, status.Category);
+                Assert.Equal(allow, status.PartialImportAllowed);
+                Assert.Equal(1, status.SkippedBrowseLinks);
+                var applied = allow || category == "music" && withBaseline;
+                Assert.Equal((withBaseline ? 1 : 0) + (applied ? 1 : 0), imports.Count);
+                if (applied)
+                {
+                    Assert.Contains("valid updates applied", status.Phase);
+                    Assert.Equal(withBaseline ? new[] { "Retained", "Updated" } : new[] { "Updated" }, imports.Last());
+                    Assert.True(Assert.Single(store.Read().Categories).DiscoveryPartial);
+                }
+                else
+                {
+                    Assert.Contains("existing library left unchanged", status.Phase);
+                    if (withBaseline) Assert.Equal(before, File.ReadAllText(path));
+                    else Assert.False(File.Exists(path));
+                }
+
+                if (!allow && !applied)
+                {
+                    config.AllowPartialCatalogImport = true;
+                    refresh.Start(category);
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("Partial", refresh.Status().State);
+                    Assert.Contains("valid updates applied", refresh.Status().Phase);
+                    Assert.Equal((withBaseline ? 1 : 0) + 1, imports.Count);
+                }
             }
             finally { File.Delete(path); }
         }
@@ -647,15 +744,21 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData("none")]
-        [InlineData("saved")]
-        [InlineData("dirty")]
-        [InlineData("rebuild")]
-        public async Task MusicRefreshExcludesInvalidStationUrlsAndRetainsAvailableSavedStations(string baseline)
+        [InlineData("music", "none")]
+        [InlineData("music", "saved")]
+        [InlineData("music", "dirty")]
+        [InlineData("music", "rebuild")]
+        [InlineData("talk", "none")]
+        [InlineData("talk", "saved")]
+        public async Task PartialImportExcludesInvalidStationUrlsAndRetainsAvailableSavedStations(string category, string baseline)
         {
             var withBaseline = baseline != "none";
-            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true };
-            config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = category == "music",
+                EnableTalk = category == "talk", AllowPartialCatalogImport = true
+            };
+            if (category == "music") config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
             var mode = 0;
             var imports = new List<string[]>();
             var directory = new TuneInDirectory(() => config, (_, __) =>
@@ -676,25 +779,25 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
                     (_, staged, __, token) =>
                     {
-                        imports.Add(ReadStagedTree(staged, token)["Music"]
+                        imports.Add(ReadStagedTree(staged, token)[TuneInBrowsing.CategoryName(category)]
                             .Select(id => directory.Resolve(directory.Snapshot(), id).Name)
                             .OrderBy(name => name, StringComparer.Ordinal).ToArray());
                         return Task.CompletedTask;
                     }, null);
                 if (withBaseline)
                 {
-                    refresh.Start("music");
+                    refresh.Start(category);
                     await WaitUntilIdle(refresh);
                     Assert.Equal("Completed", refresh.Status().State);
                     Assert.Equal(new[] { "Original", "Saved" }, Assert.Single(imports));
                     var checkpoint = store.Read();
-                    if (baseline == "dirty") checkpoint.DirtyCategory = "music";
+                    if (baseline == "dirty") checkpoint.DirtyCategory = category;
                     if (baseline == "rebuild") checkpoint.ChannelImportVersion = 0;
                     store.Write(checkpoint);
                 }
 
                 mode = 1;
-                refresh.Start("music");
+                refresh.Start(category);
                 await WaitUntilIdle(refresh);
                 var status = refresh.Status();
                 Assert.Equal("Partial", status.State);
@@ -711,7 +814,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var checkpointBeforeFailure = File.ReadAllText(path);
 
                 mode = 2;
-                refresh.Start("music");
+                refresh.Start(category);
                 await WaitUntilIdle(refresh);
                 Assert.Equal("Error", refresh.Status().State);
                 Assert.Contains("Untrusted TuneIn catalog link", refresh.GetFailureLog().Text);
@@ -736,7 +839,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var config = new PluginConfiguration
             {
                 SchemaVersion = 1, ConfigurationCompleted = true,
-                EnableTalk = category == "talk", EnableMusic = category == "music"
+                EnableTalk = category == "talk", EnableMusic = category == "music", AllowPartialCatalogImport = true
             };
             if (category == "music") config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
             var directory = new TuneInDirectory(() => config, (request, token) =>

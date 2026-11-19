@@ -103,7 +103,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (!ValidStation(station))
                     {
                         var link = DirectoryRequest.ParseLink(TuneInDirectory.Attribute(row, "URL"),
-                            reason => entry.Category == "music"
+                            reason => (entry.Category == "music" || snapshot.Value.AllowPartialCatalogImport)
                                 && session?.TrySkipCatalogLink(entry.Category, reason, stationUrl: true) == true,
                             allowSkippingTune: true);
                         if (link == null) continue;
@@ -127,7 +127,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     var link = DirectoryRequest.ParseLink(TuneInDirectory.Attribute(row, "URL"),
                         reason => session?.TrySkipCatalogLink(entry.Category, reason) == true,
-                        allowSkippingTune: entry.Category == "music");
+                        allowSkippingTune: entry.Category == "music" || snapshot.Value.AllowPartialCatalogImport);
                     if (link == null || link.Method != "Browse.ashx") continue;
                     var next = ScopedRequest(snapshot, entry, link);
                     var contentCategory = entry.Category == "language" ? LanguageGroup(entry, next) : null;

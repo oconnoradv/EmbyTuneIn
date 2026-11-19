@@ -366,6 +366,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (typeof status.ActiveRequests === 'number')
             diagnostics.push(status.ActiveRequests + ' active HTTP ' + (status.ActiveRequests === 1 ? 'request' : 'requests'));
         if (typeof status.RateLimitRetries === 'number') diagnostics.push(status.RateLimitRetries + ' rate-limit retries');
+        if (typeof status.PartialImportAllowed === 'boolean')
+            diagnostics.push('Import valid results with exclusions: ' + (status.PartialImportAllowed ? 'allowed' : 'off'));
         if (status.Resumed) {
             var checkpoint = status.DiscoveryCheckpointUtc ? new Date(status.DiscoveryCheckpointUtc) : null;
             diagnostics.push('Resumed from checkpoint' + (checkpoint && !isNaN(checkpoint.getTime())
@@ -374,6 +376,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (status.CategoriesSkipped) diagnostics.push(status.CategoriesSkipped + ' categories unchanged');
         if (status.SkippedBrowseLinks) {
             description += '. ' + status.SkippedBrowseLinks + ' malformed catalog links skipped';
+            if (status.State === 'Partial' && status.PartialImportAllowed === false
+                && status.Phase === 'Discovery incomplete; existing library left unchanged')
+                description += '. To apply valid results, enable "Import valid results when catalog entries are skipped" in Catalog browsing, save, then refresh again';
             diagnostics.push('Skipped malformed TuneIn catalog links: ' + status.SkippedBrowseLinks
                 + (status.SkippedBrowseLinkDetails ? ' (' + status.SkippedBrowseLinkDetails + ')' : ''));
         }
@@ -635,6 +640,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         config.LatLon = coordinates || null;
         config.ApiRequestIntervalSeconds = Number(requestInterval);
         config.HideRegionalGenres = instance.view.querySelector('.hideRegionalGenres').checked;
+        config.AllowPartialCatalogImport = instance.view.querySelector('.allowPartialCatalogImport').checked;
         config.RefreshSchedules = Array.from(instance.refreshSchedules)
             .filter(function (entry) { return entry[1] > 0; })
             .map(function (entry) { return { Category: entry[0], IntervalHours: entry[1] }; });
@@ -749,6 +755,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.apiRequestIntervalSeconds').value =
                 config.ApiRequestIntervalSeconds == null ? 3 : Math.min(config.ApiRequestIntervalSeconds, 30);
             view.querySelector('.hideRegionalGenres').checked = !!config.HideRegionalGenres;
+            view.querySelector('.allowPartialCatalogImport').checked = !!config.AllowPartialCatalogImport;
             var hasRegions = (config.LocalCities || []).some(function (item) {
                 return item && item.Enabled !== false && /^r[1-9][0-9]{0,9}$/.test(item.Id);
             });

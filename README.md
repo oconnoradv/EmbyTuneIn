@@ -111,19 +111,28 @@ station fallback URL does not stop Control Panel discovery of valid siblings.
 If any links are skipped, the refresh reports
 **Partial** and shows the total and counts grouped by category and validation
 reason. It shows up to five groups and combines the rest into an “other” count.
-Music imports the valid station and folder results even on the first refresh
-or when a skipped link occurs inside a newly discovered folder. Rejected links
-are excluded; one skipped link can represent a whole branch, not just one station.
-Where a compatible saved folder exists, the import still retains missing child
-folders and their saved contents where a malformed link may have hidden them,
-and retains missing saved stations where a station URL was skipped. Without a
-saved counterpart, only the successfully discovered entries can be imported.
-The saved Music listing and status remain **Partial** until discovery completes
-without skipped links. Other categories retain their existing fail-closed
-partial-discovery behavior. If a retained tree cannot be assembled consistently,
-no import or checkpoint update occurs.
+In **Catalog browsing**, administrators can enable **Import valid results when
+catalog entries are skipped**, then **Save** and refresh again. This policy is
+off by default and applies to all categories on subsequent manual and scheduled
+refreshes; changing it does not invalidate existing navigation IDs or require a
+developer to add exceptions for each rejected query or fragment. It does not
+apply an earlier run's results directly: a new refresh is required.
+With the policy enabled, valid results can be imported even on the first refresh
+or when skipped entries have no saved counterpart. One rejected link can
+represent a whole branch, not just one station. Where compatible saved data
+exists, missing child folders and their contents are retained under affected
+folders, and missing saved stations are retained where a station URL was skipped.
+Without saved data, the rejected entries and their undiscovered contents are
+excluded. The listing and result remain **Partial** until discovery completes
+without skipped entries; diagnostics record whether exclusions were allowed.
+With the policy off, Music still supports its existing retention-only merge
+when every affected folder has a compatible saved listing and no rebuild or
+interrupted-import repair is needed. Otherwise incomplete discovery leaves the
+library unchanged and directs administrators to the opt-in. If a retained tree
+cannot be assembled consistently, no import or checkpoint update occurs.
 Untrusted destinations and unrecovered provider request failures still fail
-the refresh.
+the refresh even with the policy enabled. Scope guards, cancellation, timeouts,
+and catalog budgets cannot be overridden by this setting.
 
 All Control Panel refreshes have up to 60 minutes for discovery and import
 combined per attempt, with a shared 5,000-page limit regardless of which

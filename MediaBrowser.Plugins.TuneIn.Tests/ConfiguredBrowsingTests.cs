@@ -40,7 +40,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 + "<outline type='audio' text='Radio' guide_id='s1'/>")));
             var before = directory.Snapshot();
             var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
-            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "HideRegionalGenres" })
+            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "HideRegionalGenres", "AllowPartialCatalogImport" })
                 legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });
             using (var xml = new StringWriter(System.Globalization.CultureInfo.InvariantCulture))
             {
@@ -57,6 +57,25 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal(new[] { "Popular", "Radio" },
                 (await browser.GetItemsAsync(folder, Token)).Items.Select(item => item.Name).OrderBy(name => name));
         }
+        [Fact]
+        public async Task PartialImportPolicyPreservesNavigationAndDiscoveryIdentity()
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var directory = new TuneInDirectory(() => config, (_, __) => Task.FromResult(Opml(
+                "<outline type='audio' guide_id='s1' text='Radio'/>")));
+            var before = directory.Snapshot();
+            var browser = new TuneInBrowsing(directory, _ => null);
+            var root = browser.CategoryRoot(before, "talk");
+            config.AllowPartialCatalogImport = true;
+            var after = directory.Snapshot();
+            Assert.Equal(before.Key, after.Key);
+            Assert.Equal(before.DiscoveryKey, after.DiscoveryKey);
+            Assert.Equal(root.Id, browser.CategoryRoot(after, "talk").Id);
+            Assert.Single((await browser.GetItemsAsync(root.Id, Token)).Items);
+            Assert.True(after.Value.AllowPartialCatalogImport);
+        }
+
         private static CatalogSelection Selection(string id, params string[] parents) =>
             new CatalogSelection { Id = id, Name = id, AncestorIds = parents.ToList() };
         private static XDocument Opml(string rows) => TuneInDirectory.ParseCatalogue(Encoding.UTF8.GetBytes(

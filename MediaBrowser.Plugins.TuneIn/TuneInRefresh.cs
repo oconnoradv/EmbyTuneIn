@@ -30,6 +30,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public int CatalogPagesLimit { get; set; } = TuneInCatalogueSession.MaxRefreshPages;
         public int RateLimitRetries { get; set; }
         public int ActiveRequests { get; set; }
+        public bool PartialImportAllowed { get; set; }
         public int? LastHttpStatus { get; set; }
         public int ImportFoldersTotal { get; set; }
         public int ImportFoldersServed { get; set; }
@@ -536,6 +537,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 try
                 {
+                    Update(() => status.PartialImportAllowed = snapshot.Value.AllowPartialCatalogImport);
                     if (!snapshot.Ready) throw new InvalidOperationException("TuneIn settings are not complete.");
                     directory.CheckCurrent(snapshot, linked.Token);
                     var enabled = snapshot.Categories.ToArray();
@@ -668,9 +670,11 @@ namespace MediaBrowser.Plugins.TuneIn
                                 throw new InvalidOperationException("TuneIn category discovery returned no successful provider fetch.");
 
                         listings.TryGetValue(category, out var previous);
+                        var allowExclusions = snapshot.Value.AllowPartialCatalogImport;
                         var categorySnapshot = staged.DiscoveryIncomplete
-                            ? (category == "music" ? staged.MergePartialMusic(previous,
-                                id => directory.Resolve(snapshot, id).StationId, IsForwardPage) : null)
+                            ? (allowExclusions || category == "music" && !importRequired
+                                ? staged.MergePartialCategory(category, previous,
+                                    id => directory.Resolve(snapshot, id).StationId, IsForwardPage, allowExclusions) : null)
                             : staged.CreateSnapshot(category);
                         if (categorySnapshot == null)
                         {
@@ -782,7 +786,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             ? (didImport ? "Partial refresh completed; valid updates applied, rejected entries excluded"
                                 : "Partial refresh completed; merged library unchanged")
                             : (categories.Length == 0 ? "No enabled categories" : "Completed");
-                        if (partial.Count != 0) status.Category = requestedCategory ?? "music";
+                        if (partial.Count != 0) status.Category = requestedCategory ?? partial.OrderBy(category => category, StringComparer.Ordinal).First();
                         status.Progress = 100;
                     }
                 }

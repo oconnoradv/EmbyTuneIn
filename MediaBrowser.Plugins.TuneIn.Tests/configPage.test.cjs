@@ -46,7 +46,7 @@ function harness(manualStatus = false, manualSave = false) {
     const form = { addEventListener: (event, handler) => { formHandlers[event] = handler; } };
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon,
         '.apiRequestIntervalSeconds': requestInterval };
-    for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.categories', '.selectors',
+    for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.categories', '.selectors',
         '.loginFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
@@ -398,6 +398,22 @@ test('only explicit selector actions fetch branches and save multiple local sele
     assert.deepEqual(Array.from(app.writes[0].config.LocalCities, item => item.Id), ['r1', 'r2']);
     assert.equal(app.writes[0].config.LocalCities[1].Enabled, false);
     assert.equal(app.selectors.length, 1);
+});
+
+test('admin partial import policy loads and saves without starting a refresh', async () => {
+    for (const enabled of [undefined, false, true]) {
+        const app = harness();
+        const visit = app.instance.onResume();
+        app.reads[0].resolve({ AllowPartialCatalogImport: enabled });
+        await visit;
+        const control = app.elements['.allowPartialCatalogImport'];
+        assert.equal(control.checked, !!enabled);
+        control.checked = !enabled;
+        app.formHandlers.submit({ preventDefault() {} });
+        await settle();
+        assert.equal(app.writes[0].config.AllowPartialCatalogImport, !enabled);
+        assert.ok(app.refresh.every(request => request.options.type === 'GET'));
+    }
 });
 
 test('invalid optional coordinates block save only when enabled', async () => {
@@ -827,6 +843,7 @@ test('partial discovery reports skipped links without implying an import', async
     app.reads[0].resolve({});
     app.refresh[0].resolve({
         State: 'Partial', Phase: 'Discovery incomplete; existing library left unchanged',
+        PartialImportAllowed: false,
         CategoriesCompleted: 1, CategoriesTotal: 2, SkippedBrowseLinks: 7,
         SkippedBrowseLinkDetails: '4 x Music: Invalid catalog fragment; 3 x Music: Invalid catalog link parameter: filter',
         LastHttpStatus: 429
@@ -835,7 +852,9 @@ test('partial discovery reports skipped links without implying an import', async
     const text = app.elements['.refreshStatus'].textContent;
     assert.match(text, /Partial - Discovery incomplete; existing library left unchanged/);
     assert.match(app.elements['.refreshWork'].textContent, /1 \/ 2 categories checked/);
-    assert.match(text, /7 malformed catalog links skipped\. TuneIn returned HTTP 429 \(Too Many Requests\)/);
+    assert.match(text, /7 malformed catalog links skipped/);
+    assert.match(text, /enable "Import valid results when catalog entries are skipped" in Catalog browsing, save, then refresh again/);
+    assert.match(text, /TuneIn returned HTTP 429 \(Too Many Requests\)/);
     assert.match(app.elements['.refreshDiagnosticsText'].textContent,
         /Skipped malformed TuneIn catalog links: 7 \(4 x Music: Invalid catalog fragment; 3 x Music: Invalid catalog link parameter: filter\)/);
     assert.equal(app.elements['.refreshLogButton'].disabled, true);
