@@ -1,380 +1,310 @@
-# TuneIn
+# TuneIn for Emby
 
-TuneIn is an Emby audio channel. Browsing is configured explicitly in the
-administrator settings page. Opening the settings page or channel root does not
-crawl the TuneIn catalog.
+TuneIn adds an audio channel to Emby with administrator-configured browsing,
+category refreshes, station counts, and live playback. Opening the settings
+page or channel root does not recursively crawl the TuneIn catalog.
+
+## Requirements and installation
+
+Use Emby Server **4.9.1.90+ stable** or a compatible **4.9.2.7+ beta**.
+The plugin assembly version is **1.2.8.0**. Release downloads include
+`build-info.json` to identify the source commit and `SHA256SUMS.txt` to verify
+the files.
+
+1. Stop Emby and back up the existing plugin DLL, TuneIn configuration,
+   `TuneIn.refresh.xml`, and `tunein-fork-settings-lock.xml` if present.
+   A full server-data backup also preserves library metadata for rollback.
+2. Replace `MediaBrowser.Plugins.TuneIn.dll` in the plugins directory.
+   Keep only one copy; do not copy dependency DLLs or reset the configuration.
+3. Restart Emby and reload its dashboard. If cached settings fields remain
+   stale, refresh the affected client's cached page data.
+
+Keep the navigation signing key in the plugin configuration private and retain
+it during upgrades. Replacing it invalidates existing item IDs. To roll back,
+stop Emby and restore the previous DLL and configuration together, with the
+corresponding refresh state. Restoring those files alone does not undo library
+metadata changes; a full server-data backup is needed for exact rollback.
 
 ## Configure browsing
 
-As an Emby administrator, open **Advanced → TuneIn** (also available from
-**Plugins → TuneIn → Settings**), enable **configured browsing after saving**,
-choose the categories to expose, and save.
+As an administrator, open **Advanced → TuneIn**, also available from
+**Plugins → TuneIn → Settings**. Unlock settings, choose the categories and
+selections to expose, enable **configured browsing after saving**, and **Save**.
 
-- **Music**, **By Language**, and **By Location** require at least one enabled
-  saved selection.
-- **Local Radio** uses one source: enabled saved cities and regions, or valid
-  coordinates. The other source is preserved but not queried. If older settings
-  enabled both, Local Radio stays unavailable until you choose one source and
-  save. This does not disable **By Location** or other configured categories.
-- **Talk**, **Sports**, and **Podcasts** have independent switches.
-- **My Favorites** requires a TuneIn username.
+| Category | Required configuration |
+| --- | --- |
+| Music | At least one enabled saved genre selection |
+| By Language | At least one enabled saved language selection |
+| By Location | At least one enabled saved location selection |
+| Local Radio | One source: saved cities/regions or coordinates |
+| Talk, Sports, Podcasts | Enable each category independently |
+| My Favorites | A TuneIn username |
 
-Open a selector and expand its branches to load choices on the first click.
-Choices appear in a fixed-height scrolling panel; use **Add** on the right of a
-row to save it without expanding it. By Language follows TuneIn's group links
-for the selected language; those groups aren't extra language selections.
-Saved paths stay visible and can be individually enabled or removed. Selectors
-do not resolve streams or recursively crawl the catalog; a failed branch can
-be retried without losing saved choices. An open branch automatically retries
-once after a temporary request failure. An incomplete branch is marked.
+Local Radio preserves both source configurations but queries only the selected
+one. If its source is ambiguous, choose regions or coordinates and save.
+Other categories remain independent. Coordinates use decimal latitude and
+longitude separated by a comma, within -90..90 and -180..180.
 
-Coordinates must be finite decimal latitude and longitude separated by a comma,
-within -90..90 and -180..180 respectively. The server validates and normalizes
-them using invariant culture. Up to 100 selections may be saved per selector.
+Expand a selector branch to load its choices. **Add**, at the right of a row,
+saves a selection without expanding it. Saved paths can be individually enabled
+or removed, with up to 100 selections per selector. Choices appear in a
+fixed-height scrolling panel. Temporary branch failures retry once; incomplete
+branches are marked, and saved choices are preserved.
 
-Category and selection scopes are checked again when browsing and resolving
-playback. This includes nested Music, Talk, and Sports items under By Language.
-Navigation IDs are signed, bounded, and survive server restarts. Configuration
-changes invalidate old IDs; return to the channel root after saving. Previously
-imported library items can remain visible until Emby refreshes channel metadata,
-but stale IDs cannot bypass current browsing or selection settings.
+**Lock settings** prevents accidental edits and saves. The lock persists across
+browser sessions and server restarts. **Save** locks settings after a successful
+save; unlock them to edit again. Locking does not save pending changes or stop
+a refresh. Settings sections can be collapsed without losing unsaved choices.
+Buttons use the active user's native Emby theme.
 
-## Configuration migration
+### Browsing options
 
-Existing configuration retains its TuneIn username and coordinate text. A
-configuration without schema version 1 remains disabled: no categories or the
-browsing gate are enabled automatically from the old username or coordinates.
-Save the settings with the explicit choices and browsing opt-in to enable
-browsing. Leaving the opt-in unchecked keeps the channel disabled.
+- **Hide genre folders in Local Radio and By Location** skips recognized
+  regional genre links while retaining stations, popular listings, and
+  pagination. Refresh the affected categories after changing it.
+- **Import valid results when catalog entries are skipped** permits partial
+  imports of valid results when malformed trusted provider links are skipped.
+  See [Partial results](#partial-results).
+- **API request interval** sets minimum request spacing from 1 to 30 seconds,
+  defaulting to 3. TuneIn retry delays take precedence.
 
-The first saved configuration persists a server-generated navigation signing
-key in the plugin configuration. Normal settings saves retain this key; deleting
-or replacing it invalidates existing navigation IDs. The upstream plugin GUID,
-assembly name, configuration filename, and assembly version remain unchanged.
-The plugin thumbnail and TuneIn channel images use TuneIn's 544 × 306
-**Powered by TuneIn** artwork; category folders retain their bundled artwork.
+Both checkboxes default to checked when the settings are absent. Explicitly
+saved unchecked choices remain unchanged. Changing these options does not
+change existing navigation IDs.
 
-Legacy URL-based `subcat_`, `preset_`, and `stream_` item IDs are not accepted.
-Old library entries may remain until Emby refreshes channel metadata; return to
-the channel root to obtain current signed IDs.
+Browsing and playback enforce the saved category and selection scopes,
+including nested Music, Talk, and Sports items under By Language. Navigation
+IDs are signed and bounded and survive restarts. Scope changes invalidate
+affected IDs; return to the channel root after saving. Stale library entries
+cannot bypass the current settings.
 
-## Refresh from the Control Panel
+Configurations without schema version 1 retain their username and coordinates
+but do not automatically enable browsing or categories. Save explicit choices
+to enable browsing. Legacy URL-based `subcat_`, `preset_`, and `stream_` IDs are
+not accepted.
 
-**Categories**, **By Language**, **By Location**, **Music genres**, and
-**Local Radio** can each be collapsed without losing unsaved choices. These
-sections start expanded before the first save and collapsed on later visits.
-Save your browsing settings. **Catalog Refresh** opens expanded and can be
-collapsed. Opening the panel reads status; it does not start a refresh.
-Choose **Refresh** beside a category to check it, or **Refresh all enabled
-categories** to check them all. Next to each category, choose **Off**, **Every 6
-hours**, **Every 12 hours**, **Daily**, or **Weekly**, then select **Save**.
-Schedules are off by default and run only for enabled categories. The interval
-starts when the plugin detects the saved choice or Emby starts; missed runs
-aren't replayed after downtime. Scheduled and manual runs never overlap.
-In **Catalog browsing**, set the minimum API request interval from 1 to 30
-seconds; the default is 3 seconds, and TuneIn's retry delays are always honored.
-Previously saved intervals above 30 seconds are treated as 30 seconds.
-If TuneIn returns HTTP 429 during discovery, the refresh retries the affected page
-with a shared budget of three retries for the entire run. Consecutive rate limits
-impose cooldowns of 30, 60, then 120 seconds; a longer `Retry-After` takes precedence.
-Each catalogue rate limit also doubles the effective catalogue request interval,
-up to 30 seconds. After every 20 consecutive successful catalogue responses, the
-learned interval drops by one second toward the configured minimum. This does
-not change saved settings or ordinary playback request intervals.
-Refresh discovery can overlap two independent catalog requests and process
-cached pages while another response is pending. All requests still share the
-same minimum spacing between starts. On HTTP 429 or a `Retry-After` cooldown,
-new requests wait and catalog discovery uses one request at a time until 20
-successful catalog responses. Pagination still follows each validated page.
-The collapsible **Catalog Refresh** heading keeps the current state visible
-when minimized. Its live metrics show elapsed time, last progress, unique
-catalog pages against the safety limit, and category progress; during import,
-the work metric switches to folders served out of the known total. Expand
-**Diagnostics** for provider attempts and successes, cached-page replays,
-active HTTP requests, rate-limit retries, checkpoint resume, and skipped-link
-details. Discovery does not show a percentage or ETA based on the page limit,
-because the limit is a safety cap rather than an expected catalog size.
+## Refresh the catalog
 
-**Hide genre folders in Local Radio and By Location** is on by default. When
-enabled, it skips recognized regional genre links while keeping stations,
-popular listings and pagination. Refresh the affected categories to update
-their imported listings. The option does not change existing navigation IDs.
-Cancellation and the overall refresh timeout still apply during waits.
-If the retry budget is exhausted, no partial catalog is imported. Wait before
-retrying; adaptation cannot guarantee acceptance by TuneIn or bypass its limits.
-The Control Panel shows the HTTP code and its meaning, for example
-**HTTP 429 (Too Many Requests)**. If the run succeeds after retrying, the status
-labels the earlier 429 as recovered and confirms that the refresh completed normally.
+Save browsing settings before refreshing. In **Catalog Refresh**, select
+**Refresh** beside a category or **Refresh all enabled categories**. Opening
+the panel reads status without starting a refresh; leaving it stops polling,
+not the server-side run.
 
-A malformed query or fragment on a trusted TuneIn child browse link or Music
-station fallback URL does not stop Control Panel discovery of valid siblings.
-If any links are skipped, the refresh reports
-**Partial** and shows the total and counts grouped by category and validation
-reason. It shows up to five groups and combines the rest into an “other” count.
-In **Catalog browsing**, administrators can enable **Import valid results when
-catalog entries are skipped**, then **Save** and refresh again. This policy is
-on by default and applies to all categories on subsequent manual and scheduled
-refreshes; changing it does not invalidate existing navigation IDs or require a
-developer to add exceptions for each rejected query or fragment. It does not
-apply an earlier run's results directly: a new refresh is required.
-Both options default to checked for new configurations and configurations
-without these settings; explicitly saved unchecked choices remain unchanged.
-With the policy enabled, valid results can be imported even on the first refresh
-or when skipped entries have no saved counterpart. One rejected link can
-represent a whole branch, not just one station. Where compatible saved data
-exists, missing child folders and their contents are retained under affected
-folders, and missing saved stations are retained where a station URL was skipped.
-Without saved data, the rejected entries and their undiscovered contents are
-excluded. The listing and result remain **Partial** until discovery completes
-without skipped entries; diagnostics record whether exclusions were allowed.
-With the policy off, Music still supports its existing retention-only merge
-when every affected folder has a compatible saved listing and no rebuild or
+Discovery finishes before any import begins. When changes require an import,
+the plugin supplies Emby with the **complete staged channel tree**, including
+saved sibling categories. A single-category refresh fetches only that category.
+Unchanged catalogs skip import unless reconciliation is needed.
+
+Saving additional enabled categories preserves listings and refresh history for
+unchanged scopes. Categories not yet imported remain pending until their first
+successful refresh. If a previously imported sibling listing is unavailable or
+its scope has changed, refresh it first or use **Refresh all enabled categories**.
+A missing or incompatible catalog baseline requires a full refresh.
+
+One refresh runs at a time, with up to two distinct requests waiting.
+**Cancel refresh** cancels the active run and clears the queue. Queued requests
+do not survive a restart. After a failure, choosing another category offers
+**Retry previous first** or **Prioritize new refresh**.
+
+Emby imports are not transactional. An interrupted import may have changed
+metadata; the next valid refresh supplies the complete catalog for
+reconciliation, even if discovery finds no changes. Prioritizing another
+category does not remove that repair requirement.
+
+### Schedules
+
+Choose **Off**, **Every 6 hours**, **Every 12 hours**, **Daily**, or **Weekly**
+beside a category, then **Save**. Schedules default to off and apply only to
+enabled categories. Intervals begin when the plugin detects the setting or
+Emby starts; missed runs are not replayed after downtime.
+
+Manual and scheduled runs share the same queue and never overlap. The plugin
+owns these schedules; it does not create, edit, or trigger Emby Scheduled Tasks.
+Emby's native channel refresh can browse the configured catalog, but its
+callbacks are not reported as successful Control Panel imports.
+
+### Partial results
+
+Malformed queries or fragments on trusted TuneIn child links can be skipped
+without aborting valid sibling discovery. With **Import valid results when
+catalog entries are skipped** enabled, this also permits exclusion-based
+imports across categories, including malformed trusted station fallback URLs.
+
+Compatible saved branches are retained where affected folders could not be
+fully rediscovered. Saved stations are retained where station fallback URLs
+were skipped. Without saved counterparts, rejected entries and their
+undiscovered contents are excluded. A rejected link can represent an entire
+branch, not just one station. Valid results can be imported without a previous
+baseline, but the outcome and saved listing remain **Partial**.
+
+With the option disabled, Music can still apply a retention-only merge when
+every affected folder has a compatible saved listing and no rebuild or
 interrupted-import repair is needed. Otherwise incomplete discovery leaves the
-library unchanged and directs administrators to the opt-in. If a retained tree
-cannot be assembled consistently, no import or checkpoint update occurs.
-Untrusted destinations and unrecovered provider request failures still fail
-the refresh even with the policy enabled. Scope guards, cancellation, timeouts,
-and catalog budgets cannot be overridden by this setting.
+library unchanged. An inconsistent retained tree also prevents import.
 
-After a refresh with skipped entries, use **Retrieve refresh log** even if its
-result is **Partial**, not **Error**. The administrator-only report includes
-the outcome, grouped skip counts, and up to 100 skipped-entry examples within
-a 64 KB report. Each example records a timestamp, category, rejection reason,
-source catalog page, and rejected link's navigation query values and fragment.
-Repeated parameter values are identified and field truncation is marked.
-Non-navigation parameters (including usernames, coordinates, serials, partner
-IDs, and tokens) are omitted; credential-like assignments embedded in captured
-values are redacted. Entry labels, full provider responses, and signed item IDs
-are not captured. Review reports before sharing: exception stack traces may
-still contain private server details. Details are kept in memory for the latest
-attempt, are not part of ordinary status polls or routine logs, and clear on a
-new refresh, scope reset, or server restart. Capture starts with this build;
-it cannot reconstruct rejected links from earlier refreshes.
+The setting never overrides unsafe destinations, selection or pagination scope
+violations, unrecovered request failures, cancellation, timeouts, or catalog
+budgets. Changing it applies to the next manual or scheduled refresh; it cannot
+apply previously fetched results without another discovery.
 
-Each enabled category displays station counts to the left of **Refresh**:
-**Available (filtered)** counts distinct station IDs found by the latest
-completed discovery, before any retained saved entries are merged; **Partial**
-marks a lower bound when links were skipped. **In Emby** counts distinct station
-IDs actually present under that category's Emby folder, checked before discovery
-and again after a verified import. Counts are snapshots, not continuously polled
-database/provider queries; hover a value for its check time. Counts saved with a
-successful refresh survive server restarts. A withheld partial discovery updates
-the current dashboard count but leaves the saved catalog untouched.
-Unrecorded counts say **Not checked**, inventory failures say **Unavailable**,
-and interrupted imports require reconciliation rather than showing stale counts
-as authoritative. Only filtered availability and Emby inventory are shown;
-no unfiltered catalog crawl is started to calculate station counts.
-Dashboard actions use native Emby buttons, including Cancel and Back, so their
-normal, focused, and disabled colors follow the active user's Emby theme rather
-than plugin-defined button colors.
+### Status and station counts
 
-All Control Panel refreshes have up to 60 minutes for discovery and import
-combined per attempt, with a shared 5,000-page limit regardless of which
-categories are selected. During discovery, the plugin checkpoints validated
-catalog pages separately from the imported library at the first completed
-folder after each 20-minute interval. A discovery timeout is recorded and
-automatically retried up to ten times after the initial attempt. The Control Panel
-shows the active retry number, for example **Automatic retry 2 of 10 after
-discovery timed out**. The server log records each automatic retry as it starts.
-Retries begin without administrator action after the timed-out attempt drains.
-An HTTP or host operation that ignores cancellation can delay that drain.
-Catalog HTTP requests have a 90-second response deadline, including body reads
-but excluding pacing and provider cooldowns. A response deadline during
-discovery uses the same checkpoint and automatic retry path. The Control Panel
-shows the last progress time and distinguishes a provider wait from a request
-that has reached its deadline.
-Before retrying, a discovery timeout also saves any
-additional validated pages, if the checkpoint can still be saved. Retries reuse
-checkpointed pages without requesting them again; the interrupted page may be
-requested again.
-After a server restart, starting the same refresh can also reuse the checkpoint
-if the settings still match and discovery began less than 48 hours ago.
-Cancellation stops automatic retries, and an import timeout is not retried
-automatically. The refresh page cache holds up to 40 MiB of validated catalog
-pages. Page, byte, folder, and item limits still apply, as does rate-limit backoff.
-The Emby server log records per-attempt timings for discovery, HTTP fetching,
-pacing, TuneIn backoff, cached page parsing, and import, plus the effective
-catalogue request interval range. It does not include TuneIn request URLs.
-A timeout during discovery does not import an incomplete tree.
-Forward pages within the same catalog listing do not count toward the
-eight-level folder nesting limit. They still count toward the page and folder
-budgets.
+The collapsible **Catalog Refresh** heading keeps the current state visible.
+Live metrics show elapsed time, last progress, category progress, and catalog
+pages against the safety limit. During import, progress switches to folders
+served out of the known total. Discovery does not estimate a percentage or ETA
+from the page cap.
 
-The **Retrieve refresh log** button becomes available when the latest Control
-Panel refresh fails. It retrieves a bounded error report for that run, not the
-full Emby server log. The report is available until another refresh starts or
-the server restarts, and may contain private server details; redact it before
-sharing.
+**Diagnostics** shows provider attempts and successes, cached-page replays,
+active HTTP requests, rate-limit retries, checkpoint resume, and skipped-link
+counts grouped by category and reason. Up to five reason groups are displayed;
+the rest are combined into an “other” count. HTTP errors have readable labels,
+and recovered rate limits are identified after a completed run.
 
-Use **Lock settings** at the top of the TuneIn page to prevent accidental
-edits and saves. The lock persists on the server across browser sessions and
-restarts. **Save** turns the switch on after the configuration is successfully
-saved. Turn it off to edit again. Turning it on manually does not save pending
-edits or stop catalog refresh.
-Only administrators can configure schedules, start or cancel a run, or read
-progress. Leaving the page stops status polling, not the server run. The plugin
-owns these schedules and doesn't register, edit, or trigger any Emby Scheduled Tasks.
-Emby's built-in channel refresh still uses the shared catalog browse path.
-The plugin has no per-category outcome signal for that native task and does not
-report a browse callback as a successful import.
+Each category shows two counts to the left of **Refresh**:
 
-The plugin caches its last successfully imported TuneIn catalog for the
-saved scopes, not a copy of Emby's library database. Browse can use that
-snapshot while a Control Panel refresh discovers fresh data. Before the first
-successful import there is no snapshot, so browsing follows the normal provider
-path. Playback still resolves live and old IDs cannot bypass the saved scopes.
+| Count | Meaning |
+| --- | --- |
+| Available (filtered) | Distinct station IDs found by the latest completed discovery, before saved entries are retained or merged. Partial marks a lower bound. |
+| In Emby | Distinct station IDs actually present under the category's Emby folder, checked before discovery and after a verified import. |
 
-Refresh discovers changes at the **category level**. If an import is needed,
-the plugin sends Emby the **complete channel tree** so Emby doesn't drop sibling
-categories. A single-category refresh discovers only the requested category
-and reuses saved listings for its siblings. Saving additional enabled categories
-preserves the completed status and listings of categories whose scopes haven't
-changed. New categories can then be refreshed individually, including after a
-server restart; categories not yet imported remain pending and aren't included
-in the imported tree until their first successful refresh.
-If an existing sibling's listing is missing or its scope changed, refresh that
-category first, or use **Refresh all enabled categories**. An outdated baseline
-from an earlier RC1 still requires a full refresh.
-Incomplete discovery blocks the import unless Music can safely merge with a
-saved listing as described above. Unchanged catalogs skip import unless the
-library needs reconciliation.
-The error report identifies the category where discovery stopped.
-Music discovery follows verified TuneIn genre aliases (such as Smooth Jazz, Metal and Punk) for
-station and show pagination, but rejects page links into unrelated genres.
+Counts are snapshots; hover a value for its check time. Counts saved with a
+successful refresh survive restarts. A withheld partial discovery updates the
+current dashboard count without replacing the saved catalog. **In Emby** retains
+its last successful value and check time when the page reopens or a later
+inventory read fails. If a read fails or an import needs reconciliation, the
+value is labeled **last known**, with the warning and successful check time in
+its tooltip. Unrecorded values say **Not checked**; a failed inventory read
+without a previous value says **Unavailable**. A successful check, including
+zero stations, replaces the saved value and clears the read warning. Status
+polling does not recrawl TuneIn or query the library inventory.
 
-After upgrading from an earlier RC1 with an outdated baseline, use **Refresh
-all enabled categories** to rebuild it. During the Emby import, channel
-callbacks receive the complete staged tree, including callbacks on separate workers.
+### Diagnostic reports
 
-Category folders use the bundled TuneIn artwork. Emby may keep older folder
-images after an upgrade; explicitly refresh the affected category to update
-existing folder artwork, even when its catalog is unchanged. The refresh also
-updates the saved Primary, Thumb, and first Backdrop images on the top-level
-TuneIn library item to **Powered by TuneIn**.
+After a failed refresh or a run with skipped entries, select **Retrieve refresh
+log**. This administrator-only report covers the latest attempt, not the full
+Emby server log. It is also available for **Partial** outcomes.
 
-Emby's import isn't transactional. If cancellation, failure, or restart
-interrupts an import, some metadata may already have changed. The next valid
-refresh imports the complete catalog even if the requested listings are
-unchanged. A category-only repair uses the saved sibling listings if the
-baseline is current. Browse availability during Emby's import isn't guaranteed.
+Reports include the outcome, grouped skip counts, and up to 100 skipped-entry
+examples within a 64 KB report. Examples record the timestamp, category,
+rejection reason, source page, and rejected navigation query values and
+fragment. Duplicate parameters and truncation are identified.
 
-If a category refresh failed or an import was interrupted, selecting a
-different category lets you **Retry previous first** (the new request waits)
-or **Prioritize new refresh** (no separate retry is queued). An interrupted
-import still needs the complete catalog repair whichever option you choose.
-One refresh runs at a time, with up to two distinct requests waiting in order.
-**Cancel refresh** cancels the active run and clears the waiting requests;
-waiting requests also don't survive a server restart.
+Non-navigation parameters, including usernames, coordinates, serials, partner
+IDs, and tokens, are omitted. Embedded credential-like assignments are
+redacted. Entry labels, full provider responses, and signed item IDs are not
+captured. Review reports before sharing: exception traces may contain private
+server details.
 
-### Manual testing
+Reports remain in memory until a new refresh, scope reset, or server restart.
+Detailed rejected links are not included in routine status polls or refresh
+summary logs and cannot be reconstructed from past aggregate skip counts.
 
-Use a test server. Run **Refresh all enabled categories** from the TuneIn
-Control Panel, then reload the Emby client. Confirm that the top-level library
-tile shows **Powered by TuneIn** and category images are still distinct.
-After a failed refresh, select another category, check both choices in the
-prompt, and confirm the waiting list and buttons update as slots become free.
-After installing, open, leave, and
-reopen TuneIn settings while a response is pending: the native transition and
-loader should settle,
-and stale responses should not update the page. Keyboard-open selected Location
-and Language branches, try **Add** separately, and check saved paths and retry
-feedback. With Local Radio on, alternate between saved regions and coordinates
-and verify that Browse and Refresh use only the selected source. With legacy
-settings enabling both, only Local Radio should be unavailable until corrected.
+### Request limits and recovery
 
-Confirm **Catalog Refresh** opens expanded and can be collapsed. Refresh one
-category after establishing a baseline and verify the other categories and
-their stations still exist in Emby's library. Set one category's interval, save,
-then enable two more categories and save again. Verify the previously refreshed
-categories retain their completed status. Refresh each new category separately,
-checking that only the requested category is fetched and existing library
-categories remain. Restart between saves and refreshes to check persisted state.
-Set a category interval again if needed, save,
-and verify it refreshes with the Control Panel closed. Before and after a refresh, compare Scheduled Tasks for new entries, triggers,
-or runs: none should have changed because of the Control Panel action. Establish
-a successful baseline, browse it during another discovery, and check that
-unchanged scopes are skipped and changed scopes still list unchanged stations.
-Verify the API interval accepts 1 and 30 seconds, rejects values outside that
-range, and delays requests accordingly. Cause a refresh error and retrieve its
-report; verify the button is unavailable after a successful new run.
-Interrupt an import on the test server, restart, and check reconciliation on the
-next explicit run. Separately run Emby's built-in channel refresh and verify
-that it can browse the configured catalog without changing Control Panel
-status. These are host checks, not guarantees from the mocked tests.
+| Limit | Behavior |
+| --- | --- |
+| Refresh attempt | Up to 60 minutes for discovery and import combined |
+| Catalog cache | Up to 5,000 pages and 40 MiB per refresh |
+| Catalog HTTP response | 90 seconds including body reads, excluding pacing and provider cooldowns |
+| Discovery checkpoint | At the first completed folder after each 20-minute interval, and on discovery timeout when possible |
+| Automatic discovery retries | Up to 10 after the initial attempt, reusing validated checkpoint pages |
+| Checkpoint resume window | 48 hours from discovery start, with matching settings and requested category scope |
+| Folder depth | Eight levels; forward pagination does not consume depth but still consumes page and folder budgets |
 
-## Pre-roll and live playback
+Discovery can overlap two independent requests without reducing shared spacing
+between request starts. HTTP 429 responses have a run-wide budget of three
+retries, with consecutive minimum cooldowns of 30, 60, and 120 seconds. Longer
+`Retry-After` delays take precedence. Rate limiting doubles the effective
+catalog interval up to 30 seconds and temporarily returns discovery to serial
+requests. Every 20 consecutive successful responses restores overlap and
+reduces the learned interval by one second toward the configured minimum.
+Saved settings and ordinary playback intervals are unchanged.
 
-All configured categories share the same playback resolver. When TuneIn returns
-its recognized separate introduction followed by station alternatives, the plugin
-plays the introduction and then **one** working live alternative as a single Emby
-media item. It does not expose the short introduction as a separate station,
-skip required introductions, or queue all alternative URLs. The verified
-introduction is TuneIn's HTTPS
-`tunein-ondemand.cdnstream1.com/multi_bump_sonic_pre_pre.mp3` asset; arbitrary
-short audio files are not treated as advertisements. The rule also applies to
-supported nested M3U/PLS lists, with URL case and query values preserved.
+A discovery timeout saves additional validated pages when possible, then
+retries after active work drains. The interrupted page may be requested again.
+After a server restart, starting the same refresh can reuse a matching
+checkpoint. Cancellation stops automatic retries; import timeouts are not
+automatically retried. Host operations that ignore cancellation can delay
+draining. Discovery timeouts do not publish incomplete trees.
 
-Ordinary stations, including continuous KEXP-style streams with in-stream
-advertisements, keep their direct playback path. Only separate-introduction
-stations use a server-loopback `/TuneIn/Playback/{signed-item}` endpoint.
-It validates the saved category/selection scope and retains the Favorites
-username. Probe and playback requests have independent lifetimes and re-fetch
-provider playback information. Saving a changed browsing scope cancels affected
-handoff sessions; leaving or stopping playback releases their responses and
-decoders.
+The server log records automatic retries and per-attempt timings for discovery,
+HTTP fetching, pacing, backoff, cached parsing, and import. Rate adaptation
+does not guarantee provider acceptance or bypass TuneIn limits.
 
-API and handoff media requests still use Emby's injected `IHttpClient` and shared
-request pacing, not a new socket, proxy, DNS or TLS implementation. Handoff media
-bodies are streamed, not buffered in full. For separate introductions, Emby's
-configured FFmpeg decodes each MP3/AAC input to 48 kHz stereo PCM behind one WAV
-header so an MP3 introduction can transition to AAC music without ending the
-item or inheriting ad-only probe metadata. This uses additional server CPU and a
-local audio connection; the host must supply a runnable FFmpeg executable and
-allow its child processes. FFmpeg receives audio bytes through pipes, not remote
-URLs. Missing decoders or failed required introductions fail explicitly rather
-than silently dropping the introduction.
+### Saved catalog and artwork
 
-Each playlist is limited to 256 KiB and eight entries, with at most four nested
-playlist levels, 16 nested playlist requests and 16 audio opening attempts per
-handoff. Up to 16 handoff requests (including probes) can be active. Opening
-timeouts allow 30 seconds plus the configured pacing interval; playlist body
-reads have a 30-second budget. Failed live opening can try another advertised
-alternative; read/decoder failures after selection terminate the stream without
-restarting the ad or cycling alternatives.
+The saved catalog is the plugin's last successfully imported listing, not a
+copy of Emby's database. Browsing can use it while a Control Panel refresh
+discovers fresh data. Without a saved snapshot, browsing uses the provider.
+Playback still resolves live and enforces current scopes. Availability during
+Emby's import is not guaranteed.
 
-On a test server, play asia DREAM and Big B Radio from Favorites and another
-configured category. Confirm the introduction reaches sustained music without
-advancing the playlist. Check KEXP, Stop, changing stations, leaving playback,
-and saving a disabled category during playback. These host checks remain
-necessary; automated codec and mocked API tests do not establish end-to-end
-behavior on a live Emby installation.
+Category folders use bundled artwork. Refreshing a category updates its saved
+folder artwork even when the catalog is unchanged. Refresh also updates the
+top-level TuneIn library item's Primary, Thumb, and first Backdrop images to
+the **Powered by TuneIn** artwork.
+
+## Playback
+
+All configured categories share the playback resolver. Ordinary continuous
+stations use direct playback. For TuneIn's recognized separate introduction
+followed by live alternatives, the plugin plays the introduction and then
+**one** working alternative as a single Emby media item. It does not expose
+the introduction as a station, skip required introductions, or queue all
+alternatives.
+
+Recognition is limited to TuneIn's HTTPS
+`tunein-ondemand.cdnstream1.com/multi_bump_sonic_pre_pre.mp3` introduction;
+arbitrary short files are not treated as advertisements. Supported nested
+M3U/PLS responses use the same rule, preserving URL case and query values.
+
+Separate-introduction playback uses the server-loopback
+`/TuneIn/Playback/{signed-item}` endpoint and Emby's configured FFmpeg. MP3/AAC
+inputs are decoded to 48 kHz stereo PCM behind one WAV header, allowing mixed
+codecs without ending the item. The host must allow FFmpeg child processes and
+a local audio connection; decoding adds CPU cost. FFmpeg receives audio through
+pipes, not remote URLs. Missing decoders or failed required introductions fail
+explicitly.
+
+Playback and probe requests have independent lifetimes and re-fetch provider
+information. Scope validation retains the Favorites username. Scope changes
+cancel affected handoff sessions; stopping or leaving playback releases
+responses and decoders. Failed live opening can try another advertised
+alternative. Failures after selection terminate the stream without replaying
+the introduction or cycling alternatives.
+
+Each playlist is limited to 256 KiB and eight entries, with up to four nested
+levels, 16 nested requests, and 16 audio opening attempts per handoff. Up to 16
+handoff requests, including probes, can be active. Opening allows 30 seconds
+plus the configured pacing interval; playlist body reads have a 30-second
+budget. Media bodies are streamed rather than buffered in full.
+
+Requests use Emby's injected HTTP client and shared pacing. Connections,
+redirects, proxy behavior, and network destination protections remain the
+responsibility of the installed Emby client/server. Keep the host patched;
+the local handoff is not a network sandbox. Handoff supports the recognized
+MP3/AAC sequence, not arbitrary ad formats, DRM, or HLS sequencing. Ordinary
+HLS destinations remain on Emby's native direct playback path.
 
 ## Build and test
 
-> [!IMPORTANT]
-> The Control Panel's scoped refresh requires `MediaBrowser.Server.Core`
-> **4.9.1.90** at build time for Emby's channel import API. This is the
-> version proposed in [MediaBrowser/TuneIn#3](https://github.com/MediaBrowser/TuneIn/pull/3);
-> this branch pins it directly and does not depend on that PR merging.
-> For manual testing, use Emby Server **4.9.1.90+ stable** or a compatible
-> **4.9.2.7+ beta**. The plugin DLL's own version remains **1.2.8.0**.
-
-Build the plugin with a .NET SDK:
+The project references `MediaBrowser.Server.Core` **4.9.1.90** and
+`System.Memory` **4.6.3**. Build with a .NET SDK:
 
 ```powershell
 dotnet build MediaBrowser.Plugins.TuneIn\MediaBrowser.Plugins.TuneIn.csproj -c Release
 ```
 
-Run the .NET tests with a .NET 8 SDK:
+Run the C# tests with a .NET 8 SDK:
 
 ```powershell
 dotnet test MediaBrowser.Plugins.TuneIn.sln -c Release
 ```
 
-For the real MP3-introduction/AAC-live decoding regression, set
-`TUNEIN_TEST_FFMPEG` to a runnable FFmpeg executable before running the .NET
-tests. That regression is skipped when the variable is absent; the remaining
-playback tests use mocked HTTP responses and decoders.
+Set `TUNEIN_TEST_FFMPEG` to a runnable FFmpeg executable to include the real
+mixed-codec handoff and decoder/cancellation regressions. Those tests are
+skipped without it; other playback tests use mocked responses and decoders.
 
 Run the settings controller tests with Node.js:
 
@@ -382,22 +312,11 @@ Run the settings controller tests with Node.js:
 node --test MediaBrowser.Plugins.TuneIn.Tests\configPage.test.cjs
 ```
 
-The .NET tests cover configuration validation, lazy selectors, category and
-selection scope enforcement, signed navigation, playback-ID compatibility,
-and TuneIn pagination, including Location links with `filter=s:~#:country`.
-The Node tests cover the native settings lifecycle, visible Emby checkboxes,
-selector laziness, form validation, and stale asynchronous responses.
-
-## Limitations
-
-Connections, redirects, proxy behavior and destination protections remain the
-responsibility of the installed Emby HTTP client/server; the local handoff is not
-a replacement network sandbox. Keep the host patched. Separate-introduction
-handoff supports the verified provider sequence and MP3/AAC audio, not arbitrary
-ad formats, DRM or HLS sequencing. Ordinary HLS destinations remain on Emby's
-native direct playback path. Unsupported required sequences fail rather than
-skip ads. No live Emby authentication, playback or dashboard runtime validation
-is implied by the automated build and tests.
+Tests cover configuration defaults and persistence, selectors, scope enforcement,
+signed navigation, pagination, partial imports and retention, refresh recovery,
+diagnostic bounds and redaction, station inventory, playback, native dashboard
+lifecycle, form validation, and stale asynchronous responses. Automated results
+do not establish compatibility with every Emby host or provider response.
 
 The project is based on [MediaBrowser/TuneIn](https://github.com/MediaBrowser/TuneIn)
-and is distributed under the terms in [LICENSE.md](LICENSE.md).
+and is distributed under [LICENSE.md](LICENSE.md).

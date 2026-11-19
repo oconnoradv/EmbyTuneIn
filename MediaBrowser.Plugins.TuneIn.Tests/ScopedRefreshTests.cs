@@ -993,6 +993,78 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
+        [InlineData(0)]
+        [InlineData(7)]
+        public async Task LastKnownEmbyCountSurvivesFailedReadsRestartAndReconciliation(int inventory)
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var directory = new TuneInDirectory(() => config, (_, __) => Task.FromResult(
+                XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>")));
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-last-count-{Guid.NewGuid():N}.xml");
+            var store = new TuneInRefreshStore(path);
+            var failRead = false;
+            var currentInventory = inventory;
+            var now = DateTime.UtcNow;
+            TuneInRefresh Create() => new TuneInRefresh(directory, store, () => channel,
+                (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                (_, staged, __, token) =>
+                {
+                    ReadStagedTree(staged, token);
+                    return Task.CompletedTask;
+                }, null, clock: () => now, countStations: (_, __, ___) => failRead
+                    ? throw new IOException("Synthetic inventory failure.") : currentInventory);
+            try
+            {
+                DateTime? checkedAt;
+                using (var refresh = Create())
+                {
+                    refresh.Start();
+                    await WaitUntilIdle(refresh);
+                    var counts = Assert.Single(refresh.Status().Categories).StationCounts;
+                    Assert.Equal(inventory, counts.EmbyStations);
+                    checkedAt = counts.EmbyCheckedUtc;
+                    Assert.NotNull(checkedAt);
+                }
+                failRead = true;
+                now = now.AddHours(1);
+                using (var reopened = Create())
+                {
+                    Assert.Equal(inventory, Assert.Single(reopened.Status().Categories).StationCounts.EmbyStations);
+                    reopened.Start("talk");
+                    await WaitUntilIdle(reopened);
+                    Assert.Equal("Completed", reopened.Status().State);
+                    var counts = Assert.Single(reopened.Status().Categories).StationCounts;
+                    Assert.Equal(inventory, counts.EmbyStations);
+                    Assert.Equal(checkedAt, counts.EmbyCheckedUtc);
+                    Assert.Equal("Emby inventory read failed; check server log", counts.EmbyCountError);
+                }
+                var checkpoint = store.Read();
+                var persisted = Assert.Single(checkpoint.Categories).StationCounts;
+                Assert.Equal(inventory, persisted.EmbyStations);
+                Assert.Equal(checkedAt, persisted.EmbyCheckedUtc);
+                checkpoint.DirtyCategory = "talk";
+                store.Write(checkpoint);
+                using var restored = Create();
+                var saved = Assert.Single(restored.Status().Categories).StationCounts;
+                Assert.Equal(inventory, saved.EmbyStations);
+                Assert.Equal(checkedAt, saved.EmbyCheckedUtc);
+                Assert.Equal("Import needs reconciliation", saved.EmbyCountError);
+                failRead = false;
+                currentInventory = 0;
+                now = now.AddHours(1);
+                restored.Start();
+                await WaitUntilIdle(restored);
+                Assert.Equal("Completed", restored.Status().State);
+                var recovered = Assert.Single(restored.Status().Categories).StationCounts;
+                Assert.Equal(0, recovered.EmbyStations);
+                Assert.Equal(now, recovered.EmbyCheckedUtc);
+                Assert.Null(recovered.EmbyCountError);
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Theory]
         [InlineData(false)]
         [InlineData(true)]
         public async Task InventoryReadFailureIsExplicitAndCancellationIsNotSwallowed(bool cancel)

@@ -451,7 +451,6 @@ namespace MediaBrowser.Plugins.TuneIn
             var copy = counts.Copy();
             if (dirtyCategory != null)
             {
-                copy.EmbyStations = null;
                 copy.EmbyCountError = "Import needs reconciliation";
             }
             return copy;
@@ -480,8 +479,11 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 if (!categoryCounts.TryGetValue(category, out var counts))
                     categoryCounts[category] = counts = new TuneInStationCounts();
-                counts.EmbyStations = count;
-                counts.EmbyCheckedUtc = clock();
+                if (count.HasValue)
+                {
+                    counts.EmbyStations = count;
+                    counts.EmbyCheckedUtc = clock();
+                }
                 counts.EmbyCountError = errorMessage;
             }
         }

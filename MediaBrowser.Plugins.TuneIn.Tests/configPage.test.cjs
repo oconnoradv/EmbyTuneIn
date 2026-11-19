@@ -660,6 +660,43 @@ test('category counts show only filtered availability and Emby inventory left of
     app.instance.onPause();
 });
 
+test('In Emby keeps last known values and timestamps when the settings screen reopens', async () => {
+    for (const inventory of [0, 7]) {
+        const app = harness(true);
+        app.elements['.tuneInRefresh'].open = true;
+        const checkedAt = '2026-11-19T10:00:00Z';
+        const status = { State: 'Completed', Busy: false, Categories: [
+            { Category: 'talk', Name: 'Talk', State: 'Imported',
+                StationCounts: { AvailableStations: 8, EmbyStations: inventory, EmbyCheckedUtc: checkedAt } }
+        ] };
+        let visit = app.instance.onResume();
+        app.reads[0].resolve({});
+        app.refresh[0].resolve(status);
+        await visit;
+        await settle();
+        const value = () => app.instance.refreshCategoryRows.get('talk').counts.emby;
+        assert.equal(value().textContent, String(inventory));
+        app.instance.onPause();
+        visit = app.instance.onResume();
+        app.reads[1].resolve({});
+        app.refresh[1].resolve(status);
+        await visit;
+        await settle();
+        assert.equal(value().textContent, String(inventory));
+        assert.match(value().attributes.title, /inventory checked at/i);
+        [...app.timers.values()][0].handler();
+        app.refresh[2].resolve({ ...status, Categories: [{ ...status.Categories[0],
+            StationCounts: { ...status.Categories[0].StationCounts,
+                EmbyCountError: 'Emby inventory read failed; check server log' } }] });
+        await settle();
+        assert.equal(value().textContent, inventory + ' (last known)');
+        assert.match(value().attributes.title, /Last successful inventory check:/);
+        assert.match(value().attributes.title, /inventory read failed/);
+        app.instance.onPause();
+        assert.equal(app.selectors.length, 0);
+    }
+});
+
 test('collapsing browsing settings, including Music genres, keeps choices and does not start provider requests', async () => {
     const app = harness();
     const visit = app.instance.onResume();

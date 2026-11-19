@@ -482,14 +482,22 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             }
             values.available.textContent = count(metrics.AvailableStations)
                 + (metrics.AvailablePartial && typeof metrics.AvailableStations === 'number' ? ' (partial)' : '');
-            values.emby.textContent = metrics.EmbyCountError ? 'Unavailable' : count(metrics.EmbyStations);
+            var knownInventory = typeof metrics.EmbyStations === 'number'
+                && Number.isInteger(metrics.EmbyStations) && metrics.EmbyStations >= 0;
+            values.emby.textContent = metrics.EmbyCountError
+                ? (knownInventory ? count(metrics.EmbyStations) + ' (last known)' : 'Unavailable')
+                : count(metrics.EmbyStations);
             values.available.setAttribute('title', metrics.AvailableCheckedUtc
                 ? 'Discovery checked at ' + new Date(metrics.AvailableCheckedUtc).toLocaleString()
                     + (metrics.AvailablePartial ? '; skipped branches make this a lower bound.' : '')
                 : 'Run a category refresh to count stations within the saved filters.');
-            values.emby.setAttribute('title', metrics.EmbyCountError || (metrics.EmbyCheckedUtc
-                ? 'Emby inventory checked at ' + new Date(metrics.EmbyCheckedUtc).toLocaleString()
-                : 'Run a category refresh to check Emby inventory.'));
+            var inventoryTime = metrics.EmbyCheckedUtc
+                ? new Date(metrics.EmbyCheckedUtc).toLocaleString() : null;
+            values.emby.setAttribute('title', metrics.EmbyCountError
+                ? (knownInventory && inventoryTime ? 'Last successful inventory check: ' + inventoryTime + '. ' : '')
+                    + metrics.EmbyCountError
+                : inventoryTime ? 'Emby inventory checked at ' + inventoryTime
+                : 'Run a category refresh to check Emby inventory.');
         });
     }
 
