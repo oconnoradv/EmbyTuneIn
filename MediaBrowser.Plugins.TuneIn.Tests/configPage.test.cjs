@@ -793,7 +793,7 @@ for (const state of ['Completed', 'Partial', 'Running', 'Error', 'Cancelled', 'T
         });
         await visit;
         const text = app.elements['.refreshStatus'].textContent;
-        assert.match(text, /TuneIn returned HTTP 429/);
+        assert.match(text, /TuneIn returned HTTP 429 \(Too Many Requests\)/);
         if (state === 'Completed')
             assert.match(text, /earlier \(recovered; refresh completed normally\)/);
         else
@@ -801,6 +801,18 @@ for (const state of ['Completed', 'Partial', 'Running', 'Error', 'Cancelled', 'T
         app.instance.onPause();
     });
 }
+
+test('refresh errors show a readable HTTP reason and preserve unfamiliar codes', async () => {
+    for (const [code, reason] of [[503, 'Service Unavailable'], [599, 'Unexpected response']]) {
+        const app = harness(true);
+        const visit = app.instance.onResume();
+        app.reads[0].resolve({});
+        app.refresh[0].resolve({ State: 'Error', LastHttpStatus: code });
+        await visit;
+        assert.ok(app.elements['.refreshStatus'].textContent.includes(`TuneIn returned HTTP ${code} (${reason})`));
+        app.instance.onPause();
+    }
+});
 
 test('a failed lock write leaves edits blocked until the server confirms the state', async () => {
     const app = harness(true);

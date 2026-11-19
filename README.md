@@ -84,8 +84,9 @@ Successful catalogue responses reset the consecutive cooldown, not the learned p
 Cancellation and the overall 20-minute refresh timeout still apply during waits.
 If the retry budget is exhausted, no partial catalog is imported. Wait before
 retrying; adaptation cannot guarantee acceptance by TuneIn or bypass its limits.
-If the run succeeds after retrying, the status labels the earlier HTTP 429 as
-recovered and confirms that the refresh completed normally.
+The Control Panel shows the HTTP code and its meaning, for example
+**HTTP 429 (Too Many Requests)**. If the run succeeds after retrying, the status
+labels the earlier 429 as recovered and confirms that the refresh completed normally.
 
 A malformed query or fragment on a trusted TuneIn child browse link or Music
 station fallback URL does not stop Control Panel discovery of valid siblings.
