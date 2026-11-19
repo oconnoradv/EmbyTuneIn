@@ -113,6 +113,9 @@ if the settings still match and discovery began less than 24 hours ago.
 Cancellation stops automatic retries, and an import timeout is not retried
 automatically. The 8 MiB page cache limit and rate-limit backoff still apply.
 A timeout during discovery does not import an incomplete tree.
+Forward pages within the same catalog listing do not count toward the
+eight-level folder nesting limit. They still count toward the page and folder
+budgets.
 
 The **Retrieve refresh log** button becomes available when the latest Control
 Panel refresh fails. It retrieves a bounded error report for that run, not the

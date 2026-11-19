@@ -433,6 +433,62 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             }
         }
 
+        [Theory]
+        [InlineData(true, true)]
+        [InlineData(false, true)]
+        [InlineData(true, false)]
+        public async Task ForwardPagesDoNotConsumeTheFolderDepthBudget(bool music, bool paginate)
+        {
+            var category = music ? "music" : "talk";
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = music, EnableTalk = !music
+            };
+            const string genre = "g71";
+            const string canonical = "c100002515";
+            config.Music.Add(new CatalogSelection { Id = genre, Enabled = true });
+            var fetches = 0;
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                var index = ++fetches;
+                var id = request.Parameters.GetValueOrDefault("id");
+                var nextId = paginate ? (id == genre ? canonical : id) : "c" + index;
+                var scope = nextId == null ? "c=talk" : "id=" + nextId;
+                var page = paginate ? $"&amp;offset={index}&amp;filter=s" : "";
+                var key = paginate ? "nextStations" : "child";
+                var row = index < 12
+                    ? $"<outline type='link' key='{key}' text='More' URL='https://opml.radiotime.com/Browse.ashx?{scope}{page}'/>"
+                    : "<outline type='audio' guide_id='s1' text='Radio'/>";
+                return Task.FromResult(XDocument.Parse($"<opml><body>{row}</body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-depth-{Guid.NewGuid():N}.xml");
+            var imports = 0;
+            try
+            {
+                var store = new TuneInRefreshStore(path);
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        Assert.Single(ReadStagedTree(staged, token)[TuneInBrowsing.CategoryName(category)]);
+                        imports++;
+                        return Task.CompletedTask;
+                    }, null);
+                refresh.Start(category);
+                await WaitUntilIdle(refresh);
+                Assert.Equal(paginate ? "Completed" : "Error", refresh.Status().State);
+                Assert.Equal(paginate ? 1 : 0, imports);
+                if (paginate) Assert.Equal(12, fetches);
+                else
+                {
+                    Assert.Contains("folder depth limit", refresh.GetFailureLog().Text);
+                    Assert.False(File.Exists(path));
+                }
+            }
+            finally { File.Delete(path); }
+        }
+
         [Fact]
         public async Task MusicRefreshRetainsSavedStationWhenFallbackUrlHasAnInvalidFragment()
         {

@@ -14,6 +14,7 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         internal const int MaxFolders = 1000;
         internal const int MaxItems = 50000;
+        private const int MaxFolderDepth = 8;
         private const long MaxEstimatedBytes = 32 * 1024 * 1024;
         private readonly Dictionary<string, ChannelItemResult> folders = new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal);
         private readonly HashSet<string> incompleteFolders = new HashSet<string>(StringComparer.Ordinal);
@@ -39,7 +40,7 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static async Task<TuneInStagedImport> DiscoverAsync(TuneInChannel channel, ChannelItemInfo root,
             TuneInCatalogueSession session, CancellationToken token,
             Func<string, TuneInCatalogueSession, bool, CancellationToken, Task<ChannelItemResult>> getItems,
-            Action<int, int> report, Action validate, Action checkpoint = null)
+            Action<int, int> report, Action validate, Func<string, string, bool> isForwardPage, Action checkpoint = null)
         {
             if (channel == null || root == null || session == null || getItems == null)
                 throw new ArgumentNullException("A complete TuneIn discovery context is required.");
@@ -73,15 +74,22 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     if (item.Type == ChannelItemType.Folder)
                     {
-                        if (current.Value >= 8)
-                            throw new InvalidOperationException("TuneIn discovery exceeded its folder depth limit.");
-                        pending.Enqueue(new KeyValuePair<string, int>(item.Id, current.Value + 1));
+                        pending.Enqueue(new KeyValuePair<string, int>(item.Id,
+                            ChildDepth(current.Value, current.Key, item.Id, isForwardPage)));
                     }
                 }
                 staged.folders.Add(current.Key, new ChannelItemResult { Items = result.Items.ToList() });
                 checkpoint?.Invoke();
             }
             return staged;
+        }
+
+        private static int ChildDepth(int parentDepth, string parent, string child, Func<string, string, bool> isForwardPage)
+        {
+            if (isForwardPage(parent, child)) return parentDepth;
+            if (parentDepth >= MaxFolderDepth)
+                throw new InvalidOperationException($"TuneIn discovery exceeded its folder depth limit ({MaxFolderDepth} levels, excluding forward pages).");
+            return parentDepth + 1;
         }
 
         private static void CheckListingBudget(string id, ChannelItemResult result, ref long estimatedBytes, ref int itemCount)
@@ -105,7 +113,8 @@ namespace MediaBrowser.Plugins.TuneIn
             return CreateSnapshot(category, folders, false);
         }
 
-        internal TuneInCategorySnapshot MergePartialMusic(TuneInCategorySnapshot previous, Func<string, string> stationId)
+        internal TuneInCategorySnapshot MergePartialMusic(TuneInCategorySnapshot previous, Func<string, string> stationId,
+            Func<string, string, bool> isForwardPage)
         {
             if (!DiscoveryIncomplete || previous?.Category != "music" || previous.RootId != Root.Id)
                 return null;
@@ -150,8 +159,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 merged.Add(id, listing);
                 foreach (var item in listing.Items.Where(item => item.Type == ChannelItemType.Folder))
                 {
-                    if (depth >= 8) throw new InvalidOperationException("TuneIn discovery exceeded its folder depth limit.");
-                    pending.Enqueue((item.Id, depth + 1));
+                    pending.Enqueue((item.Id, ChildDepth(depth, id, item.Id, isForwardPage)));
                 }
             }
             return CreateSnapshot(previous.Category, merged, true);

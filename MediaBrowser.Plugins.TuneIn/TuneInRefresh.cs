@@ -575,6 +575,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     var changed = new HashSet<string>(StringComparer.Ordinal);
                     var partial = new HashSet<string>(StringComparer.Ordinal);
                     var cannotApply = false;
+                    bool IsForwardPage(string parent, string child) => TuneInBrowsing.IsForwardPage(snapshot,
+                        directory.Resolve(snapshot, parent), directory.Resolve(snapshot, child));
                     discovering = true;
                     foreach (var category in categories)
                     {
@@ -596,7 +598,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         var staged = await TuneInStagedImport.DiscoverAsync(channel, root, session, linked.Token,
                             (folder, catalogue, strict, token) => getItems(channel, folder, catalogue, strict, token),
                             null,
-                            () => directory.CheckCurrent(snapshot, linked.Token), SaveDiscoveryIfDue).ConfigureAwait(false);
+                            () => directory.CheckCurrent(snapshot, linked.Token), IsForwardPage, SaveDiscoveryIfDue).ConfigureAwait(false);
                         directory.CheckCurrent(snapshot, linked.Token);
                         lock (gate)
                             if (status.RequestsCompleted + status.CacheHits == requestsBefore)
@@ -605,7 +607,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         listings.TryGetValue(category, out var previous);
                         var categorySnapshot = staged.DiscoveryIncomplete
                             ? (importRequired ? null : staged.MergePartialMusic(previous,
-                                id => directory.Resolve(snapshot, id).StationId))
+                                id => directory.Resolve(snapshot, id).StationId, IsForwardPage))
                             : staged.CreateSnapshot(category);
                         if (categorySnapshot == null)
                         {

@@ -161,6 +161,29 @@ namespace MediaBrowser.Plugins.TuneIn
             return Deduplicate(snapshot, items);
         }
 
+        internal static bool IsForwardPage(ConfigurationSnapshot snapshot, NavigationEntry parent, NavigationEntry child)
+        {
+            if (parent.Request == null || child.Request == null || parent.Category != child.Category
+                || parent.SelectionId != child.SelectionId || parent.ContentCategory != child.ContentCategory
+                || parent.MusicSelectionId != child.MusicSelectionId)
+                return false;
+            var current = CatalogueRequest(snapshot, parent);
+            var next = CatalogueRequest(snapshot, child);
+            if (!int.TryParse(next.Parameters.GetValueOrDefault("offset"), out var offset) || offset <= 0
+                || !IsSamePaginationNode(parent, current, next))
+                return false;
+            var currentOffset = current.Parameters.GetValueOrDefault("offset");
+            if (currentOffset != null && (!int.TryParse(currentOffset, out var previous) || previous < 0 || offset <= previous))
+                return false;
+            if (new[] { "c", "pivot", "sid" }.Any(key =>
+                current.Parameters.GetValueOrDefault(key) != next.Parameters.GetValueOrDefault(key)))
+                return false;
+            var filter = current.Parameters.GetValueOrDefault("filter");
+            // The first More link can select stations or shows from an unfiltered listing.
+            return filter == next.Parameters.GetValueOrDefault("filter")
+                || currentOffset == null && (filter == null || parent.Category == "language" && filter == parent.SelectionId);
+        }
+
         private static bool IsSamePaginationNode(NavigationEntry entry, DirectoryRequest current, DirectoryRequest next)
         {
             var from = current.Parameters.GetValueOrDefault("id");
