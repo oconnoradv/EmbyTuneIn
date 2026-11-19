@@ -583,7 +583,8 @@ namespace MediaBrowser.Plugins.TuneIn
                             status.SkippedBrowseLinkDetails = string.Join("; ", displayed.Select(pair => $"{pair.Value} x {pair.Key}"));
                             var otherCount = status.SkippedBrowseLinks - displayed.Sum(pair => pair.Value);
                             if (otherCount > 0) status.SkippedBrowseLinkDetails += $"; {otherCount} other";
-                        }), maxPages: TuneInStagedImport.MaxFolders, timings: timings);
+                        }), maxPages: TuneInCatalogueSession.MaxRefreshPages,
+                        maxBytes: TuneInCatalogueSession.MaxRefreshBytes, timings: timings);
 
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");

@@ -203,47 +203,74 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData(true)]
-        [InlineData(false)]
-        public async Task ScopedAndMultiCategoryRefreshesCanFetchBeyondThePreviousPageLimit(bool musicOnly)
+        [InlineData(true, false)]
+        [InlineData(false, false)]
+        [InlineData(false, true)]
+        public async Task RefreshSupportsFiveThousandPagesAndRejectsAnAdditionalPage(bool musicOnly, bool exceedsLimit)
         {
             var config = new PluginConfiguration
             {
                 SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true, EnableTalk = !musicOnly
             };
             config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
-            var folderCount = TuneInCatalogueSession.MaxPages;
+            var folderCount = 5000 - (musicOnly ? 1 : 2) + (exceedsLimit ? 1 : 0);
+            var now = DateTime.UtcNow;
             var fetches = 0;
+            var leaf = "<outline type='audio' guide_id='s1' text='Radio'/><!--" + new string('x', 1800) + "-->";
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-page-limit-{Guid.NewGuid():N}.xml");
+            var store = new TuneInRefreshStore(path);
+            string key = null;
             var directory = new TuneInDirectory(() => config, (request, _) =>
             {
                 fetches++;
+                if (fetches == 4999) now = now.AddMinutes(21);
+                if (fetches == 5000)
+                {
+                    var saved = store.ReadDiscovery(key, musicOnly ? "music" : null, now, TimeSpan.FromHours(48));
+                    Assert.NotNull(saved);
+                    Assert.Equal(4999, saved.Pages.Count);
+                    Assert.True(saved.Pages.Sum(page => (long)page.Bytes.Length) > 8 * 1024 * 1024);
+                }
                 var rows = request.Parameters.TryGetValue("id", out var id) && id == "g2698"
                     ? string.Concat(Enumerable.Range(1, folderCount).Select(n =>
                         $"<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c{n}'/>"))
-                    : "<outline type='audio' guide_id='s1' text='Radio'/>";
+                    : leaf;
                 return Task.FromResult(XDocument.Parse($"<opml><body>{rows}</body></opml>"));
             });
             var channel = new TuneInChannel(directory);
-            var path = Path.Combine(Path.GetTempPath(), $"tunein-page-limit-{Guid.NewGuid():N}.xml");
+            key = directory.Snapshot().Key;
             var imports = 0;
             try
             {
-                using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
                     (_, staged, __, token) =>
                     {
                         Assert.Equal(folderCount, ReadStagedTree(staged, token)["Music"].Length);
                         imports++;
                         return Task.CompletedTask;
-                    }, null);
+                    }, null, clock: () => now);
                 refresh.Start(musicOnly ? "music" : null);
-                await WaitUntilIdle(refresh);
-                Assert.Equal("Completed", refresh.Status().State);
-                Assert.Equal(folderCount + (musicOnly ? 1 : 2), fetches);
-                Assert.Equal(1, imports);
-                Assert.True(File.Exists(path));
+                await WaitUntilIdle(refresh, TimeSpan.FromSeconds(60));
+                Assert.True(fetches == 5000, $"Expected 5000 fetches, got {fetches}. " +
+                    (refresh.Status().State == "Error" ? refresh.GetFailureLog().Text : refresh.Status().State));
+                Assert.Equal(exceedsLimit ? "Error" : "Completed", refresh.Status().State);
+                Assert.Equal(exceedsLimit ? 0 : 1, imports);
+                if (exceedsLimit)
+                {
+                    Assert.Contains("5000-page catalog limit", refresh.GetFailureLog().Text);
+                    Assert.False(File.Exists(path));
+                }
+                else
+                {
+                    Assert.Equal(folderCount + 2, store.Read().Categories.Single(category => category.Category == "music").Folders.Count);
+                }
             }
-            finally { File.Delete(path); }
+            finally
+            {
+                File.Delete(path);
+                store.ClearDiscovery();
+            }
         }
 
         [Theory]

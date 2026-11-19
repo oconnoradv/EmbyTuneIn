@@ -12,10 +12,11 @@ namespace MediaBrowser.Plugins.TuneIn
 {
     internal sealed class TuneInStagedImport
     {
-        internal const int MaxFolders = 1000;
+        // A category root can be generated locally without fetching a page.
+        internal const int MaxFolders = TuneInCatalogueSession.MaxRefreshPages + 1;
         internal const int MaxItems = 50000;
         private const int MaxFolderDepth = 8;
-        private const long MaxEstimatedBytes = 32 * 1024 * 1024;
+        internal const long MaxEstimatedBytes = 60 * 1024 * 1024;
         private readonly Dictionary<string, ChannelItemResult> folders = new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal);
         private readonly HashSet<string> incompleteFolders = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> incompleteStationListings = new HashSet<string>(StringComparer.Ordinal);
@@ -58,7 +59,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 var current = pending.Dequeue();
                 if (!visited.Add(current.Key)) continue;
                 if (staged.folders.Count >= MaxFolders)
-                    throw new InvalidOperationException("TuneIn discovery exceeded its folder limit.");
+                    throw new InvalidOperationException($"TuneIn discovery exceeded its {MaxFolders}-folder limit.");
 
                 var skippedBefore = session.SkippedBrowseLinks;
                 var stationsSkippedBefore = session.SkippedStationUrls;
@@ -132,7 +133,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 var (id, depth) = pending.Dequeue();
                 if (merged.ContainsKey(id)) continue;
                 if (merged.Count >= MaxFolders)
-                    throw new InvalidOperationException("TuneIn discovery exceeded its folder limit.");
+                    throw new InvalidOperationException($"TuneIn discovery exceeded its {MaxFolders}-folder limit.");
                 if (!folders.TryGetValue(id, out var listing))
                 {
                     if (!saved.TryGetValue(id, out var old)) return null;
@@ -187,7 +188,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 + folder.Items.Sum(item => 256L + 2L * ((item.Id?.Length ?? 0) + (item.Name?.Length ?? 0)
                     + (item.Type?.Length ?? 0) + (item.ContentType?.Length ?? 0)
                     + (item.MediaType?.Length ?? 0) + (item.ImageUrl?.Length ?? 0))));
-            if (snapshotBytes > 1024 * 1024)
+            if (snapshotBytes > MaxEstimatedBytes)
                 throw new InvalidOperationException("TuneIn category snapshot exceeds its durable state limit.");
             var snapshot = new TuneInCategorySnapshot
             {

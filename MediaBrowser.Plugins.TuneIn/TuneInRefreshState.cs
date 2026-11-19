@@ -70,7 +70,9 @@ namespace MediaBrowser.Plugins.TuneIn
 
     internal sealed class TuneInRefreshStore
     {
-        private const int MaxStateBytes = 24 * 1024 * 1024;
+        private const int MaxStateBytes = 120 * 1024 * 1024;
+        // Checkpoint XML base64-encodes the raw catalog pages.
+        private const int MaxDiscoveryStateBytes = 64 * 1024 * 1024;
         private readonly string path;
         private static readonly XmlSerializer Serializer = new XmlSerializer(typeof(TuneInRefreshCheckpoint));
         private static readonly XmlSerializer DiscoverySerializer = new XmlSerializer(typeof(TuneInDiscoveryCheckpoint));
@@ -94,17 +96,17 @@ namespace MediaBrowser.Plugins.TuneIn
         internal TuneInDiscoveryCheckpoint ReadDiscovery(string configurationKey, string requestedCategory,
             DateTime now, TimeSpan maxAge)
         {
-            var checkpoint = ReadState<TuneInDiscoveryCheckpoint>(DiscoveryPath, DiscoverySerializer);
+            var checkpoint = ReadState<TuneInDiscoveryCheckpoint>(DiscoveryPath, DiscoverySerializer, MaxDiscoveryStateBytes);
             if (checkpoint == null || checkpoint.ConfigurationKey != configurationKey
                 || checkpoint.RequestedCategory != requestedCategory || checkpoint.StartedUtc > checkpoint.SavedUtc
                 || checkpoint.SavedUtc > now || now - checkpoint.StartedUtc >= maxAge)
                 return null;
             if (checkpoint.Pages == null || checkpoint.Pages.Count == 0
-                || checkpoint.Pages.Count > TuneInStagedImport.MaxFolders
+                || checkpoint.Pages.Count > TuneInCatalogueSession.MaxRefreshPages
                 || checkpoint.Pages.Any(page => page?.Key == null || page.Key.Length != 64
                     || page.Bytes == null || page.SavedUtc < checkpoint.StartedUtc || page.SavedUtc > checkpoint.SavedUtc)
                 || checkpoint.Pages.Select(page => page.Key).Distinct(StringComparer.Ordinal).Count() != checkpoint.Pages.Count
-                || checkpoint.Pages.Sum(page => (long)page.Bytes.Length) > TuneInCatalogueSession.MaxBytes)
+                || checkpoint.Pages.Sum(page => (long)page.Bytes.Length) > TuneInCatalogueSession.MaxRefreshBytes)
                 throw new InvalidDataException("Invalid TuneIn discovery checkpoint.");
             foreach (var page in checkpoint.Pages)
                 TuneInDirectory.ParseCatalogue(page.Bytes);
@@ -112,23 +114,23 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         internal void WriteDiscovery(TuneInDiscoveryCheckpoint checkpoint) =>
-            WriteState(DiscoveryPath, DiscoverySerializer, checkpoint);
+            WriteState(DiscoveryPath, DiscoverySerializer, checkpoint, MaxDiscoveryStateBytes);
 
         internal void ClearDiscovery()
         {
             if (DiscoveryPath != null) File.Delete(DiscoveryPath);
         }
 
-        private static T ReadState<T>(string path, XmlSerializer serializer) where T : class
+        private static T ReadState<T>(string path, XmlSerializer serializer, int maxBytes = MaxStateBytes) where T : class
         {
             if (string.IsNullOrEmpty(path)) return null;
             try
             {
                 using (var stream = File.OpenRead(path))
                 using (var reader = XmlReader.Create(stream, new XmlReaderSettings
-                { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaxStateBytes }))
+                { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = maxBytes }))
                 {
-                    if (stream.Length > MaxStateBytes)
+                    if (stream.Length > maxBytes)
                         throw new InvalidDataException("TuneIn refresh state exceeds its limit.");
                     return (T)serializer.Deserialize(reader) ?? throw new InvalidDataException("Empty TuneIn refresh state.");
                 }
@@ -137,7 +139,7 @@ namespace MediaBrowser.Plugins.TuneIn
             catch (DirectoryNotFoundException) { return null; }
         }
 
-        private static void WriteState(string path, XmlSerializer serializer, object checkpoint)
+        private static void WriteState(string path, XmlSerializer serializer, object checkpoint, int maxBytes = MaxStateBytes)
         {
             if (string.IsNullOrEmpty(path)) throw new InvalidOperationException("TuneIn refresh state path is unavailable.");
             var directory = Path.GetDirectoryName(path);
@@ -149,7 +151,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     serializer.Serialize(stream, checkpoint);
                     stream.Flush(true);
-                    if (stream.Length > MaxStateBytes)
+                    if (stream.Length > maxBytes)
                         throw new InvalidDataException("TuneIn refresh state exceeds its limit.");
                 }
                 if (File.Exists(path)) File.Replace(temporary, path, null);
@@ -181,7 +183,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     128L + (folder?.Id?.Length ?? 0) * 2L + (folder?.Items ?? new List<TuneInItemSnapshot>())
                     .Sum(item => 256L + 2L * ((item?.Id?.Length ?? 0) + (item?.Name?.Length ?? 0)
                     + (item?.Type?.Length ?? 0) + (item?.ContentType?.Length ?? 0)
-                    + (item?.MediaType?.Length ?? 0) + (item?.ImageUrl?.Length ?? 0))))) > 12 * 1024 * 1024
+                    + (item?.MediaType?.Length ?? 0) + (item?.ImageUrl?.Length ?? 0))))) > TuneInStagedImport.MaxEstimatedBytes
                 || (checkpoint.DirtyCategory != null && !validCategories.Contains(checkpoint.DirtyCategory)))
                 throw new InvalidDataException("Invalid TuneIn refresh state.");
 
@@ -210,6 +212,8 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         internal const int MaxPages = 128;
         internal const int MaxBytes = 8 * 1024 * 1024;
+        internal const int MaxRefreshPages = 5000;
+        internal const int MaxRefreshBytes = 40 * 1024 * 1024;
         private readonly object gate = new object();
         private readonly Dictionary<string, TuneInCachedPage> pages = new Dictionary<string, TuneInCachedPage>();
         private readonly Func<DateTime> clock;
@@ -220,6 +224,8 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Action<string, string> skippedBrowseLink;
         private readonly bool strictBudget;
         private readonly int maxPages;
+        private readonly int maxBytes;
+        private long cachedBytes;
         private int rateLimitRetriesRemaining;
         internal int SkippedBrowseLinks { get; private set; }
         internal int SkippedStationUrls { get; private set; }
@@ -228,7 +234,7 @@ namespace MediaBrowser.Plugins.TuneIn
         internal TuneInCatalogueSession(IEnumerable<TuneInCachedPage> cached, TimeSpan lifetime, Func<DateTime> clock,
             Action<bool> requested = null, Action completed = null, Action<int> received = null,
             bool strictBudget = true, bool retryRateLimit = false, Action<string, string> skippedBrowseLink = null,
-            int maxPages = MaxPages, TuneInRefreshTimings timings = null)
+            int maxPages = MaxPages, TuneInRefreshTimings timings = null, int maxBytes = MaxBytes)
         {
             this.clock = clock ?? (() => DateTime.UtcNow);
             this.lifetime = lifetime;
@@ -238,10 +244,25 @@ namespace MediaBrowser.Plugins.TuneIn
             this.skippedBrowseLink = skippedBrowseLink;
             this.strictBudget = strictBudget;
             this.maxPages = maxPages;
+            this.maxBytes = maxBytes;
             Timings = timings;
             rateLimitRetriesRemaining = retryRateLimit ? 3 : 0;
             foreach (var page in cached ?? Enumerable.Empty<TuneInCachedPage>())
-                if (Fresh(page)) pages[page.Key] = page;
+                if (Fresh(page)) CachePage(page);
+        }
+
+        private void CachePage(TuneInCachedPage page)
+        {
+            RemovePage(page.Key);
+            pages.Add(page.Key, page);
+            cachedBytes += page.Bytes.Length;
+        }
+
+        private void RemovePage(string key)
+        {
+            if (!pages.TryGetValue(key, out var page)) return;
+            cachedBytes -= page.Bytes.Length;
+            pages.Remove(key);
         }
 
         internal bool TrySkipCatalogLink(string category, string reason, bool stationUrl = false)
@@ -306,20 +327,23 @@ namespace MediaBrowser.Plugins.TuneIn
             var validated = TuneInDirectory.ParseCatalogue(bytes);
             lock (gate)
             {
+                if (bytes.Length > maxBytes)
+                    throw new InvalidDataException($"TuneIn catalog page exceeds its {maxBytes / (1024 * 1024)} MiB cache limit.");
                 if (!strictBudget)
                 {
-                    pages.Remove(key);
+                    RemovePage(key);
                     foreach (var expired in pages.Where(pair => !Fresh(pair.Value)).Select(pair => pair.Key).ToList())
-                        pages.Remove(expired);
-                    while (pages.Count >= maxPages || pages.Values.Sum(page => (long)page.Bytes.Length) + bytes.Length > MaxBytes)
-                        pages.Remove(pages.OrderBy(pair => pair.Value.SavedUtc).First().Key);
+                        RemovePage(expired);
+                    while (pages.Count >= maxPages || cachedBytes + bytes.Length > maxBytes)
+                        RemovePage(pages.OrderBy(pair => pair.Value.SavedUtc).First().Key);
                 }
-                var otherBytes = pages.Where(pair => pair.Key != key).Sum(pair => (long)pair.Value.Bytes.Length);
-                if (pages.Count >= maxPages && !pages.ContainsKey(key))
+                pages.TryGetValue(key, out var previous);
+                var otherBytes = cachedBytes - (previous?.Bytes.Length ?? 0);
+                if (pages.Count >= maxPages && previous == null)
                     throw new InvalidDataException($"TuneIn refresh exceeds its {maxPages}-page catalog limit.");
-                if (otherBytes + bytes.Length > MaxBytes)
-                    throw new InvalidDataException("TuneIn refresh exceeds its 8 MiB catalog cache limit.");
-                pages[key] = new TuneInCachedPage { Key = key, Bytes = bytes, SavedUtc = clock() };
+                if (otherBytes + bytes.Length > maxBytes)
+                    throw new InvalidDataException($"TuneIn refresh exceeds its {maxBytes / (1024 * 1024)} MiB catalog cache limit.");
+                CachePage(new TuneInCachedPage { Key = key, Bytes = bytes, SavedUtc = clock() });
             }
             completed?.Invoke();
             return validated;

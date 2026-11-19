@@ -102,7 +102,7 @@ Untrusted destinations and unrecovered provider request failures still fail
 the refresh.
 
 All Control Panel refreshes have up to 60 minutes for discovery and import
-combined per attempt, with a shared 1,000-page limit regardless of which
+combined per attempt, with a shared 5,000-page limit regardless of which
 categories are selected. During discovery, the plugin checkpoints validated
 catalog pages separately from the imported library at the first completed
 folder after each 20-minute interval. A discovery timeout is recorded and
@@ -115,7 +115,8 @@ requested again.
 After a server restart, starting the same refresh can also reuse the checkpoint
 if the settings still match and discovery began less than 48 hours ago.
 Cancellation stops automatic retries, and an import timeout is not retried
-automatically. The 8 MiB page cache limit and rate-limit backoff still apply.
+automatically. The refresh page cache holds up to 40 MiB of validated catalog
+pages. Page, byte, folder, and item limits still apply, as does rate-limit backoff.
 The Emby server log records per-attempt timings for discovery, HTTP fetching,
 pacing, TuneIn backoff, cached page parsing, and import, plus the effective
 catalogue request interval range. It does not include TuneIn request URLs.
