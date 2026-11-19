@@ -1,6 +1,7 @@
 using MediaBrowser.Controller.Channels;
 using MediaBrowser.Model.Channels;
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -222,11 +223,12 @@ namespace MediaBrowser.Plugins.TuneIn
         private int rateLimitRetriesRemaining;
         internal int SkippedBrowseLinks { get; private set; }
         internal int SkippedStationUrls { get; private set; }
+        internal TuneInRefreshTimings Timings { get; }
 
         internal TuneInCatalogueSession(IEnumerable<TuneInCachedPage> cached, TimeSpan lifetime, Func<DateTime> clock,
             Action<bool> requested = null, Action completed = null, Action<int> received = null,
             bool strictBudget = true, bool retryRateLimit = false, Action<string, string> skippedBrowseLink = null,
-            int maxPages = MaxPages)
+            int maxPages = MaxPages, TuneInRefreshTimings timings = null)
         {
             this.clock = clock ?? (() => DateTime.UtcNow);
             this.lifetime = lifetime;
@@ -236,6 +238,7 @@ namespace MediaBrowser.Plugins.TuneIn
             this.skippedBrowseLink = skippedBrowseLink;
             this.strictBudget = strictBudget;
             this.maxPages = maxPages;
+            Timings = timings;
             rateLimitRetriesRemaining = retryRateLimit ? 3 : 0;
             foreach (var page in cached ?? Enumerable.Empty<TuneInCachedPage>())
                 if (Fresh(page)) pages[page.Key] = page;
@@ -271,7 +274,9 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 requested?.Invoke(true);
                 token.ThrowIfCancellationRequested();
-                return TuneInDirectory.ParseCatalogue(cached.Bytes);
+                var replay = Timings == null ? null : Stopwatch.StartNew();
+                try { return TuneInDirectory.ParseCatalogue(cached.Bytes); }
+                finally { if (Timings != null) Timings.CacheReplay += replay.Elapsed; }
             }
 
             lock (gate)
@@ -282,6 +287,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 token.ThrowIfCancellationRequested();
                 requested?.Invoke(false);
+                var elapsed = Timings == null ? null : Stopwatch.StartNew();
                 try
                 {
                     document = await fetch().ConfigureAwait(false);
@@ -293,6 +299,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (failure.StatusCode != 429 || Interlocked.Decrement(ref rateLimitRetriesRemaining) < 0)
                         throw;
                 }
+                finally { if (Timings != null) Timings.Fetch += elapsed.Elapsed; }
             }
             token.ThrowIfCancellationRequested();
             var bytes = Encoding.UTF8.GetBytes(document.ToString(SaveOptions.DisableFormatting));

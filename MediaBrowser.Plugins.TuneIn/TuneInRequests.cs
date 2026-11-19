@@ -23,7 +23,7 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static TuneInDirectory Directory(IHttpClient client, IApplicationHost host)
         {
             lock (Gate)
-                return directory ?? (directory = new TuneInDirectory(() => Plugin.Instance.Configuration, async (request, token) =>
+                return directory ?? (directory = new TuneInDirectory(() => Plugin.Instance.Configuration, async (request, token, timings) =>
                 {
                     var outbound = request.Copy();
                     outbound.Parameters["partnerid"] = "uD1X52pA";
@@ -31,7 +31,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     outbound.Parameters["serial"] = host.SystemId;
                     using (var response = await SendAsync(client, new HttpRequestOptions
                     { Url = outbound.Url, CancellationToken = token, ThrowOnErrorResponse = false }, "GET",
-                        Plugin.Instance.Configuration.ApiRequestIntervalSeconds, catalogueRequest: true).ConfigureAwait(false))
+                        Plugin.Instance.Configuration.ApiRequestIntervalSeconds, catalogueRequest: true, timings: timings).ConfigureAwait(false))
                     using (var memory = new MemoryStream())
                     {
                         if ((int)response.StatusCode != 200)
@@ -49,11 +49,11 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         internal static Task<HttpResponseInfo> SendAsync(IHttpClient client, HttpRequestOptions options, string method,
-            int intervalSeconds, bool catalogueRequest = false, bool bufferContent = true)
+            int intervalSeconds, bool catalogueRequest = false, bool bufferContent = true, TuneInRefreshTimings timings = null)
         {
             options.BufferContent = bufferContent;
             return Pacer.SendAsync(() => client.SendAsync(options, method), intervalSeconds,
-                options.CancellationToken, catalogueRequest);
+                options.CancellationToken, catalogueRequest, timings);
         }
     }
 }

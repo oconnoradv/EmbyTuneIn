@@ -347,9 +347,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData(false)]
-        [InlineData(true)]
-        public async Task DiscoveryReusesTwentyMinuteCheckpointOnRetryOrRestart(bool restart)
+        [InlineData(false, true)]
+        [InlineData(true, true)]
+        [InlineData(false, false)]
+        public async Task DiscoveryReusesCheckpointOnTimeoutOrRestart(bool restart, bool periodic)
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
             var now = DateTime.UtcNow;
@@ -372,12 +373,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 if (id == "c1")
                 {
                     Assert.False(File.Exists(path + ".discovery"));
-                    now = initial.AddMinutes(20);
+                    now = initial.AddMinutes(periodic ? 20 : 19);
                     return XDocument.Parse("<opml><body><outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c2'/></body></opml>");
                 }
                 if (++childAttempts == 1)
                 {
-                    Assert.True(File.Exists(path + ".discovery"));
+                    Assert.Equal(periodic, File.Exists(path + ".discovery"));
                     Assert.False(File.Exists(path));
                     blocked.TrySetResult(true);
                     await Task.Delay(Timeout.Infinite, token);
@@ -399,9 +400,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 {
                     refresh.Start("talk");
                     await blocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                    Assert.Equal(initial.AddMinutes(20), refresh.Status().DiscoveryCheckpointUtc);
+                    Assert.Equal(periodic ? initial.AddMinutes(20) : (DateTime?)null, refresh.Status().DiscoveryCheckpointUtc);
                     var key = directory.Snapshot().Key;
-                    Assert.NotNull(store.ReadDiscovery(key, "talk", now, TimeSpan.FromHours(48)));
+                    Assert.Equal(periodic, store.ReadDiscovery(key, "talk", now, TimeSpan.FromHours(48)) != null);
                     Assert.Null(store.ReadDiscovery(key, null, now, TimeSpan.FromHours(48)));
                     Assert.Null(store.ReadDiscovery(new string('0', 64), "talk", now, TimeSpan.FromHours(48)));
                     Assert.Null(store.ReadDiscovery(key, "talk", initial.AddHours(48), TimeSpan.FromHours(48)));
@@ -964,6 +965,39 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var limitedAt = now;
             using var resetCooldown = await pacer.SendAsync(Success, interval, CancellationToken.None, catalogueRequest: true);
             Assert.Equal(limitedAt.AddSeconds(firstCooldown), now);
+        }
+
+        [Fact]
+        public async Task CataloguePacingRecoversGraduallyWithoutExceedingConfiguredRate()
+        {
+            var now = new DateTime(2026, 11, 18, 8, 0, 0, DateTimeKind.Utc);
+            var pacer = new TuneInRequestPacer(() => now, (duration, _) =>
+            {
+                now += duration;
+                return Task.CompletedTask;
+            });
+            var timings = new TuneInRefreshTimings();
+            async Task<TimeSpan> Send(int code)
+            {
+                var before = now;
+                using var response = await pacer.SendAsync(() => Task.FromResult(new HttpResponseInfo
+                {
+                    StatusCode = (HttpStatusCode)code,
+                    Headers = new Dictionary<string, string> { ["Retry-After"] = "45" }
+                }), 3, CancellationToken.None, catalogueRequest: true, timings: timings);
+                return now - before;
+            }
+
+            Assert.Equal(TimeSpan.Zero, await Send(429));
+            Assert.Equal(TimeSpan.FromSeconds(45), await Send(200));
+            for (var i = 0; i < 18; i++) Assert.Equal(TimeSpan.FromSeconds(6), await Send(200));
+            Assert.Equal(TimeSpan.FromSeconds(6), await Send(500));
+            for (var i = 0; i < 20; i++) Assert.Equal(TimeSpan.FromSeconds(6), await Send(200));
+            for (var interval = 5; interval >= 3; interval--)
+                for (var i = 0; i < 21 - (interval > 3 ? 1 : 0); i++)
+                    Assert.Equal(TimeSpan.FromSeconds(interval), await Send(200));
+            Assert.Equal(3, timings.MinIntervalSeconds);
+            Assert.Equal(6, timings.MaxIntervalSeconds);
         }
 
         [Fact]

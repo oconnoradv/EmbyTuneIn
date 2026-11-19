@@ -272,12 +272,16 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly object gate = new object();
         private readonly Dictionary<string, SelectorResult> selectors = new Dictionary<string, SelectorResult>();
         private readonly Func<PluginConfiguration> configuration;
-        private readonly Func<DirectoryRequest, CancellationToken, Task<XDocument>> fetch;
+        private readonly Func<DirectoryRequest, CancellationToken, TuneInRefreshTimings, Task<XDocument>> fetch;
         private string key;
         private int selectorCharacters;
 
         internal TuneInDirectory(Func<PluginConfiguration> configuration,
             Func<DirectoryRequest, CancellationToken, Task<XDocument>> fetch)
+            : this(configuration, (request, token, _) => fetch(request, token)) { }
+
+        internal TuneInDirectory(Func<PluginConfiguration> configuration,
+            Func<DirectoryRequest, CancellationToken, TuneInRefreshTimings, Task<XDocument>> fetch)
         {
             this.configuration = configuration;
             this.fetch = fetch;
@@ -423,8 +427,8 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInCatalogueSession session = null)
         {
             CheckCurrent(snapshot, token);
-            var document = session == null ? await fetch(request, token).ConfigureAwait(false)
-                : await session.FetchAsync(request, () => fetch(request, token), token).ConfigureAwait(false);
+            var document = session == null ? await fetch(request, token, null).ConfigureAwait(false)
+                : await session.FetchAsync(request, () => fetch(request, token, session.Timings), token).ConfigureAwait(false);
             CheckCurrent(snapshot, token);
             return document;
         }

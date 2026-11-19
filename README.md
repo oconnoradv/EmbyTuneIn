@@ -78,9 +78,9 @@ If TuneIn returns HTTP 429 during discovery, the refresh retries the affected pa
 with a shared budget of three retries for the entire run. Consecutive rate limits
 impose cooldowns of 30, 60, then 120 seconds; a longer `Retry-After` takes precedence.
 Each catalogue rate limit also doubles the effective catalogue request interval,
-up to 30 seconds. This learned minimum lasts until the server restarts, does not
-change saved settings, and does not increase ordinary playback request intervals.
-Successful catalogue responses reset the consecutive cooldown, not the learned pace.
+up to 30 seconds. After every 20 consecutive successful catalogue responses, the
+learned interval drops by one second toward the configured minimum. This does
+not change saved settings or ordinary playback request intervals.
 Cancellation and the overall refresh timeout still apply during waits.
 If the retry budget is exhausted, no partial catalog is imported. Wait before
 retrying; adaptation cannot guarantee acceptance by TuneIn or bypass its limits.
@@ -108,12 +108,17 @@ catalog pages separately from the imported library at the first completed
 folder after each 20-minute interval. A discovery timeout is recorded and
 automatically retried up to ten times after the initial attempt. The Control Panel
 shows the active retry number, for example **Automatic retry 2 of 10 after
-discovery timed out**. Retries reuse checkpointed pages without requesting them
-again; work since the last checkpoint may be repeated.
+discovery timed out**. Before retrying, a discovery timeout also saves any
+additional validated pages, if the checkpoint can still be saved. Retries reuse
+checkpointed pages without requesting them again; the interrupted page may be
+requested again.
 After a server restart, starting the same refresh can also reuse the checkpoint
 if the settings still match and discovery began less than 48 hours ago.
 Cancellation stops automatic retries, and an import timeout is not retried
 automatically. The 8 MiB page cache limit and rate-limit backoff still apply.
+The Emby server log records per-attempt timings for discovery, HTTP fetching,
+pacing, TuneIn backoff, cached page parsing, and import, plus the effective
+catalogue request interval range. It does not include TuneIn request URLs.
 A timeout during discovery does not import an incomplete tree.
 Forward pages within the same catalog listing do not count toward the
 eight-level folder nesting limit. They still count toward the page and folder

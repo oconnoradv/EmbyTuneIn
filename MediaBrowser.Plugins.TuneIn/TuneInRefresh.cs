@@ -3,6 +3,7 @@ using MediaBrowser.Model.Channels;
 using MediaBrowser.Model.Logging;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -477,6 +478,30 @@ namespace MediaBrowser.Plugins.TuneIn
             var discovering = false;
             var discoveryTimedOut = false;
             Exception failure = null;
+            var timings = new TuneInRefreshTimings();
+            var discoveryTime = new Stopwatch();
+            var importTime = new Stopwatch();
+            DateTime discoveryStarted = default, nextCheckpoint = default;
+            var savedPageCount = 0;
+
+            void SaveDiscovery(CancellationToken token, bool dueToTimeout = false)
+            {
+                var savedAt = clock();
+                if (session == null || (!dueToTimeout && savedAt < nextCheckpoint)
+                    || savedAt < discoveryStarted || savedAt - discoveryStarted >= DiscoveryCheckpointMaxAge) return;
+                var pages = session.SnapshotPages();
+                if (pages.Count <= savedPageCount) return;
+                directory.CheckCurrent(snapshot, token);
+                store.WriteDiscovery(new TuneInDiscoveryCheckpoint
+                {
+                    ConfigurationKey = snapshot.Key, RequestedCategory = requestedCategory,
+                    StartedUtc = discoveryStarted, SavedUtc = savedAt, Pages = pages
+                });
+                savedPageCount = pages.Count;
+                nextCheckpoint = savedAt + DiscoveryCheckpointInterval;
+                Update(() => status.DiscoveryCheckpointUtc = savedAt);
+            }
+
             using (var timeout = new CancellationTokenSource())
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(serverToken, timeout.Token))
             {
@@ -533,8 +558,9 @@ namespace MediaBrowser.Plugins.TuneIn
                         throw new InvalidOperationException("The selected TuneIn category is no longer enabled.");
                     var now = clock();
                     var savedDiscovery = LoadDiscovery(snapshot.Key, requestedCategory, now);
-                    var discoveryStarted = savedDiscovery?.StartedUtc ?? now;
-                    var nextCheckpoint = now + DiscoveryCheckpointInterval;
+                    discoveryStarted = savedDiscovery?.StartedUtc ?? now;
+                    nextCheckpoint = now + DiscoveryCheckpointInterval;
+                    savedPageCount = savedDiscovery?.Pages.Count ?? 0;
                     if (savedDiscovery != null)
                         Update(() =>
                         {
@@ -557,23 +583,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             status.SkippedBrowseLinkDetails = string.Join("; ", displayed.Select(pair => $"{pair.Value} x {pair.Key}"));
                             var otherCount = status.SkippedBrowseLinks - displayed.Sum(pair => pair.Value);
                             if (otherCount > 0) status.SkippedBrowseLinkDetails += $"; {otherCount} other";
-                        }), maxPages: TuneInStagedImport.MaxFolders);
-
-                    void SaveDiscoveryIfDue()
-                    {
-                        var savedAt = clock();
-                        if (savedAt < nextCheckpoint) return;
-                        var pages = session.SnapshotPages();
-                        if (pages.Count == 0) return;
-                        directory.CheckCurrent(snapshot, linked.Token);
-                        store.WriteDiscovery(new TuneInDiscoveryCheckpoint
-                        {
-                            ConfigurationKey = snapshot.Key, RequestedCategory = requestedCategory,
-                            StartedUtc = discoveryStarted, SavedUtc = savedAt, Pages = pages
-                        });
-                        nextCheckpoint = savedAt + DiscoveryCheckpointInterval;
-                        Update(() => status.DiscoveryCheckpointUtc = savedAt);
-                    }
+                        }), maxPages: TuneInStagedImport.MaxFolders, timings: timings);
 
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");
@@ -585,6 +595,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     bool IsForwardPage(string parent, string child) => TuneInBrowsing.IsForwardPage(snapshot,
                         directory.Resolve(snapshot, parent), directory.Resolve(snapshot, child));
                     discovering = true;
+                    discoveryTime.Start();
                     foreach (var category in categories)
                     {
                         linked.Token.ThrowIfCancellationRequested();
@@ -604,7 +615,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         var staged = await TuneInStagedImport.DiscoverAsync(channel, root, session, linked.Token,
                             (folder, catalogue, strict, token) => getItems(channel, folder, catalogue, strict, token),
                             null,
-                            () => directory.CheckCurrent(snapshot, linked.Token), IsForwardPage, SaveDiscoveryIfDue).ConfigureAwait(false);
+                            () => directory.CheckCurrent(snapshot, linked.Token), IsForwardPage,
+                            () => SaveDiscovery(linked.Token)).ConfigureAwait(false);
                         directory.CheckCurrent(snapshot, linked.Token);
                         lock (gate)
                             if (status.RequestsCompleted + status.CacheHits == requestsBefore)
@@ -642,6 +654,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
                     directory.CheckCurrent(snapshot, linked.Token);
                     discovering = false;
+                    discoveryTime.Stop();
                     store.ClearDiscovery();
                     if (cannotApply)
                     {
@@ -683,7 +696,9 @@ namespace MediaBrowser.Plugins.TuneIn
                             status.ImportFoldersTotal = full.Count;
                             status.ImportFoldersServed = 0;
                         });
-                        await import(channel, full, null, linked.Token).ConfigureAwait(false);
+                        importTime.Start();
+                        try { await import(channel, full, null, linked.Token).ConfigureAwait(false); }
+                        finally { importTime.Stop(); }
                         full.Verify();
                         linked.Token.ThrowIfCancellationRequested();
                         foreach (var root in importedRoots)
@@ -729,6 +744,19 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     timedOut = timeout.IsCancellationRequested && !serverToken.IsCancellationRequested;
                     discoveryTimedOut = timedOut && discovering;
+                    discoveryTime.Stop();
+                    if (discoveryTimedOut)
+                    {
+                        // The attempt token has expired; still honor user cancellation and scope changes.
+                        try { SaveDiscovery(serverToken, dueToTimeout: true); }
+                        catch (OperationCanceledException) { discoveryTimedOut = timedOut = false; error = new OperationCanceledException(); }
+                        catch (Exception saveError) when (saveError is IOException || saveError is UnauthorizedAccessException
+                            || saveError is InvalidOperationException || saveError is InvalidDataException)
+                        {
+                            logger?.Warn("TuneIn could not save additional pages at discovery timeout ({0}); earlier checkpoints are unaffected.",
+                                saveError.GetType().Name);
+                        }
+                    }
                     var cancelled = serverToken.IsCancellationRequested || timeout.IsCancellationRequested
                         || error is OperationCanceledException;
                     lock (gate)
@@ -752,6 +780,19 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 finally
                 {
+                    if (session != null)
+                    {
+                        var wait = timings.PacerQueue + timings.Pacing + timings.Backoff;
+                        var fetchMs = Math.Max(0, (timings.Fetch - wait).TotalMilliseconds);
+                        logger?.Info("TuneIn refresh attempt for {0}: discovery {1:F0} ms; HTTP fetch and parse excluding waits {2:F0} ms; "
+                            + "request queue {3:F0} ms; pacing {4:F0} ms; provider backoff {5:F0} ms; cached page parsing {6:F0} ms; "
+                            + "Emby import {7:F0} ms; effective catalog interval {8} s min / {9} s max; {10} requests started, {11} cache hits.",
+                            requestedCategory ?? "all", discoveryTime.Elapsed.TotalMilliseconds, fetchMs,
+                            timings.PacerQueue.TotalMilliseconds, timings.Pacing.TotalMilliseconds, timings.Backoff.TotalMilliseconds,
+                            timings.CacheReplay.TotalMilliseconds, importTime.Elapsed.TotalMilliseconds,
+                            timings.MinIntervalSeconds?.ToString() ?? "n/a", timings.MaxIntervalSeconds?.ToString() ?? "n/a",
+                            status.RequestsStarted, status.CacheHits);
+                    }
                     if (session?.SkippedBrowseLinks > 0)
                         logger?.Warn("TuneIn refresh skipped {0} malformed catalog link(s). By reason: {1}",
                             status.SkippedBrowseLinks, status.SkippedBrowseLinkDetails);
