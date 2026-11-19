@@ -62,8 +62,7 @@ namespace MediaBrowser.Plugins.TuneIn
     internal sealed class TuneInRefresh : IDisposable
     {
         private const int ChannelImportVersion = 2;
-        private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(20);
-        private static readonly TimeSpan CatalogueCacheLifetime = TimeSpan.FromMinutes(15);
+        private static readonly TimeSpan DefaultTimeout = TimeSpan.FromHours(1);
         private const int FailureReportLimit = 64 * 1024;
         private const int SkipReasonDisplayLimit = 5;
         private readonly object gate = new object();
@@ -450,6 +449,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     if (!snapshot.Ready) throw new InvalidOperationException("TuneIn settings are not complete.");
                     directory.CheckCurrent(snapshot, linked.Token);
+                    var enabled = snapshot.Categories.ToArray();
                     timeout.CancelAfter(timeoutOverride ?? DefaultTimeout);
 
                     checkpoint = store.Read();
@@ -475,7 +475,6 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
 
                     var dirtyAtStart = checkpoint.DirtyCategory;
-                    var enabled = snapshot.Categories.ToArray();
                     var listings = checkpoint.Categories.ToDictionary(category => category.Category, StringComparer.Ordinal);
                     var needsRebuild = checkpoint.ChannelImportVersion != ChannelImportVersion;
                     if (requestedCategory != null && (needsRebuild && enabled.Length > 1 ||
@@ -497,7 +496,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     lock (gate) status.CategoriesTotal = categories.Length;
                     if (requestedCategory != null && categories.Length == 0)
                         throw new InvalidOperationException("The selected TuneIn category is no longer enabled.");
-                    session = new TuneInCatalogueSession(null, CatalogueCacheLifetime, clock,
+                    session = new TuneInCatalogueSession(null, DefaultTimeout, clock,
                         hit => Update(() => { if (hit) status.CacheHits++; else status.RequestsStarted++; }),
                         () => Update(() => status.RequestsCompleted++),
                         code => Update(() => status.LastHttpStatus = code), retryRateLimit: true,
@@ -512,8 +511,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             status.SkippedBrowseLinkDetails = string.Join("; ", displayed.Select(pair => $"{pair.Value} x {pair.Key}"));
                             var otherCount = status.SkippedBrowseLinks - displayed.Sum(pair => pair.Value);
                             if (otherCount > 0) status.SkippedBrowseLinkDetails += $"; {otherCount} other";
-                        }), maxPages: categories.Length == 1 && categories[0] == "music"
-                            ? TuneInStagedImport.MaxFolders : TuneInCatalogueSession.MaxPages);
+                        }), maxPages: TuneInStagedImport.MaxFolders);
 
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");

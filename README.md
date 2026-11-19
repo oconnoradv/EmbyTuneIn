@@ -81,7 +81,7 @@ Each catalogue rate limit also doubles the effective catalogue request interval,
 up to 30 seconds. This learned minimum lasts until the server restarts, does not
 change saved settings, and does not increase ordinary playback request intervals.
 Successful catalogue responses reset the consecutive cooldown, not the learned pace.
-Cancellation and the overall 20-minute refresh timeout still apply during waits.
+Cancellation and the overall refresh timeout still apply during waits.
 If the retry budget is exhausted, no partial catalog is imported. Wait before
 retrying; adaptation cannot guarantee acceptance by TuneIn or bypass its limits.
 The Control Panel shows the HTTP code and its meaning, for example
@@ -101,10 +101,11 @@ If a safe merge is unavailable, no import or checkpoint update occurs.
 Untrusted destinations and unrecovered provider request failures still fail
 the refresh.
 
-A Music-only run can discover more than 128 pages. It uses the same ceiling
-for pages as for staged folders (1,000). Other runs keep their 128-page limit.
-The 8 MiB page cache limit, import limits, rate-limit backoff, and 20-minute
-timeout still apply. If a limit stops discovery, no incomplete tree is imported.
+All Control Panel refreshes have up to 60 minutes for discovery and import
+combined, with a shared 1,000-page limit per run regardless of which categories
+are selected. The 8 MiB page cache limit, import limits, and rate-limit backoff
+still apply. If a limit stops discovery, no incomplete tree is imported. A retry
+starts discovery from the beginning.
 
 The **Retrieve refresh log** button becomes available when the latest Control
 Panel refresh fails. It retrieves a bounded error report for that run, not the

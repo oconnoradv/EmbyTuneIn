@@ -205,7 +205,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [Theory]
         [InlineData(true)]
         [InlineData(false)]
-        public async Task OnlyMusicOnlyDiscoveryCanFetchBeyondTheStandardPageLimit(bool musicOnly)
+        public async Task ScopedAndMultiCategoryRefreshesCanFetchBeyondThePreviousPageLimit(bool musicOnly)
         {
             var config = new PluginConfiguration
             {
@@ -238,11 +238,94 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     }, null);
                 refresh.Start(musicOnly ? "music" : null);
                 await WaitUntilIdle(refresh);
-                Assert.Equal(musicOnly ? "Completed" : "Error", refresh.Status().State);
-                Assert.Equal(folderCount + (musicOnly ? 1 : 0), fetches);
-                Assert.Equal(musicOnly ? 1 : 0, imports);
-                Assert.Equal(musicOnly, File.Exists(path));
-                if (!musicOnly) Assert.Contains("128-page catalog limit", refresh.GetFailureLog().Text);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(folderCount + (musicOnly ? 1 : 2), fetches);
+                Assert.Equal(1, imports);
+                Assert.True(File.Exists(path));
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Theory]
+        [InlineData("music")]
+        [InlineData("talk")]
+        public async Task LongDiscoveryReusesPagesFetchedBeforeThePreviousTimeout(string category)
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = category == "music", EnableTalk = category == "talk"
+            };
+            config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
+            var now = DateTime.UtcNow;
+            var childFetches = 0;
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                request.Parameters.TryGetValue("id", out var id);
+                var rows = id != "c1"
+                    ? "<outline type='link' text='One' URL='https://opml.radiotime.com/Browse.ashx?id=c1'/>"
+                        + "<outline type='link' text='Two' URL='https://opml.radiotime.com/Browse.ashx?id=c1'/>"
+                    : "<outline type='audio' guide_id='s1' text='Radio'/>";
+                if (id == "c1") childFetches++;
+                return Task.FromResult(XDocument.Parse($"<opml><body>{rows}</body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-long-music-{Guid.NewGuid():N}.xml");
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (c, folder, session, strict, token) =>
+                    {
+                        if (childFetches == 1) now = now.AddMinutes(21);
+                        return c.GetRefreshChannelItems(folder, session, strict, token);
+                    },
+                    (_, staged, __, token) =>
+                    {
+                        Assert.Equal(2, ReadStagedTree(staged, token)[TuneInBrowsing.CategoryName(category)].Length);
+                        return Task.CompletedTask;
+                    }, null, clock: () => now);
+                refresh.Start(category);
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(1, childFetches);
+                Assert.Equal(1, refresh.Status().CacheHits);
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Fact]
+        public async Task DiscoveryTimeoutLeavesExistingLibraryUntouched()
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var block = false;
+            var directory = new TuneInDirectory(() => config, async (_, token) =>
+            {
+                if (block) await Task.Delay(Timeout.Infinite, token);
+                return XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>");
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-discovery-timeout-{Guid.NewGuid():N}.xml");
+            var imports = 0;
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        ReadStagedTree(staged, token);
+                        imports++;
+                        return Task.CompletedTask;
+                    }, null, timeoutOverride: TimeSpan.FromSeconds(1));
+                refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                var checkpoint = File.ReadAllText(path);
+
+                block = true;
+                refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("TimedOut", refresh.Status().State);
+                Assert.Equal(1, imports);
+                Assert.Equal(checkpoint, File.ReadAllText(path));
             }
             finally { File.Delete(path); }
         }
