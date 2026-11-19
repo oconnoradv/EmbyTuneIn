@@ -164,13 +164,15 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Action<int> received;
         private readonly Action<string, string> skippedBrowseLink;
         private readonly bool strictBudget;
+        private readonly int maxPages;
         private int rateLimitRetriesRemaining;
         internal int SkippedBrowseLinks { get; private set; }
         internal int SkippedStationUrls { get; private set; }
 
         internal TuneInCatalogueSession(IEnumerable<TuneInCachedPage> cached, TimeSpan lifetime, Func<DateTime> clock,
             Action<bool> requested = null, Action completed = null, Action<int> received = null,
-            bool strictBudget = true, bool retryRateLimit = false, Action<string, string> skippedBrowseLink = null)
+            bool strictBudget = true, bool retryRateLimit = false, Action<string, string> skippedBrowseLink = null,
+            int maxPages = MaxPages)
         {
             this.clock = clock ?? (() => DateTime.UtcNow);
             this.lifetime = lifetime;
@@ -179,6 +181,7 @@ namespace MediaBrowser.Plugins.TuneIn
             this.received = received;
             this.skippedBrowseLink = skippedBrowseLink;
             this.strictBudget = strictBudget;
+            this.maxPages = maxPages;
             rateLimitRetriesRemaining = retryRateLimit ? 3 : 0;
             foreach (var page in cached ?? Enumerable.Empty<TuneInCachedPage>())
                 if (Fresh(page)) pages[page.Key] = page;
@@ -213,8 +216,8 @@ namespace MediaBrowser.Plugins.TuneIn
             }
 
             lock (gate)
-                if (strictBudget && pages.Count >= MaxPages && !pages.ContainsKey(key))
-                    throw new InvalidDataException("TuneIn refresh exceeds its 128-page catalog limit.");
+                if (strictBudget && pages.Count >= maxPages && !pages.ContainsKey(key))
+                    throw new InvalidDataException($"TuneIn refresh exceeds its {maxPages}-page catalog limit.");
             XDocument document;
             while (true)
             {
@@ -242,12 +245,14 @@ namespace MediaBrowser.Plugins.TuneIn
                     pages.Remove(key);
                     foreach (var expired in pages.Where(pair => !Fresh(pair.Value)).Select(pair => pair.Key).ToList())
                         pages.Remove(expired);
-                    while (pages.Count >= MaxPages || pages.Values.Sum(page => (long)page.Bytes.Length) + bytes.Length > MaxBytes)
+                    while (pages.Count >= maxPages || pages.Values.Sum(page => (long)page.Bytes.Length) + bytes.Length > MaxBytes)
                         pages.Remove(pages.OrderBy(pair => pair.Value.SavedUtc).First().Key);
                 }
                 var otherBytes = pages.Where(pair => pair.Key != key).Sum(pair => (long)pair.Value.Bytes.Length);
-                if (pages.Count >= MaxPages && !pages.ContainsKey(key) || otherBytes + bytes.Length > MaxBytes)
-                    throw new InvalidDataException("TuneIn refresh exceeds its 128-page / 8 MiB catalog limit.");
+                if (pages.Count >= maxPages && !pages.ContainsKey(key))
+                    throw new InvalidDataException($"TuneIn refresh exceeds its {maxPages}-page catalog limit.");
+                if (otherBytes + bytes.Length > MaxBytes)
+                    throw new InvalidDataException("TuneIn refresh exceeds its 8 MiB catalog cache limit.");
                 pages[key] = new TuneInCachedPage { Key = key, Bytes = bytes, SavedUtc = clock() };
             }
             completed?.Invoke();

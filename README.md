@@ -99,6 +99,11 @@ If a safe merge is unavailable, no import or checkpoint update occurs.
 Untrusted destinations and unrecovered provider request failures still fail
 the refresh.
 
+A Music-only run can discover more than 128 pages. It uses the same ceiling
+for pages as for staged folders (1,000). Other runs keep their 128-page limit.
+The 8 MiB page cache limit, import limits, rate-limit backoff, and 20-minute
+timeout still apply. If a limit stops discovery, no incomplete tree is imported.
+
 The **Retrieve refresh log** button becomes available when the latest Control
 Panel refresh fails. It retrieves a bounded error report for that run, not the
 full Emby server log. The report is available until another refresh starts or

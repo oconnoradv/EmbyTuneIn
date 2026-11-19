@@ -504,7 +504,8 @@ namespace MediaBrowser.Plugins.TuneIn
                             if (++status.SkippedBrowseLinks <= 5)
                                 status.SkippedBrowseLinkDetails += (status.SkippedBrowseLinks == 1 ? "" : "; ")
                                     + TuneInBrowsing.CategoryName(category) + ": " + reason;
-                        }));
+                        }), maxPages: categories.Length == 1 && categories[0] == "music"
+                            ? TuneInStagedImport.MaxFolders : TuneInCatalogueSession.MaxPages);
 
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");

@@ -201,6 +201,51 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             finally { File.Delete(path); }
         }
 
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task OnlyMusicOnlyDiscoveryCanFetchBeyondTheStandardPageLimit(bool musicOnly)
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true, EnableTalk = !musicOnly
+            };
+            config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
+            var folderCount = TuneInCatalogueSession.MaxPages;
+            var fetches = 0;
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                fetches++;
+                var rows = request.Parameters.TryGetValue("id", out var id) && id == "g2698"
+                    ? string.Concat(Enumerable.Range(1, folderCount).Select(n =>
+                        $"<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c{n}'/>"))
+                    : "<outline type='audio' guide_id='s1' text='Radio'/>";
+                return Task.FromResult(XDocument.Parse($"<opml><body>{rows}</body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-page-limit-{Guid.NewGuid():N}.xml");
+            var imports = 0;
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        Assert.Equal(folderCount, ReadStagedTree(staged, token)["Music"].Length);
+                        imports++;
+                        return Task.CompletedTask;
+                    }, null);
+                refresh.Start(musicOnly ? "music" : null);
+                await WaitUntilIdle(refresh);
+                Assert.Equal(musicOnly ? "Completed" : "Error", refresh.Status().State);
+                Assert.Equal(folderCount + (musicOnly ? 1 : 0), fetches);
+                Assert.Equal(musicOnly ? 1 : 0, imports);
+                Assert.Equal(musicOnly, File.Exists(path));
+                if (!musicOnly) Assert.Contains("128-page catalog limit", refresh.GetFailureLog().Text);
+            }
+            finally { File.Delete(path); }
+        }
+
         [Fact]
         public async Task MusicRefreshRetainsSavedStationWhenFallbackUrlHasAnInvalidFragment()
         {
