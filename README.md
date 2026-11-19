@@ -90,11 +90,12 @@ recovered and confirms that the refresh completed normally.
 A malformed query on a TuneIn child browse link does not stop Control Panel
 discovery of valid siblings. If any links are skipped, the refresh reports
 **Partial** and shows the count and up to five examples (category and validation
-reason only). No import or checkpoint update occurs, so the existing library and
-last successful snapshot are left unchanged. With a saved baseline, you can
-still refresh another category individually without rechecking the affected
-category. Untrusted destinations and unrecovered provider request failures
-still fail the refresh.
+reason only). Music can apply valid station and folder updates when it has a
+compatible saved listing for every affected folder. The import retains missing
+child folders and their saved contents where a malformed link may have hidden
+them. If a safe merge is unavailable, no import or checkpoint update occurs.
+Untrusted destinations and unrecovered provider request failures still fail
+the refresh.
 
 The **Retrieve refresh log** button becomes available when the latest Control
 Panel refresh fails. It retrieves a bounded error report for that run, not the
@@ -131,8 +132,9 @@ in the imported tree until their first successful refresh.
 If an existing sibling's listing is missing or its scope changed, refresh that
 category first, or use **Refresh all enabled categories**. An outdated baseline
 from an earlier RC1 still requires a full refresh.
-Incomplete discovery blocks the import, and unchanged catalogs skip import
-unless the library needs reconciliation.
+Incomplete discovery blocks the import unless Music can safely merge with a
+saved listing as described above. Unchanged catalogs skip import unless the
+library needs reconciliation.
 The error report identifies the category where discovery stopped.
 Music discovery follows verified TuneIn genre aliases (such as Smooth Jazz, Metal and Punk) for
 station and show pagination, but rejects page links into unrelated genres.

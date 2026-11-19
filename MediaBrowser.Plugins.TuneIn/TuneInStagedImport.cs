@@ -16,6 +16,7 @@ namespace MediaBrowser.Plugins.TuneIn
         internal const int MaxItems = 50000;
         private const long MaxEstimatedBytes = 32 * 1024 * 1024;
         private readonly Dictionary<string, ChannelItemResult> folders = new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal);
+        private readonly HashSet<string> incompleteFolders = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> served = new HashSet<string>(StringComparer.Ordinal);
         private readonly CancellationToken token;
         private readonly Action<int, int> report;
@@ -25,7 +26,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal ChannelItemInfo Root { get; private set; }
         internal int Count => folders.Count;
-        internal bool DiscoveryIncomplete { get; private set; }
+        internal bool DiscoveryIncomplete => incompleteFolders.Count != 0;
 
         private TuneInStagedImport(CancellationToken token, Action<int, int> report, Action validate)
         {
@@ -42,7 +43,6 @@ namespace MediaBrowser.Plugins.TuneIn
             if (channel == null || root == null || session == null || getItems == null)
                 throw new ArgumentNullException("A complete TuneIn discovery context is required.");
             var staged = new TuneInStagedImport(token, report, validate) { Root = root };
-            var skippedBefore = session.SkippedBrowseLinks;
             var pending = new Queue<KeyValuePair<string, int>>();
             var visited = new HashSet<string>(StringComparer.Ordinal);
             pending.Enqueue(new KeyValuePair<string, int>(root.Id, 0));
@@ -58,21 +58,16 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (staged.folders.Count >= MaxFolders)
                     throw new InvalidOperationException("TuneIn discovery exceeded its folder limit.");
 
+                var skippedBefore = session.SkippedBrowseLinks;
                 var result = await getItems(current.Key, session, true, token).ConfigureAwait(false);
+                if (session.SkippedBrowseLinks != skippedBefore) staged.incompleteFolders.Add(current.Key);
                 token.ThrowIfCancellationRequested();
                 validate?.Invoke();
                 if (result?.Items == null) throw new InvalidOperationException("TuneIn returned an incomplete folder.");
 
-                estimatedBytes += 128 + current.Key.Length * 2L;
-                itemCount += result.Items.Count;
+                CheckListingBudget(current.Key, result, ref estimatedBytes, ref itemCount);
                 foreach (var item in result.Items)
                 {
-                    if (item == null || string.IsNullOrEmpty(item.Id) || item.Id.Length > 6000)
-                        throw new InvalidOperationException("TuneIn returned an invalid item during complete discovery.");
-                    estimatedBytes += 256 + 2L * ((item.Id?.Length ?? 0) + (item.Name?.Length ?? 0)
-                        + (item.ImageUrl?.Length ?? 0));
-                    if (itemCount > MaxItems || estimatedBytes > MaxEstimatedBytes)
-                        throw new InvalidOperationException("TuneIn discovery exceeded its bounded catalog limit.");
                     if (item.Type == ChannelItemType.Folder)
                     {
                         if (current.Value >= 8)
@@ -82,15 +77,79 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 staged.folders.Add(current.Key, new ChannelItemResult { Items = result.Items.ToList() });
             }
-            staged.DiscoveryIncomplete = session.SkippedBrowseLinks != skippedBefore;
             return staged;
+        }
+
+        private static void CheckListingBudget(string id, ChannelItemResult result, ref long estimatedBytes, ref int itemCount)
+        {
+            estimatedBytes += 128 + id.Length * 2L;
+            itemCount += result.Items.Count;
+            foreach (var item in result.Items)
+            {
+                if (item == null || string.IsNullOrEmpty(item.Id) || item.Id.Length > 6000)
+                    throw new InvalidOperationException("TuneIn returned an invalid item during discovery.");
+                estimatedBytes += 256 + 2L * (item.Id.Length + (item.Name?.Length ?? 0) + (item.ImageUrl?.Length ?? 0));
+            }
+            if (itemCount > MaxItems || estimatedBytes > MaxEstimatedBytes)
+                throw new InvalidOperationException("TuneIn discovery exceeded its bounded catalog limit.");
         }
 
         internal TuneInCategorySnapshot CreateSnapshot(string category)
         {
             if (DiscoveryIncomplete)
                 throw new InvalidOperationException("Cannot create a snapshot from incomplete TuneIn discovery.");
-            var listings = folders.OrderBy(folder => folder.Key, StringComparer.Ordinal)
+            return CreateSnapshot(category, folders, false);
+        }
+
+        internal TuneInCategorySnapshot MergePartialMusic(TuneInCategorySnapshot previous)
+        {
+            if (!DiscoveryIncomplete || previous?.Category != "music" || previous.RootId != Root.Id)
+                return null;
+            var saved = previous.Folders.ToDictionary(folder => folder.Id, StringComparer.Ordinal);
+            if (incompleteFolders.Any(id => !saved.ContainsKey(id))) return null;
+            var merged = new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal);
+            var pending = new Queue<(string Id, int Depth)>();
+            pending.Enqueue((Root.Id, 0));
+            long estimatedBytes = 0;
+            var itemCount = 0;
+            while (pending.Count != 0)
+            {
+                token.ThrowIfCancellationRequested();
+                validate?.Invoke();
+                var (id, depth) = pending.Dequeue();
+                if (merged.ContainsKey(id)) continue;
+                if (merged.Count >= MaxFolders)
+                    throw new InvalidOperationException("TuneIn discovery exceeded its folder limit.");
+                if (!folders.TryGetValue(id, out var listing))
+                {
+                    if (!saved.TryGetValue(id, out var old)) return null;
+                    listing = RestoreFolder(old);
+                }
+                else if (incompleteFolders.Contains(id))
+                {
+                    // A rejected link can hide a folder, not a direct audio row. Retain missing old folder edges only.
+                    var freshIds = new HashSet<string>(listing.Items.Select(item => item.Id), StringComparer.Ordinal);
+                    listing = new ChannelItemResult
+                    {
+                        Items = listing.Items.Concat(RestoreFolder(saved[id]).Items.Where(item =>
+                            item.Type == ChannelItemType.Folder && freshIds.Add(item.Id))).ToList()
+                    };
+                }
+                CheckListingBudget(id, listing, ref estimatedBytes, ref itemCount);
+                merged.Add(id, listing);
+                foreach (var item in listing.Items.Where(item => item.Type == ChannelItemType.Folder))
+                {
+                    if (depth >= 8) throw new InvalidOperationException("TuneIn discovery exceeded its folder depth limit.");
+                    pending.Enqueue((item.Id, depth + 1));
+                }
+            }
+            return CreateSnapshot(previous.Category, merged, true);
+        }
+
+        private TuneInCategorySnapshot CreateSnapshot(string category,
+            Dictionary<string, ChannelItemResult> source, bool discoveryPartial)
+        {
+            var listings = source.OrderBy(folder => folder.Key, StringComparer.Ordinal)
                 .Select(folder => new TuneInFolderSnapshot
                 {
                     Id = folder.Key,
@@ -115,6 +174,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 Category = category,
                 RootId = Root.Id,
+                DiscoveryPartial = discoveryPartial,
                 Folders = listings
             };
             snapshot.Fingerprint = Fingerprint(snapshot.Folders);

@@ -73,10 +73,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData(false)]
-        [InlineData(true)]
-        public async Task MalformedMusicLinkLeavesLibraryUnchangedButDiscoversValidSiblings(bool withBaseline)
+        [InlineData("no baseline")]
+        [InlineData("saved parent")]
+        [InlineData("new parent")]
+        public async Task MalformedMusicLinkAppliesValidUpdatesOnlyWhenSavedBranchesCanBeRetained(string baseline)
         {
+            var withBaseline = baseline != "no baseline";
+            var canApply = baseline == "saved parent";
             var config = new PluginConfiguration
             {
                 SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true, EnableTalk = true
@@ -84,6 +87,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
             const string privateMarker = "not-for-diagnostics";
             var skip = false;
+            var healed = false;
             var requests = new List<string>();
             string Link(string id, string filter = "") =>
                 $"<outline type='link' text='{privateMarker}' URL='https://opml.radiotime.com/Browse.ashx?id={id}{filter}'/>";
@@ -91,10 +95,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             {
                 var scope = request.Parameters.TryGetValue("id", out var id) ? id : request.Parameters["c"];
                 requests.Add(scope);
+                var invalid = string.Concat(Enumerable.Repeat(Link("c123", "&amp;filter=private%2F" + privateMarker), 7));
                 var rows = scope == "g2698"
-                    ? (skip ? string.Concat(Enumerable.Repeat(Link("c123", "&amp;filter=private%2F" + privateMarker), 7))
-                        : Link("c123")) + Link("c124", "&amp;filter=s:~A")
-                    : $"<outline type='audio' guide_id='s1' text='{(skip ? "Changed" : "Original")}'/>";
+                    ? (healed ? "" : !skip ? Link("c123") : baseline == "new parent" ? Link("c125") : invalid)
+                        + Link("c124", "&amp;filter=s:~A")
+                    : scope == "c125" ? invalid
+                    : scope == "c123" ? Link("c126")
+                    : $"<outline type='audio' guide_id='s1' text='{(scope == "c126" ? "Retained" : skip ? "Changed" : "Original")}'/>";
                 return Task.FromResult(XDocument.Parse($"<opml><body>{rows}</body></opml>"));
             });
             var channel = new TuneInChannel(directory);
@@ -121,46 +128,75 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 }
                 var originalCheckpoint = withBaseline ? File.ReadAllText(path) : null;
                 var originalArtworkUpdates = artworkUpdates;
+                var savedMusic = withBaseline ? imported["Music"] : null;
+                var savedTalk = withBaseline ? imported["Talk"] : null;
                 requests.Clear();
                 skip = true;
-                refresh.Start();
+                refresh.Start(withBaseline ? "music" : null);
                 await WaitUntilIdle(refresh);
 
                 var status = refresh.Status();
                 Assert.Equal("Partial", status.State);
-                Assert.Contains("existing library left unchanged", status.Phase);
-                Assert.Equal(1, status.CategoriesCompleted);
+                Assert.Contains(canApply ? "valid updates applied" : "existing library left unchanged", status.Phase);
+                Assert.Equal(withBaseline ? 0 : 1, status.CategoriesCompleted);
                 Assert.False(status.ImportMayHavePartiallyApplied);
                 Assert.Null(status.DirtyCategory);
                 Assert.Equal(7, status.SkippedBrowseLinks);
                 Assert.Equal(5, status.SkippedBrowseLinkDetails.Split(';').Length);
                 Assert.Contains("Music: Invalid catalog link parameter: filter", status.SkippedBrowseLinkDetails);
                 Assert.DoesNotContain(privateMarker, status.SkippedBrowseLinkDetails);
-                Assert.Contains(status.Categories, category => category.Category == "music" && category.State.StartsWith("Incomplete"));
-                Assert.Contains(status.Categories, category => category.Category == "talk" && category.State == "Checked (not applied)");
+                Assert.Contains(status.Categories, category => category.Category == "music"
+                    && category.State == (canApply ? "Partial (applied)" : "Incomplete (catalog links skipped)"));
+                Assert.Contains(status.Categories, category => category.Category == "talk"
+                    && category.State == (withBaseline ? "Imported" : "Checked (not applied)"));
                 Assert.Contains("c124", requests);
-                Assert.Contains("talk", requests);
+                Assert.Equal(!withBaseline, requests.Contains("talk"));
                 Assert.DoesNotContain("c123", requests);
-                Assert.Equal(withBaseline ? 1 : 0, imports);
-                Assert.Equal(originalArtworkUpdates, artworkUpdates);
+                Assert.DoesNotContain("c126", requests);
+                Assert.Equal(canApply ? 2 : withBaseline ? 1 : 0, imports);
                 if (!withBaseline)
                 {
                     Assert.False(File.Exists(path));
                     return;
                 }
 
-                Assert.Equal(originalCheckpoint, File.ReadAllText(path));
-                var savedMusic = imported["Music"];
-                var savedTalk = imported["Talk"];
+                if (!canApply)
+                {
+                    Assert.Equal(originalArtworkUpdates, artworkUpdates);
+                    Assert.Equal(originalCheckpoint, File.ReadAllText(path));
+                    return;
+                }
+
+                var before = savedMusic.Select(id => directory.Resolve(directory.Snapshot(), id).Name).ToArray();
+                var after = imported["Music"].Select(id => directory.Resolve(directory.Snapshot(), id).Name).ToArray();
+                Assert.Equal(new[] { "Original", "Retained" }, before.OrderBy(name => name));
+                Assert.Equal(new[] { "Changed", "Retained" }, after.OrderBy(name => name));
+                Assert.Equal(savedTalk, imported["Talk"]);
+                var savedPartialMusic = imported["Music"];
+                var checkpoint = new TuneInRefreshStore(path).Read();
+                Assert.True(checkpoint.Categories.Single(category => category.Category == "music").DiscoveryPartial);
+                refresh.Start("music");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Partial", refresh.Status().State);
+                Assert.Contains("merged library unchanged", refresh.Status().Phase);
+                Assert.Equal(2, imports);
+
                 requests.Clear();
                 refresh.Start("talk");
                 await WaitUntilIdle(refresh);
                 Assert.Equal("Completed", refresh.Status().State);
                 Assert.Equal(0, refresh.Status().SkippedBrowseLinks);
                 Assert.Equal(new[] { "talk" }, requests);
-                Assert.Equal(2, imports);
-                Assert.Equal(savedMusic, imported["Music"]);
+                Assert.Equal(3, imports);
+                Assert.Equal(savedPartialMusic, imported["Music"]);
                 Assert.NotEqual(Assert.Single(savedTalk), Assert.Single(imported["Talk"]));
+
+                healed = true;
+                refresh.Start("music");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal("Changed", directory.Resolve(directory.Snapshot(), Assert.Single(imported["Music"])).Name);
+                Assert.False(new TuneInRefreshStore(path).Read().Categories.Single(category => category.Category == "music").DiscoveryPartial);
             }
             finally { File.Delete(path); }
         }

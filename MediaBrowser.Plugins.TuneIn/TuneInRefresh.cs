@@ -359,7 +359,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 var checkpoint = store.Read();
                 if (checkpoint?.ConfigurationKey != snapshot.Key) return;
                 dirtyCategory = checkpoint.DirtyCategory;
-                foreach (var category in checkpoint.Categories) categoryStates[category.Category] = "Imported";
+                foreach (var category in checkpoint.Categories)
+                    categoryStates[category.Category] = category.DiscoveryPartial ? "Partial (applied)" : "Imported";
             }
             catch (Exception error)
             {
@@ -510,6 +511,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     var roots = enabled.Select(category => channel.GetCategoryRoot(snapshot, category)).ToArray();
                     var importRequired = categories.Length != 0 && (needsRebuild || dirtyAtStart != null || checkpoint.NeedsImport);
                     var changed = new HashSet<string>(StringComparer.Ordinal);
+                    var partial = new HashSet<string>(StringComparer.Ordinal);
+                    var cannotApply = false;
                     foreach (var category in categories)
                     {
                         linked.Token.ThrowIfCancellationRequested();
@@ -535,16 +538,27 @@ namespace MediaBrowser.Plugins.TuneIn
                             if (status.RequestsCompleted + status.CacheHits == requestsBefore)
                                 throw new InvalidOperationException("TuneIn category discovery returned no successful provider fetch.");
 
-                        if (staged.DiscoveryIncomplete)
+                        listings.TryGetValue(category, out var previous);
+                        var categorySnapshot = staged.DiscoveryIncomplete
+                            ? (importRequired ? null : staged.MergePartialMusic(previous))
+                            : staged.CreateSnapshot(category);
+                        if (categorySnapshot == null)
                         {
                             Update(() => categoryStates[category] = "Incomplete (catalog links skipped)");
+                            cannotApply = true;
                             continue;
                         }
 
-                        var categorySnapshot = staged.CreateSnapshot(category);
-                        if (!listings.TryGetValue(category, out var previous) || previous.Fingerprint != categorySnapshot.Fingerprint)
+                        if (previous == null || previous.Fingerprint != categorySnapshot.Fingerprint
+                            || previous.DiscoveryPartial != categorySnapshot.DiscoveryPartial)
                             changed.Add(category);
                         listings[category] = categorySnapshot;
+                        if (categorySnapshot.DiscoveryPartial)
+                        {
+                            partial.Add(category);
+                            Update(() => categoryStates[category] = "Incomplete (catalog links skipped)");
+                            continue;
+                        }
                         completed.Add(category);
                         Update(() =>
                         {
@@ -553,8 +567,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         });
                     }
 
-                    // Emby replaces the full channel tree. Do not write a checkpoint or run any import for a partial discovery.
-                    if (session.SkippedBrowseLinks != 0)
+                    if (cannotApply)
                     {
                         directory.CheckCurrent(snapshot, linked.Token);
                         Update(() =>
@@ -567,7 +580,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         return;
                     }
 
-                    if (importRequired || changed.Count != 0)
+                    var didImport = importRequired || changed.Count != 0;
+                    if (didImport)
                     {
                         // Only newly enabled, never-imported categories may wait outside the complete saved tree.
                         var importedCategories = enabled.Where(listings.ContainsKey).ToArray();
@@ -613,20 +627,25 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
                     lock (gate)
                     {
-                        var didImport = importRequired || changed.Count != 0;
                         if (didImport)
-                            foreach (var category in enabled.Where(listings.ContainsKey)) categoryStates[category] = "Imported";
+                            foreach (var category in enabled.Where(listings.ContainsKey))
+                                categoryStates[category] = listings[category].DiscoveryPartial ? "Partial (applied)" : "Imported";
                         else
-                            foreach (var category in categories) categoryStates[category] = "Unchanged";
-                        status.CategoriesSkipped = didImport ? 0 : categories.Length;
+                            foreach (var category in categories)
+                                categoryStates[category] = partial.Contains(category) ? "Partial (unchanged)" : "Unchanged";
+                        status.CategoriesSkipped = didImport ? 0 : completed.Count;
                     }
 
                     linked.Token.ThrowIfCancellationRequested();
                     directory.CheckCurrent(snapshot, linked.Token);
                     lock (gate)
                     {
-                        status.State = "Completed";
-                        status.Phase = categories.Length == 0 ? "No enabled categories" : "Completed";
+                        status.State = partial.Count == 0 ? "Completed" : "Partial";
+                        status.Phase = partial.Count != 0
+                            ? (didImport ? "Partial refresh completed; valid updates applied, saved branches retained"
+                                : "Partial refresh completed; merged library unchanged")
+                            : (categories.Length == 0 ? "No enabled categories" : "Completed");
+                        if (partial.Count != 0) status.Category = requestedCategory ?? "music";
                         status.Progress = 100;
                     }
                 }

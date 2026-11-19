@@ -42,6 +42,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public string Category { get; set; }
         public string RootId { get; set; }
         public string Fingerprint { get; set; }
+        public bool DiscoveryPartial { get; set; }
         public List<TuneInFolderSnapshot> Folders { get; set; } = new List<TuneInFolderSnapshot>();
     }
 
