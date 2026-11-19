@@ -72,6 +72,145 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             finally { File.Delete(path); }
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task MalformedMusicLinkLeavesLibraryUnchangedButDiscoversValidSiblings(bool withBaseline)
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true, EnableTalk = true
+            };
+            config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
+            const string privateMarker = "not-for-diagnostics";
+            var skip = false;
+            var requests = new List<string>();
+            string Link(string id, string filter = "") =>
+                $"<outline type='link' text='{privateMarker}' URL='https://opml.radiotime.com/Browse.ashx?id={id}{filter}'/>";
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                var scope = request.Parameters.TryGetValue("id", out var id) ? id : request.Parameters["c"];
+                requests.Add(scope);
+                var rows = scope == "g2698"
+                    ? (skip ? string.Concat(Enumerable.Repeat(Link("c123", "&amp;filter=private%2F" + privateMarker), 7))
+                        : Link("c123")) + Link("c124", "&amp;filter=s:~A")
+                    : $"<outline type='audio' guide_id='s1' text='{(skip ? "Changed" : "Original")}'/>";
+                return Task.FromResult(XDocument.Parse($"<opml><body>{rows}</body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-partial-{Guid.NewGuid():N}.xml");
+            var imports = 0;
+            var artworkUpdates = 0;
+            Dictionary<string, string[]> imported = null;
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        imports++;
+                        imported = ReadStagedTree(staged, token);
+                        return Task.CompletedTask;
+                    }, null, updateArtwork: (_, __, ___) => artworkUpdates++);
+                if (withBaseline)
+                {
+                    refresh.Start();
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("Completed", refresh.Status().State);
+                    Assert.Contains("c123", requests);
+                }
+                var originalCheckpoint = withBaseline ? File.ReadAllText(path) : null;
+                var originalArtworkUpdates = artworkUpdates;
+                requests.Clear();
+                skip = true;
+                refresh.Start();
+                await WaitUntilIdle(refresh);
+
+                var status = refresh.Status();
+                Assert.Equal("Partial", status.State);
+                Assert.Contains("existing library left unchanged", status.Phase);
+                Assert.Equal(1, status.CategoriesCompleted);
+                Assert.False(status.ImportMayHavePartiallyApplied);
+                Assert.Null(status.DirtyCategory);
+                Assert.Equal(7, status.SkippedBrowseLinks);
+                Assert.Equal(5, status.SkippedBrowseLinkDetails.Split(';').Length);
+                Assert.Contains("Music: Invalid catalog link parameter: filter", status.SkippedBrowseLinkDetails);
+                Assert.DoesNotContain(privateMarker, status.SkippedBrowseLinkDetails);
+                Assert.Contains(status.Categories, category => category.Category == "music" && category.State.StartsWith("Incomplete"));
+                Assert.Contains(status.Categories, category => category.Category == "talk" && category.State == "Checked (not applied)");
+                Assert.Contains("c124", requests);
+                Assert.Contains("talk", requests);
+                Assert.DoesNotContain("c123", requests);
+                Assert.Equal(withBaseline ? 1 : 0, imports);
+                Assert.Equal(originalArtworkUpdates, artworkUpdates);
+                if (!withBaseline)
+                {
+                    Assert.False(File.Exists(path));
+                    return;
+                }
+
+                Assert.Equal(originalCheckpoint, File.ReadAllText(path));
+                var savedMusic = imported["Music"];
+                var savedTalk = imported["Talk"];
+                requests.Clear();
+                refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(0, refresh.Status().SkippedBrowseLinks);
+                Assert.Equal(new[] { "talk" }, requests);
+                Assert.Equal(2, imports);
+                Assert.Equal(savedMusic, imported["Music"]);
+                Assert.NotEqual(Assert.Single(savedTalk), Assert.Single(imported["Talk"]));
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Theory]
+        [InlineData("untrusted", "Error", "InvalidDataException")]
+        [InlineData("pagination", "Error", "InvalidDataException")]
+        [InlineData("transport", "Error", "IOException")]
+        [InlineData("cancelled", "Cancelled", "Cancelled")]
+        public async Task UnrecoverableDiscoveryDoesNotBecomePartialAfterARejectedLink(string failure, string state, string errorCode)
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var directory = new TuneInDirectory(() => config, (request, token) =>
+            {
+                if (request.Parameters.ContainsKey("id"))
+                {
+                    if (failure == "transport") throw new IOException("Provider connection failed.");
+                    if (failure == "cancelled") throw new OperationCanceledException(token);
+                    throw new InvalidOperationException("The refused destination must not be fetched.");
+                }
+                var next = failure == "untrusted"
+                    ? "<outline type='link' URL='https://example.invalid/Browse.ashx?id=c124'/>"
+                    : failure == "pagination"
+                        ? "<outline type='link' key='next' URL='https://opml.radiotime.com/Browse.ashx?id=c124&amp;offset=1'/>"
+                        : "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c124'/>";
+                return Task.FromResult(XDocument.Parse("<opml><body>"
+                    + "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c123&amp;filter=invalid%2Ffilter'/>"
+                    + next + "</body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-fatal-{Guid.NewGuid():N}.xml");
+            var imports = 0;
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, __, ___, ____) => { imports++; return Task.CompletedTask; }, null);
+                refresh.Start();
+                await WaitUntilIdle(refresh);
+                var status = refresh.Status();
+                Assert.Equal(state, status.State);
+                Assert.Equal(errorCode, status.ErrorCode);
+                Assert.Equal(1, status.SkippedBrowseLinks);
+                Assert.Equal(0, imports);
+                Assert.False(File.Exists(path));
+                if (state == "Error") Assert.Contains("Skipped malformed catalog links: 1", refresh.GetFailureLog().Text);
+            }
+            finally { File.Delete(path); }
+        }
+
         [Fact]
         public async Task DoesNotImportOrWriteDirtyStateWhenDiscoveryFetchesNothing()
         {

@@ -87,6 +87,15 @@ retrying; adaptation cannot guarantee acceptance by TuneIn or bypass its limits.
 If the run succeeds after retrying, the status labels the earlier HTTP 429 as
 recovered and confirms that the refresh completed normally.
 
+A malformed query on a TuneIn child browse link does not stop Control Panel
+discovery of valid siblings. If any links are skipped, the refresh reports
+**Partial** and shows the count and up to five examples (category and validation
+reason only). No import or checkpoint update occurs, so the existing library and
+last successful snapshot are left unchanged. With a saved baseline, you can
+still refresh another category individually without rechecking the affected
+category. Untrusted destinations and unrecovered provider request failures
+still fail the refresh.
+
 The **Retrieve refresh log** button becomes available when the latest Control
 Panel refresh fails. It retrieves a bounded error report for that run, not the
 full Emby server log. The report is available until another refresh starts or

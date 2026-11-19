@@ -161,22 +161,33 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Action<bool> requested;
         private readonly Action completed;
         private readonly Action<int> received;
+        private readonly Action<string, string> skippedBrowseLink;
         private readonly bool strictBudget;
         private int rateLimitRetriesRemaining;
+        internal int SkippedBrowseLinks { get; private set; }
 
         internal TuneInCatalogueSession(IEnumerable<TuneInCachedPage> cached, TimeSpan lifetime, Func<DateTime> clock,
             Action<bool> requested = null, Action completed = null, Action<int> received = null,
-            bool strictBudget = true, bool retryRateLimit = false)
+            bool strictBudget = true, bool retryRateLimit = false, Action<string, string> skippedBrowseLink = null)
         {
             this.clock = clock ?? (() => DateTime.UtcNow);
             this.lifetime = lifetime;
             this.requested = requested;
             this.completed = completed;
             this.received = received;
+            this.skippedBrowseLink = skippedBrowseLink;
             this.strictBudget = strictBudget;
             rateLimitRetriesRemaining = retryRateLimit ? 3 : 0;
             foreach (var page in cached ?? Enumerable.Empty<TuneInCachedPage>())
                 if (Fresh(page)) pages[page.Key] = page;
+        }
+
+        internal bool TrySkipBrowseLink(string category, string reason)
+        {
+            if (skippedBrowseLink == null) return false;
+            SkippedBrowseLinks++;
+            skippedBrowseLink(category, reason);
+            return true;
         }
 
         private bool Fresh(TuneInCachedPage page) =>

@@ -25,6 +25,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal ChannelItemInfo Root { get; private set; }
         internal int Count => folders.Count;
+        internal bool DiscoveryIncomplete { get; private set; }
 
         private TuneInStagedImport(CancellationToken token, Action<int, int> report, Action validate)
         {
@@ -41,6 +42,7 @@ namespace MediaBrowser.Plugins.TuneIn
             if (channel == null || root == null || session == null || getItems == null)
                 throw new ArgumentNullException("A complete TuneIn discovery context is required.");
             var staged = new TuneInStagedImport(token, report, validate) { Root = root };
+            var skippedBefore = session.SkippedBrowseLinks;
             var pending = new Queue<KeyValuePair<string, int>>();
             var visited = new HashSet<string>(StringComparer.Ordinal);
             pending.Enqueue(new KeyValuePair<string, int>(root.Id, 0));
@@ -80,11 +82,14 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 staged.folders.Add(current.Key, new ChannelItemResult { Items = result.Items.ToList() });
             }
+            staged.DiscoveryIncomplete = session.SkippedBrowseLinks != skippedBefore;
             return staged;
         }
 
         internal TuneInCategorySnapshot CreateSnapshot(string category)
         {
+            if (DiscoveryIncomplete)
+                throw new InvalidOperationException("Cannot create a snapshot from incomplete TuneIn discovery.");
             var listings = folders.OrderBy(folder => folder.Key, StringComparer.Ordinal)
                 .Select(folder => new TuneInFolderSnapshot
                 {

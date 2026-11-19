@@ -198,20 +198,28 @@ namespace MediaBrowser.Plugins.TuneIn
             return copy;
         }
 
-        public static DirectoryRequest ParseLink(string value)
+        public static DirectoryRequest ParseLink(string value, Func<string, bool> skipMalformedBrowse = null)
         {
             if (!Uri.TryCreate(HttpUtility.HtmlDecode(value), UriKind.Absolute, out var uri)
                 || (uri.Scheme != "http" && uri.Scheme != "https") || !uri.IsDefaultPort
                 || uri.UserInfo.Length != 0 || !uri.Host.Equals("opml.radiotime.com", StringComparison.OrdinalIgnoreCase)
                 || (uri.AbsolutePath != "/Browse.ashx" && uri.AbsolutePath != "/Tune.ashx"))
                 throw new InvalidDataException("Untrusted TuneIn catalog link.");
+
+            DirectoryRequest RejectQuery(string reason)
+            {
+                if (uri.AbsolutePath == "/Browse.ashx" && skipMalformedBrowse?.Invoke(reason) == true)
+                    return null;
+                throw new InvalidDataException(reason);
+            }
+
             var query = HttpUtility.ParseQueryString(uri.Query);
             var last = HttpUtility.UrlDecode(uri.Query.Substring(uri.Query.LastIndexOf('&') + 1).TrimStart('?'));
             var region = ConfigurationSnapshot.ValidId(query["id"], "location") && query.GetValues("id")?.Length == 1;
             var alphabetHash = uri.AbsolutePath == "/Browse.ashx"
                 && (uri.Fragment == "#" || region && uri.Fragment == "#:country")
                 && (last == "filter=s:~" || last == "filter=p:~") && query.GetValues("filter")?.Length == 1;
-            if (uri.Fragment.Length != 0 && !alphabetHash) throw new InvalidDataException("Invalid catalog fragment.");
+            if (uri.Fragment.Length != 0 && !alphabetHash) return RejectQuery("Invalid catalog fragment.");
             if (alphabetHash) query["filter"] += uri.Fragment;
             var request = new DirectoryRequest { Method = uri.AbsolutePath.Substring(1) };
             foreach (var key in new[] { "id", "c", "filter", "offset", "pivot", "sid" })
@@ -221,10 +229,10 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (query.GetValues(key).Length != 1 || (!Regex.IsMatch(item, @"\A[A-Za-z0-9:,*-]{1,80}\z")
                     && !(key == "filter" && Regex.IsMatch(item, @"\A[sp]:~[\p{L}\p{Nd}#](?::l[1-9][0-9]{0,9})?\z"))
                     && !(key == "filter" && region && Regex.IsMatch(item, @"\A[sp]:~[\p{L}\p{Nd}#]:country\z"))))
-                    throw new InvalidDataException("Invalid catalog link parameter: " + key);
+                    return RejectQuery("Invalid catalog link parameter: " + key);
                 request.Parameters[key] = item;
             }
-            if (request.Parameters.Count == 0) throw new InvalidDataException("Empty catalog link.");
+            if (request.Parameters.Count == 0) return RejectQuery("Empty catalog link.");
             return request;
         }
     }

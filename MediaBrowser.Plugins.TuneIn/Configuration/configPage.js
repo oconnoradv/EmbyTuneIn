@@ -287,6 +287,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             description += ' (requested: ' + refreshName(status, status.ActiveRequest) + ')';
         if (status.CategoriesTotal) description += '. ' + status.CategoriesCompleted + ' of ' + status.CategoriesTotal + ' categories checked';
         if (status.CategoriesSkipped) description += '; ' + status.CategoriesSkipped + ' unchanged';
+        if (status.SkippedBrowseLinks) {
+            description += '. Skipped malformed TuneIn catalog links: ' + status.SkippedBrowseLinks;
+            if (status.SkippedBrowseLinkDetails) description += ' (' + status.SkippedBrowseLinkDetails + ')';
+        }
         if (status.LastHttpStatus) {
             description += '. TuneIn returned HTTP ' + status.LastHttpStatus;
             if (status.LastHttpStatus === 429 && status.State === 'Completed')

@@ -764,7 +764,25 @@ test('settings lock protects pending edits and saves without blocking catalog re
     assert.equal(app.writes[0].config.Username, 'unsaved');
 });
 
-for (const state of ['Completed', 'Running', 'Error', 'Cancelled', 'TimedOut']) {
+test('partial discovery reports skipped links without implying an import', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({
+        State: 'Partial', Phase: 'Discovery incomplete; existing library left unchanged',
+        CategoriesCompleted: 1, CategoriesTotal: 2, SkippedBrowseLinks: 7,
+        SkippedBrowseLinkDetails: 'Music: Invalid catalog link parameter: filter'
+    });
+    await visit;
+    const text = app.elements['.refreshStatus'].textContent;
+    assert.match(text, /Partial - Discovery incomplete; existing library left unchanged/);
+    assert.match(text, /1 of 2 categories checked/);
+    assert.match(text, /Skipped malformed TuneIn catalog links: 7 \(Music: Invalid catalog link parameter: filter\)/);
+    assert.equal(app.elements['.refreshLogButton'].disabled, true);
+    app.instance.onPause();
+});
+
+for (const state of ['Completed', 'Partial', 'Running', 'Error', 'Cancelled', 'TimedOut']) {
     test(`HTTP 429 is marked recovered only for a completed refresh (${state})`, async () => {
         const app = harness(true);
         const visit = app.instance.onResume();

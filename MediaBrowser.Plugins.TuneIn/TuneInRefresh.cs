@@ -18,6 +18,8 @@ namespace MediaBrowser.Plugins.TuneIn
         public int CategoriesTotal { get; set; }
         public int CategoriesCompleted { get; set; }
         public int CategoriesSkipped { get; set; }
+        public int SkippedBrowseLinks { get; set; }
+        public string SkippedBrowseLinkDetails { get; set; }
         public int RequestsStarted { get; set; }
         public int RequestsCompleted { get; set; }
         public int CacheHits { get; set; }
@@ -495,7 +497,13 @@ namespace MediaBrowser.Plugins.TuneIn
                     session = new TuneInCatalogueSession(null, CatalogueCacheLifetime, clock,
                         hit => Update(() => { if (hit) status.CacheHits++; else status.RequestsStarted++; }),
                         () => Update(() => status.RequestsCompleted++),
-                        code => Update(() => status.LastHttpStatus = code), retryRateLimit: true);
+                        code => Update(() => status.LastHttpStatus = code), retryRateLimit: true,
+                        skippedBrowseLink: (category, reason) => Update(() =>
+                        {
+                            if (++status.SkippedBrowseLinks <= 5)
+                                status.SkippedBrowseLinkDetails += (status.SkippedBrowseLinks == 1 ? "" : "; ")
+                                    + TuneInBrowsing.CategoryName(category) + ": " + reason;
+                        }));
 
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");
@@ -527,6 +535,12 @@ namespace MediaBrowser.Plugins.TuneIn
                             if (status.RequestsCompleted + status.CacheHits == requestsBefore)
                                 throw new InvalidOperationException("TuneIn category discovery returned no successful provider fetch.");
 
+                        if (staged.DiscoveryIncomplete)
+                        {
+                            Update(() => categoryStates[category] = "Incomplete (catalog links skipped)");
+                            continue;
+                        }
+
                         var categorySnapshot = staged.CreateSnapshot(category);
                         if (!listings.TryGetValue(category, out var previous) || previous.Fingerprint != categorySnapshot.Fingerprint)
                             changed.Add(category);
@@ -537,6 +551,20 @@ namespace MediaBrowser.Plugins.TuneIn
                             status.CategoriesCompleted = completed.Count;
                             status.Progress = 99d * completed.Count / categories.Length;
                         });
+                    }
+
+                    // Emby replaces the full channel tree. Do not write a checkpoint or run any import for a partial discovery.
+                    if (session.SkippedBrowseLinks != 0)
+                    {
+                        directory.CheckCurrent(snapshot, linked.Token);
+                        Update(() =>
+                        {
+                            foreach (var category in completed) categoryStates[category] = "Checked (not applied)";
+                            status.State = "Partial";
+                            status.Phase = "Discovery incomplete; existing library left unchanged";
+                            status.Category = requestedCategory;
+                        });
+                        return;
                     }
 
                     if (importRequired || changed.Count != 0)
@@ -623,6 +651,9 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 finally
                 {
+                    if (session?.SkippedBrowseLinks > 0)
+                        logger?.Warn("TuneIn refresh skipped {0} malformed catalog link(s). Examples: {1}",
+                            status.SkippedBrowseLinks, status.SkippedBrowseLinkDetails);
                     lock (gate)
                     {
                         status.FinishedUtc = clock();
@@ -650,6 +681,9 @@ namespace MediaBrowser.Plugins.TuneIn
             };
             if (failedStatus.LastHttpStatus.HasValue)
                 lines.Insert(4, "TuneIn HTTP status: " + failedStatus.LastHttpStatus.Value);
+            if (failedStatus.SkippedBrowseLinks != 0)
+                lines.Insert(lines.Count - 1, "Skipped malformed catalog links: " + failedStatus.SkippedBrowseLinks
+                    + ". Examples: " + failedStatus.SkippedBrowseLinkDetails);
             var report = string.Join(Environment.NewLine, lines);
             var truncated = report.Length > FailureReportLimit;
             if (truncated) report = report.Substring(0, FailureReportLimit);

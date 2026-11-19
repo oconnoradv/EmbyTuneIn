@@ -118,8 +118,9 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 else if (type == "link")
                 {
-                    var link = DirectoryRequest.ParseLink(TuneInDirectory.Attribute(row, "URL"));
-                    if (link.Method != "Browse.ashx") continue;
+                    var link = DirectoryRequest.ParseLink(TuneInDirectory.Attribute(row, "URL"),
+                        reason => session?.TrySkipBrowseLink(entry.Category, reason) == true);
+                    if (link == null || link.Method != "Browse.ashx") continue;
                     var next = ScopedRequest(snapshot, entry, link);
                     var contentCategory = entry.Category == "language" ? LanguageGroup(entry, next) : null;
                     if (contentCategory != null && contentCategory != "language" && !snapshot.Enabled(contentCategory)) continue;
