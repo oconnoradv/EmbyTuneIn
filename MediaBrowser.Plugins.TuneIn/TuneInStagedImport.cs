@@ -154,10 +154,13 @@ namespace MediaBrowser.Plugins.TuneIn
         internal TuneInCategorySnapshot MergePartialMusic(TuneInCategorySnapshot previous, Func<string, string> stationId,
             Func<string, string, bool> isForwardPage)
         {
-            if (!DiscoveryIncomplete || previous?.Category != "music" || previous.RootId != Root.Id)
+            if (!DiscoveryIncomplete)
+                return null;
+            if (previous == null)
+                return CreateSnapshot("music", folders, true);
+            if (previous.Category != "music" || previous.RootId != Root.Id)
                 return null;
             var saved = previous.Folders.ToDictionary(folder => folder.Id, StringComparer.Ordinal);
-            if (incompleteFolders.Any(id => !saved.ContainsKey(id))) return null;
             var merged = new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal);
             var pending = new Queue<(string Id, int Depth)>();
             pending.Enqueue((Root.Id, 0));
@@ -176,7 +179,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (!saved.TryGetValue(id, out var old)) return null;
                     listing = RestoreFolder(old);
                 }
-                else if (incompleteFolders.Contains(id))
+                else if (incompleteFolders.Contains(id) && saved.TryGetValue(id, out var savedFolder))
                 {
                     var freshFolders = new HashSet<string>(listing.Items.Where(item => item.Type == ChannelItemType.Folder)
                         .Select(item => item.Id), StringComparer.Ordinal);
@@ -186,7 +189,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         : null;
                     listing = new ChannelItemResult
                     {
-                        Items = listing.Items.Concat(RestoreFolder(saved[id]).Items.Where(item =>
+                        Items = listing.Items.Concat(RestoreFolder(savedFolder).Items.Where(item =>
                             item.Type == ChannelItemType.Folder
                                 ? freshFolders.Add(item.Id)
                                 : item.Type == ChannelItemType.Media && freshStations != null

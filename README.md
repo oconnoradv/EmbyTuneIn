@@ -111,11 +111,17 @@ station fallback URL does not stop Control Panel discovery of valid siblings.
 If any links are skipped, the refresh reports
 **Partial** and shows the total and counts grouped by category and validation
 reason. It shows up to five groups and combines the rest into an “other” count.
-Music can apply valid station and folder updates when it has a
-compatible saved listing for every affected folder. The import retains missing
-child folders and their saved contents where a malformed link may have hidden
-them, and retains missing saved stations where a station URL was skipped.
-If a safe merge is unavailable, no import or checkpoint update occurs.
+Music imports the valid station and folder results even on the first refresh
+or when a skipped link occurs inside a newly discovered folder. Rejected links
+are excluded; one skipped link can represent a whole branch, not just one station.
+Where a compatible saved folder exists, the import still retains missing child
+folders and their saved contents where a malformed link may have hidden them,
+and retains missing saved stations where a station URL was skipped. Without a
+saved counterpart, only the successfully discovered entries can be imported.
+The saved Music listing and status remain **Partial** until discovery completes
+without skipped links. Other categories retain their existing fail-closed
+partial-discovery behavior. If a retained tree cannot be assembled consistently,
+no import or checkpoint update occurs.
 Untrusted destinations and unrecovered provider request failures still fail
 the refresh.
 
