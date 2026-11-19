@@ -31,6 +31,8 @@ namespace MediaBrowser.Plugins.TuneIn
         public bool ImportMayHavePartiallyApplied { get; set; }
         public bool Resumed { get; set; }
         public int DiscoveryTimeouts { get; set; }
+        public int? AutomaticRetry { get; set; }
+        public int? AutomaticRetryLimit { get; set; }
         public DateTime? DiscoveryCheckpointUtc { get; set; }
         public double Progress { get; set; }
         public string ErrorCode { get; set; }
@@ -147,6 +149,11 @@ namespace MediaBrowser.Plugins.TuneIn
                 copy.RecoveryId = copy.RecoveryCategory == null ? null : recoveryId;
                 copy.ActiveRequest = copy.Busy ? activeRequest ?? "all" : null;
                 copy.Cancelling = copy.Busy && cancellation.IsCancellationRequested;
+                if (copy.Busy && copy.State == "Running" && !copy.Cancelling && copy.DiscoveryTimeouts > 0)
+                {
+                    copy.AutomaticRetry = copy.DiscoveryTimeouts;
+                    copy.AutomaticRetryLimit = DiscoveryResumeLimit;
+                }
                 copy.QueuedRequests = queue.Select(category => category ?? "all").ToArray();
                 copy.QueueSlotsAvailable = QueueCapacity - queue.Count;
                 copy.Categories = snapshot.Categories.Select(category => new TuneInCategoryRefreshStatus
@@ -221,7 +228,7 @@ namespace MediaBrowser.Plugins.TuneIn
                                 if (cancellation.IsCancellationRequested || disposed) break;
                                 status = new TuneInRefreshStatus
                                 {
-                                    State = "Running", Phase = "Preparing to retry discovery after timeout", Category = next,
+                                    State = "Running", Phase = "Preparing", Category = next,
                                     StartedUtc = status.StartedUtc, DiscoveryTimeouts = status.DiscoveryTimeouts
                                 };
                             }
@@ -588,8 +595,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         Update(() =>
                         {
                             status.Category = category;
-                            status.Phase = status.DiscoveryTimeouts == 0 ? "Discovering"
-                                : $"Discovering (automatic retry {status.DiscoveryTimeouts} of {DiscoveryResumeLimit} after timeout)";
+                            status.Phase = "Discovering";
                             status.ImportFoldersServed = 0;
                             status.ImportFoldersTotal = 0;
                         });

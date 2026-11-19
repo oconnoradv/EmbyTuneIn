@@ -106,8 +106,10 @@ combined per attempt, with a shared 1,000-page limit regardless of which
 categories are selected. During discovery, the plugin checkpoints validated
 catalog pages separately from the imported library at the first completed
 folder after each 20-minute interval. A discovery timeout is recorded and
-automatically retried up to ten times after the initial attempt. Retries reuse checkpointed pages
-without requesting them again; work since the last checkpoint may be repeated.
+automatically retried up to ten times after the initial attempt. The Control Panel
+shows the active retry number, for example **Automatic retry 2 of 10 after
+discovery timed out**. Retries reuse checkpointed pages without requesting them
+again; work since the last checkpoint may be repeated.
 After a server restart, starting the same refresh can also reuse the checkpoint
 if the settings still match and discovery began less than 48 hours ago.
 Cancellation stops automatic retries, and an import timeout is not retried

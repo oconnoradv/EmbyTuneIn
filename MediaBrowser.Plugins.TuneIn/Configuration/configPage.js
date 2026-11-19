@@ -298,6 +298,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             [status.State, status.Phase, category].filter(Boolean).join(' - ');
         if (status.ActiveRequest && status.ActiveRequest !== status.Category)
             description += ' (requested: ' + refreshName(status, status.ActiveRequest) + ')';
+        if (status.AutomaticRetry && status.AutomaticRetryLimit)
+            description += '. Automatic retry ' + status.AutomaticRetry + ' of ' + status.AutomaticRetryLimit + ' after discovery timed out';
         if (status.CategoriesTotal) description += '. ' + status.CategoriesCompleted + ' of ' + status.CategoriesTotal + ' categories checked';
         if (status.CategoriesSkipped) description += '; ' + status.CategoriesSkipped + ' unchanged';
         if (status.SkippedBrowseLinks) {

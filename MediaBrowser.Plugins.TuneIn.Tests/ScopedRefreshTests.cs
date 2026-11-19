@@ -298,11 +298,15 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
             var block = false;
             var attempts = 0;
+            var activeRetries = new List<(int? Number, int? Limit)>();
+            TuneInRefresh runningRefresh = null;
             var directory = new TuneInDirectory(() => config, async (_, token) =>
             {
                 if (block)
                 {
                     attempts++;
+                    var active = runningRefresh.Status();
+                    activeRetries.Add((active.AutomaticRetry, active.AutomaticRetryLimit));
                     await Task.Delay(Timeout.Infinite, token);
                 }
                 return XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>");
@@ -320,6 +324,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         imports++;
                         return Task.CompletedTask;
                     }, null, timeoutOverride: TimeSpan.FromSeconds(1));
+                runningRefresh = refresh;
                 refresh.Start("talk");
                 await WaitUntilIdle(refresh);
                 Assert.Equal("Completed", refresh.Status().State);
@@ -331,6 +336,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal("TimedOut", refresh.Status().State);
                 Assert.Equal(11, refresh.Status().DiscoveryTimeouts);
                 Assert.Equal(11, attempts);
+                Assert.Equal((null, null), activeRetries[0]);
+                Assert.Equal(Enumerable.Range(1, 10).Select(n => ((int?)n, (int?)10)), activeRetries.Skip(1));
+                Assert.Null(refresh.Status().AutomaticRetry);
                 Assert.Null(refresh.Status().DiscoveryCheckpointUtc);
                 Assert.Equal(1, imports);
                 Assert.Equal(checkpoint, File.ReadAllText(path));

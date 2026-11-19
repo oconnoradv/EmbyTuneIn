@@ -764,6 +764,21 @@ test('settings lock protects pending edits and saves without blocking catalog re
     assert.equal(app.writes[0].config.Username, 'unsaved');
 });
 
+test('refresh status shows the active automatic retry alongside the current phase', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({
+        State: 'Running', Phase: 'Importing', Category: 'music', Busy: true,
+        AutomaticRetry: 2, AutomaticRetryLimit: 10, ImportMayHavePartiallyApplied: true
+    });
+    await visit;
+    const text = app.elements['.refreshStatus'].textContent;
+    assert.match(text, /Running - Importing - Music\. Automatic retry 2 of 10 after discovery timed out/);
+    assert.doesNotMatch(text, /interrupted import/);
+    app.instance.onPause();
+});
+
 test('partial discovery reports skipped links without implying an import', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();
