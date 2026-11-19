@@ -48,6 +48,7 @@ function harness(manualStatus = false, manualSave = false) {
         '.apiRequestIntervalSeconds': requestInterval };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.categories', '.selectors',
         '.loginFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
+        '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
         '.localSelector', '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
         '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
@@ -779,6 +780,47 @@ test('refresh status shows the active automatic retry alongside the current phas
     app.instance.onPause();
 });
 
+test('collapsed refresh summary and diagnostics expose live discovery metrics', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({
+        State: 'Running', Phase: 'Discovering', Category: 'music', Busy: true,
+        StartedUtc: new Date(Date.now() - 42000).toISOString(),
+        LastProgressUtc: new Date(Date.now() - 9000).toISOString(),
+        CatalogPagesCached: 1842, CatalogPagesLimit: 5000,
+        CategoriesCompleted: 2, CategoriesTotal: 8,
+        RequestsStarted: 25, RequestsCompleted: 24, CacheHits: 8,
+        ActiveRequests: 1, RateLimitRetries: 2, Resumed: true,
+        DiscoveryCheckpointUtc: new Date(Date.now() - 60000).toISOString()
+    });
+    await visit;
+    assert.equal(app.elements['.tuneInRefresh'].open, false);
+    assert.match(app.elements['.refreshSummary'].textContent,
+        /Catalog Refresh - Running - Discovering - Music - 1(?:,|\.|\s)?842 pages - progress \d+ sec ago/);
+    assert.match(app.elements['.refreshElapsed'].textContent, /sec/);
+    assert.match(app.elements['.refreshWork'].textContent,
+        /1(?:,|\.|\s)?842 catalog pages \(limit 5(?:,|\.|\s)?000\); 2 \/ 8 categories checked/);
+    assert.match(app.elements['.refreshLastProgress'].textContent, /\d+ sec ago/);
+    assert.match(app.elements['.refreshDiagnosticsText'].textContent,
+        /Provider requests: 25 attempts, 24 successful; 8 cached page replays; 1 active HTTP request; 2 rate-limit retries; Resumed from checkpoint/);
+    app.instance.onPause();
+});
+
+test('refresh work metric switches to actual folder progress during import', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({
+        State: 'Running', Phase: 'Importing', Category: 'music', Busy: true,
+        ImportFoldersServed: 248, ImportFoldersTotal: 1107
+    });
+    await visit;
+    assert.match(app.elements['.refreshSummary'].textContent, /248\/1(?:,|\.|\s)?107 folders/);
+    assert.match(app.elements['.refreshWork'].textContent, /248 \/ 1(?:,|\.|\s)?107 folders served/);
+    app.instance.onPause();
+});
+
 test('partial discovery reports skipped links without implying an import', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();
@@ -792,8 +834,10 @@ test('partial discovery reports skipped links without implying an import', async
     await visit;
     const text = app.elements['.refreshStatus'].textContent;
     assert.match(text, /Partial - Discovery incomplete; existing library left unchanged/);
-    assert.match(text, /1 of 2 categories checked/);
-    assert.match(text, /Skipped malformed TuneIn catalog links: 7 \(4 x Music: Invalid catalog fragment; 3 x Music: Invalid catalog link parameter: filter\)\. TuneIn returned HTTP 429 \(Too Many Requests\)/);
+    assert.match(app.elements['.refreshWork'].textContent, /1 \/ 2 categories checked/);
+    assert.match(text, /7 malformed catalog links skipped\. TuneIn returned HTTP 429 \(Too Many Requests\)/);
+    assert.match(app.elements['.refreshDiagnosticsText'].textContent,
+        /Skipped malformed TuneIn catalog links: 7 \(4 x Music: Invalid catalog fragment; 3 x Music: Invalid catalog link parameter: filter\)/);
     assert.equal(app.elements['.refreshLogButton'].disabled, true);
     app.instance.onPause();
 });

@@ -223,6 +223,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Action<bool> requested;
         private readonly Action completed;
         private readonly Action<int> received;
+        private readonly Action rateLimitRetry;
         private readonly Action<string, string> skippedBrowseLink;
         private readonly bool strictBudget;
         private readonly int maxPages;
@@ -231,6 +232,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private int rateLimitRetriesRemaining;
         internal int SkippedBrowseLinks { get; private set; }
         internal int SkippedStationUrls { get; private set; }
+        internal int PageCount { get { lock (gate) return pages.Count; } }
         internal TuneInRefreshTimings Timings { get; }
 
         internal sealed class FolderRead
@@ -250,13 +252,15 @@ namespace MediaBrowser.Plugins.TuneIn
         internal TuneInCatalogueSession(IEnumerable<TuneInCachedPage> cached, TimeSpan lifetime, Func<DateTime> clock,
             Action<bool> requested = null, Action completed = null, Action<int> received = null,
             bool strictBudget = true, bool retryRateLimit = false, Action<string, string> skippedBrowseLink = null,
-            int maxPages = MaxPages, TuneInRefreshTimings timings = null, int maxBytes = MaxBytes)
+            int maxPages = MaxPages, TuneInRefreshTimings timings = null, int maxBytes = MaxBytes,
+            Action rateLimitRetry = null)
         {
             this.clock = clock ?? (() => DateTime.UtcNow);
             this.lifetime = lifetime;
             this.requested = requested;
             this.completed = completed;
             this.received = received;
+            this.rateLimitRetry = rateLimitRetry;
             this.skippedBrowseLink = skippedBrowseLink;
             this.strictBudget = strictBudget;
             this.maxPages = maxPages;
@@ -374,6 +378,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     received?.Invoke(failure.StatusCode);
                     if (failure.StatusCode != 429 || Interlocked.Decrement(ref rateLimitRetriesRemaining) < 0)
                         throw;
+                    rateLimitRetry?.Invoke();
                 }
                 finally { if (Timings != null) lock (Timings.Gate) Timings.Fetch += elapsed.Elapsed; }
             }

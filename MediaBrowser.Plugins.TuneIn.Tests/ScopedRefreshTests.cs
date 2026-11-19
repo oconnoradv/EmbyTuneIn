@@ -336,12 +336,14 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 async token =>
                 {
                     sentAt = now;
+                    Assert.Equal(1, Volatile.Read(ref timings.ActiveResponses));
                     Assert.False(token.IsCancellationRequested);
                     await Task.Delay(Timeout.Infinite, token);
                     return null;
                 }, 3, CancellationToken.None, TimeSpan.FromMilliseconds(100), timings));
             Assert.True(sentAt != DateTime.MinValue);
             Assert.True(timings.Backoff > TimeSpan.Zero);
+            Assert.Equal(0, Volatile.Read(ref timings.ActiveResponses));
             Assert.Null(timings.DescribeWait());
         }
 
@@ -1178,8 +1180,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [Fact]
         public async Task RateLimitRetryBudgetIsSharedAcrossPagesAndDoesNotRetryOtherErrors()
         {
+            var rateLimitRetries = 0;
             var session = new TuneInCatalogueSession(null, TimeSpan.FromMinutes(15), () => DateTime.UtcNow,
-                retryRateLimit: true);
+                retryRateLimit: true, rateLimitRetry: () => rateLimitRetries++);
             for (var page = 0; page < 3; page++)
             {
                 var request = new DirectoryRequest();
@@ -1201,6 +1204,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 }, CancellationToken.None));
             Assert.Equal(429, error.StatusCode);
             Assert.Equal(1, finalAttempts);
+            Assert.Equal(3, rateLimitRetries);
             var otherSession = new TuneInCatalogueSession(null, TimeSpan.FromMinutes(15), () => DateTime.UtcNow,
                 retryRateLimit: true);
             var otherAttempts = 0;
@@ -1273,6 +1277,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     Assert.Equal(TimeSpan.FromSeconds(60), sportAttempts[2] - sportAttempts[1]);
                 var status = refresh.Status();
                 Assert.Equal(sportAttempts.Count + 1, status.RequestsStarted);
+                Assert.Equal(Math.Min(limitedAttempts, 3), status.RateLimitRetries);
+                Assert.Equal(0, status.ActiveRequests);
+                Assert.True(status.CatalogPagesCached > 0);
+                Assert.Equal(TuneInCatalogueSession.MaxRefreshPages, status.CatalogPagesLimit);
                 Assert.Equal(429, status.LastHttpStatus);
                 if (persistent)
                 {

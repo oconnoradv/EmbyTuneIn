@@ -284,6 +284,31 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         504: 'Gateway Timeout'
     };
 
+    function formatDuration(seconds) {
+        if (typeof seconds !== 'number' || !isFinite(seconds) || seconds < 0) return null;
+        seconds = Math.floor(seconds);
+        var hours = Math.floor(seconds / 3600);
+        var minutes = Math.floor((seconds % 3600) / 60);
+        var remaining = seconds % 60;
+        if (hours) return hours + ' hr ' + String(minutes).padStart(2, '0') + ' min';
+        if (minutes) return minutes + ' min ' + String(remaining).padStart(2, '0') + ' sec';
+        return seconds + ' sec';
+    }
+
+    function elapsedSeconds(status) {
+        if (!status.StartedUtc) return null;
+        var started = new Date(status.StartedUtc).getTime();
+        if (!isFinite(started)) return null;
+        var ended = status.Busy ? Date.now() : new Date(status.FinishedUtc).getTime();
+        return isFinite(started) && isFinite(ended) ? Math.max(0, (ended - started) / 1000) : null;
+    }
+
+    function progressAgeSeconds(status) {
+        if (!status.LastProgressUtc) return null;
+        var lastProgress = new Date(status.LastProgressUtc).getTime();
+        return isFinite(lastProgress) ? Math.max(0, (Date.now() - lastProgress) / 1000) : null;
+    }
+
     function renderRefresh(instance, status) {
         instance.refreshBusy = !!status.Busy;
         if (typeof status.SettingsLocked === 'boolean' && !instance.lockChanging && !instance.saving) {
@@ -294,6 +319,22 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshStatus = status;
         var category = ({ local: 'Local Radio', music: 'Music', language: 'By Language', location: 'By Location',
             talk: 'Talk', sports: 'Sports', podcast: 'Podcasts', presets: 'My Favorites' })[status.Category];
+        var elapsed = formatDuration(elapsedSeconds(status));
+        var progressAge = formatDuration(progressAgeSeconds(status));
+        var pages = typeof status.CatalogPagesCached === 'number' ? status.CatalogPagesCached.toLocaleString() : null;
+        var pageLimit = typeof status.CatalogPagesLimit === 'number' ? status.CatalogPagesLimit.toLocaleString() : null;
+        var summary = ['Catalog Refresh'];
+        if (status.State !== 'NeverRun') summary.push(status.State);
+        if (status.Busy && status.Phase) summary.push(status.Phase);
+        if (category) summary.push(category);
+        if (status.Busy && status.Phase === 'Importing' && status.ImportFoldersTotal)
+            summary.push(status.ImportFoldersServed.toLocaleString() + '/' + status.ImportFoldersTotal.toLocaleString() + ' folders');
+        else if (status.Busy && status.Phase === 'Discovering' && pages != null)
+            summary.push(pages + ' pages');
+        if (status.Busy && progressAge) summary.push('progress ' + progressAge + ' ago');
+        else if (!status.Busy && elapsed) summary.push('elapsed ' + elapsed);
+        instance.view.querySelector('.refreshSummary').textContent = summary.join(' - ');
+
         var description = status.State === 'NeverRun' ? 'No Control Panel refresh has run.' :
             [status.State, status.Phase, category].filter(Boolean).join(' - ');
         if (status.ActiveRequest && status.ActiveRequest !== status.Category)
@@ -301,16 +342,43 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (status.AutomaticRetry && status.AutomaticRetryLimit)
             description += '. Automatic retry ' + status.AutomaticRetry + ' of ' + status.AutomaticRetryLimit + ' after discovery timed out';
         if (status.Busy && status.Activity) description += '. ' + status.Activity;
-        if (status.Busy && status.LastProgressUtc) {
-            var lastProgress = new Date(status.LastProgressUtc);
-            if (!isNaN(lastProgress.getTime())) description += '. Last progress: ' + lastProgress.toLocaleTimeString();
+        var work = '-';
+        if (status.Busy && status.Phase === 'Importing' && status.ImportFoldersTotal)
+            work = status.ImportFoldersServed.toLocaleString() + ' / ' + status.ImportFoldersTotal.toLocaleString() + ' folders served';
+        else if (status.Busy && status.Phase === 'Discovering' && pages != null) {
+            work = pages + (pageLimit == null ? ' catalog pages' : ' catalog pages (limit ' + pageLimit + ')');
+            if (status.CategoriesTotal)
+                work += '; ' + status.CategoriesCompleted + ' / ' + status.CategoriesTotal + ' categories checked';
         }
-        if (status.CategoriesTotal) description += '. ' + status.CategoriesCompleted + ' of ' + status.CategoriesTotal + ' categories checked';
-        if (status.CategoriesSkipped) description += '; ' + status.CategoriesSkipped + ' unchanged';
+        else if (status.CategoriesTotal)
+            work = status.CategoriesCompleted + ' / ' + status.CategoriesTotal + ' categories checked';
+        instance.view.querySelector('.refreshElapsed').textContent = elapsed || '-';
+        instance.view.querySelector('.refreshWork').textContent = work;
+        instance.view.querySelector('.refreshLastProgress').textContent = progressAge
+            ? progressAge + ' ago' : status.LastProgressUtc ? 'Finished' : '-';
+
+        var diagnostics = [];
+        if (typeof status.RequestsStarted === 'number' || typeof status.RequestsCompleted === 'number') {
+            diagnostics.push('Provider requests: ' + (status.RequestsStarted || 0) + ' attempts, '
+                + (status.RequestsCompleted || 0) + ' successful');
+        }
+        if (typeof status.CacheHits === 'number') diagnostics.push(status.CacheHits + ' cached page replays');
+        if (typeof status.ActiveRequests === 'number')
+            diagnostics.push(status.ActiveRequests + ' active HTTP ' + (status.ActiveRequests === 1 ? 'request' : 'requests'));
+        if (typeof status.RateLimitRetries === 'number') diagnostics.push(status.RateLimitRetries + ' rate-limit retries');
+        if (status.Resumed) {
+            var checkpoint = status.DiscoveryCheckpointUtc ? new Date(status.DiscoveryCheckpointUtc) : null;
+            diagnostics.push('Resumed from checkpoint' + (checkpoint && !isNaN(checkpoint.getTime())
+                ? ' saved at ' + checkpoint.toLocaleTimeString() : ''));
+        }
+        if (status.CategoriesSkipped) diagnostics.push(status.CategoriesSkipped + ' categories unchanged');
         if (status.SkippedBrowseLinks) {
-            description += '. Skipped malformed TuneIn catalog links: ' + status.SkippedBrowseLinks;
-            if (status.SkippedBrowseLinkDetails) description += ' (' + status.SkippedBrowseLinkDetails + ')';
+            description += '. ' + status.SkippedBrowseLinks + ' malformed catalog links skipped';
+            diagnostics.push('Skipped malformed TuneIn catalog links: ' + status.SkippedBrowseLinks
+                + (status.SkippedBrowseLinkDetails ? ' (' + status.SkippedBrowseLinkDetails + ')' : ''));
         }
+        instance.view.querySelector('.refreshDiagnosticsText').textContent =
+            diagnostics.length ? diagnostics.join('; ') : 'No additional diagnostics available.';
         if (status.LastHttpStatus) {
             var label = httpStatusLabels[status.LastHttpStatus] || 'Unexpected response';
             description += '. TuneIn returned HTTP ' + status.LastHttpStatus + ' (' + label + ')';

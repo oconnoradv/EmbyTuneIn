@@ -86,6 +86,14 @@ cached pages while another response is pending. All requests still share the
 same minimum spacing between starts. On HTTP 429 or a `Retry-After` cooldown,
 new requests wait and catalog discovery uses one request at a time until 20
 successful catalog responses. Pagination still follows each validated page.
+The collapsible **Catalog Refresh** heading keeps the current state visible
+when minimized. Its live metrics show elapsed time, last progress, unique
+catalog pages against the safety limit, and category progress; during import,
+the work metric switches to folders served out of the known total. Expand
+**Diagnostics** for provider attempts and successes, cached-page replays,
+active HTTP requests, rate-limit retries, checkpoint resume, and skipped-link
+details. Discovery does not show a percentage or ETA based on the page limit,
+because the limit is a safety cap rather than an expected catalog size.
 
 **Hide genre folders in Local Radio and By Location** is off by default. When
 enabled, it skips recognized regional genre links while keeping stations,

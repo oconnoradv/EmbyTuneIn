@@ -26,6 +26,10 @@ namespace MediaBrowser.Plugins.TuneIn
         public int RequestsStarted { get; set; }
         public int RequestsCompleted { get; set; }
         public int CacheHits { get; set; }
+        public int CatalogPagesCached { get; set; }
+        public int CatalogPagesLimit { get; set; } = TuneInCatalogueSession.MaxRefreshPages;
+        public int RateLimitRetries { get; set; }
+        public int ActiveRequests { get; set; }
         public int? LastHttpStatus { get; set; }
         public int ImportFoldersTotal { get; set; }
         public int ImportFoldersServed { get; set; }
@@ -163,6 +167,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 copy.RecoveryId = copy.RecoveryCategory == null ? null : recoveryId;
                 copy.ActiveRequest = copy.Busy ? activeRequest ?? "all" : null;
                 copy.Cancelling = copy.Busy && cancellation.IsCancellationRequested;
+                copy.ActiveRequests = activeTimings == null ? 0 : Volatile.Read(ref activeTimings.ActiveResponses);
                 if (copy.Busy && copy.Activity == null && copy.Phase == "Discovering")
                     copy.Activity = activeTimings?.DescribeWait();
                 if (copy.Busy && copy.State == "Running" && !copy.Cancelling && copy.DiscoveryTimeouts > 0)
@@ -594,7 +599,11 @@ namespace MediaBrowser.Plugins.TuneIn
                     // Admitted pages must stay cached for the entire attempt, including near the resume age limit.
                     session = new TuneInCatalogueSession(savedDiscovery?.Pages, DiscoveryCheckpointMaxAge + DefaultTimeout, clock,
                         hit => Update(() => { if (hit) status.CacheHits++; else status.RequestsStarted++; }),
-                        () => Update(() => status.RequestsCompleted++),
+                        () => Update(() =>
+                        {
+                            status.RequestsCompleted++;
+                            status.CatalogPagesCached = session.PageCount;
+                        }),
                         code => Update(() => status.LastHttpStatus = code), retryRateLimit: true,
                         skippedBrowseLink: (category, reason) => Update(() =>
                         {
@@ -608,10 +617,12 @@ namespace MediaBrowser.Plugins.TuneIn
                             var otherCount = status.SkippedBrowseLinks - displayed.Sum(pair => pair.Value);
                             if (otherCount > 0) status.SkippedBrowseLinkDetails += $"; {otherCount} other";
                         }), maxPages: TuneInCatalogueSession.MaxRefreshPages,
-                        maxBytes: TuneInCatalogueSession.MaxRefreshBytes, timings: timings);
+                        maxBytes: TuneInCatalogueSession.MaxRefreshBytes, timings: timings,
+                        rateLimitRetry: () => Update(() => status.RateLimitRetries++));
                     Update(() =>
                     {
                         activeTimings = timings;
+                        status.CatalogPagesCached = session.PageCount;
                         status.LastProgressUtc = clock();
                     });
 

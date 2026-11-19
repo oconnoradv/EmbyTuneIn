@@ -117,6 +117,25 @@
             opacity: .5;
             cursor: default;
         }
+        .tuneInRefresh .refreshMetrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+            gap: .75em 1.5em;
+            margin: .75em 0;
+        }
+        .tuneInRefresh .refreshMetrics > div {
+            min-width: 0;
+        }
+        .tuneInRefresh .refreshMetrics dt {
+            font-weight: 600;
+        }
+        .tuneInRefresh .refreshMetrics dd {
+            margin: .15em 0 0;
+            overflow-wrap: anywhere;
+        }
+        .tuneInRefresh .refreshDiagnostics > summary {
+            font-size: 1em;
+        }
         .tuneInRefresh .refreshFailureLog {
             box-sizing: border-box;
             max-height: 20rem;
@@ -270,6 +289,15 @@
             <p>Checks the saved TuneIn categories and updates the Emby library when needed.</p>
             <p class="fieldDescription">Choose a refresh interval next to a category, then select Save above. Off keeps that category manual only.</p>
             <p class="refreshStatus" role="status">Reading refresh status...</p>
+            <dl class="refreshMetrics" aria-label="Current refresh metrics">
+                <div><dt>Elapsed</dt><dd class="refreshElapsed">-</dd></div>
+                <div><dt>Current work</dt><dd class="refreshWork">-</dd></div>
+                <div><dt>Last progress</dt><dd class="refreshLastProgress">-</dd></div>
+            </dl>
+            <details class="tuneInSection refreshDiagnostics">
+                <summary>Diagnostics</summary>
+                <p class="refreshDiagnosticsText"></p>
+            </details>
             <p class="refreshError" role="alert"></p>
             <button is="emby-button" type="button" class="raised refreshStart" disabled>Refresh all enabled categories</button>
             <button type="button" class="refreshCancel" disabled>Cancel refresh</button>
