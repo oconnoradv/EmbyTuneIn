@@ -65,6 +65,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(20);
         private static readonly TimeSpan CatalogueCacheLifetime = TimeSpan.FromMinutes(15);
         private const int FailureReportLimit = 64 * 1024;
+        private const int SkipReasonDisplayLimit = 5;
         private readonly object gate = new object();
         private readonly TuneInDirectory directory;
         private readonly TuneInRefreshStore store;
@@ -438,6 +439,7 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInRefreshCheckpoint checkpoint = null;
             string currentCategory = null;
             var completed = new HashSet<string>(StringComparer.Ordinal);
+            var skipReasons = new Dictionary<string, int>(StringComparer.Ordinal);
             DateTime started = clock();
             var timedOut = false;
             Exception failure = null;
@@ -501,9 +503,15 @@ namespace MediaBrowser.Plugins.TuneIn
                         code => Update(() => status.LastHttpStatus = code), retryRateLimit: true,
                         skippedBrowseLink: (category, reason) => Update(() =>
                         {
-                            if (++status.SkippedBrowseLinks <= 5)
-                                status.SkippedBrowseLinkDetails += (status.SkippedBrowseLinks == 1 ? "" : "; ")
-                                    + TuneInBrowsing.CategoryName(category) + ": " + reason;
+                            status.SkippedBrowseLinks++;
+                            var label = TuneInBrowsing.CategoryName(category) + ": " + reason.TrimEnd('.');
+                            skipReasons.TryGetValue(label, out var count);
+                            skipReasons[label] = count + 1;
+                            var displayed = skipReasons.OrderByDescending(pair => pair.Value)
+                                .ThenBy(pair => pair.Key, StringComparer.Ordinal).Take(SkipReasonDisplayLimit).ToArray();
+                            status.SkippedBrowseLinkDetails = string.Join("; ", displayed.Select(pair => $"{pair.Value} x {pair.Key}"));
+                            var otherCount = status.SkippedBrowseLinks - displayed.Sum(pair => pair.Value);
+                            if (otherCount > 0) status.SkippedBrowseLinkDetails += $"; {otherCount} other";
                         }), maxPages: categories.Length == 1 && categories[0] == "music"
                             ? TuneInStagedImport.MaxFolders : TuneInCatalogueSession.MaxPages);
 
@@ -673,7 +681,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 finally
                 {
                     if (session?.SkippedBrowseLinks > 0)
-                        logger?.Warn("TuneIn refresh skipped {0} malformed catalog link(s). Examples: {1}",
+                        logger?.Warn("TuneIn refresh skipped {0} malformed catalog link(s). By reason: {1}",
                             status.SkippedBrowseLinks, status.SkippedBrowseLinkDetails);
                     lock (gate)
                     {
@@ -704,7 +712,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 lines.Insert(4, "TuneIn HTTP status: " + failedStatus.LastHttpStatus.Value);
             if (failedStatus.SkippedBrowseLinks != 0)
                 lines.Insert(lines.Count - 1, "Skipped malformed catalog links: " + failedStatus.SkippedBrowseLinks
-                    + ". Examples: " + failedStatus.SkippedBrowseLinkDetails);
+                    + ". By reason: " + failedStatus.SkippedBrowseLinkDetails);
             var report = string.Join(Environment.NewLine, lines);
             var truncated = report.Length > FailureReportLimit;
             if (truncated) report = report.Substring(0, FailureReportLimit);

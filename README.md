@@ -91,8 +91,9 @@ labels the earlier 429 as recovered and confirms that the refresh completed norm
 A malformed query or fragment on a trusted TuneIn child browse link or Music
 station fallback URL does not stop Control Panel discovery of valid siblings.
 If any links are skipped, the refresh reports
-**Partial** and shows the count and up to five examples (category and validation
-reason only). Music can apply valid station and folder updates when it has a
+**Partial** and shows the total and counts grouped by category and validation
+reason. It shows up to five groups and combines the rest into an “other” count.
+Music can apply valid station and folder updates when it has a
 compatible saved listing for every affected folder. The import retains missing
 child folders and their saved contents where a malformed link may have hidden
 them, and retains missing saved stations where a station URL was skipped.

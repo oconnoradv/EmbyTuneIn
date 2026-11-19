@@ -771,13 +771,14 @@ test('partial discovery reports skipped links without implying an import', async
     app.refresh[0].resolve({
         State: 'Partial', Phase: 'Discovery incomplete; existing library left unchanged',
         CategoriesCompleted: 1, CategoriesTotal: 2, SkippedBrowseLinks: 7,
-        SkippedBrowseLinkDetails: 'Music: Invalid catalog link parameter: filter'
+        SkippedBrowseLinkDetails: '4 x Music: Invalid catalog fragment; 3 x Music: Invalid catalog link parameter: filter',
+        LastHttpStatus: 429
     });
     await visit;
     const text = app.elements['.refreshStatus'].textContent;
     assert.match(text, /Partial - Discovery incomplete; existing library left unchanged/);
     assert.match(text, /1 of 2 categories checked/);
-    assert.match(text, /Skipped malformed TuneIn catalog links: 7 \(Music: Invalid catalog link parameter: filter\)/);
+    assert.match(text, /Skipped malformed TuneIn catalog links: 7 \(4 x Music: Invalid catalog fragment; 3 x Music: Invalid catalog link parameter: filter\)\. TuneIn returned HTTP 429 \(Too Many Requests\)/);
     assert.equal(app.elements['.refreshLogButton'].disabled, true);
     app.instance.onPause();
 });

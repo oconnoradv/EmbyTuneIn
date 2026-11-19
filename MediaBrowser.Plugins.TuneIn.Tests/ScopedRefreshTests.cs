@@ -95,7 +95,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             {
                 var scope = request.Parameters.TryGetValue("id", out var id) ? id : request.Parameters["c"];
                 requests.Add(scope);
-                var invalid = string.Concat(Enumerable.Repeat(Link("c123", "&amp;filter=private%2F" + privateMarker), 7));
+                var invalid = string.Concat(Enumerable.Repeat(Link("c123", "&amp;filter=private%2F" + privateMarker), 7))
+                    + Link("c123", "#" + privateMarker);
                 var rows = scope == "g2698"
                     ? (healed ? "" : !skip ? Link("c123") : baseline == "new parent" ? Link("c125") : invalid)
                         + Link("c124", "&amp;filter=s:~A")
@@ -141,9 +142,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal(withBaseline ? 0 : 1, status.CategoriesCompleted);
                 Assert.False(status.ImportMayHavePartiallyApplied);
                 Assert.Null(status.DirtyCategory);
-                Assert.Equal(7, status.SkippedBrowseLinks);
-                Assert.Equal(5, status.SkippedBrowseLinkDetails.Split(';').Length);
-                Assert.Contains("Music: Invalid catalog link parameter: filter", status.SkippedBrowseLinkDetails);
+                Assert.Equal(8, status.SkippedBrowseLinks);
+                Assert.Equal("7 x Music: Invalid catalog link parameter: filter; 1 x Music: Invalid catalog fragment",
+                    status.SkippedBrowseLinkDetails);
                 Assert.DoesNotContain(privateMarker, status.SkippedBrowseLinkDetails);
                 Assert.Contains(status.Categories, category => category.Category == "music"
                     && category.State == (canApply ? "Partial (applied)" : "Incomplete (catalog links skipped)"));
@@ -343,7 +344,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal(1, status.SkippedBrowseLinks);
                 Assert.Equal(0, imports);
                 Assert.False(File.Exists(path));
-                if (state == "Error") Assert.Contains("Skipped malformed catalog links: 1", refresh.GetFailureLog().Text);
+                if (state == "Error")
+                    Assert.Contains("Skipped malformed catalog links: 1. By reason: 1 x Talk: Invalid catalog link parameter: filter",
+                        refresh.GetFailureLog().Text);
             }
             finally { File.Delete(path); }
         }
