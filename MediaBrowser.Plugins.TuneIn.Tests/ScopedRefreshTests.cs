@@ -911,6 +911,211 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             finally { File.Delete(path); }
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task StationCountsDistinguishDiscoveryFromEmbyAndPersistOnlyAppliedSnapshots(bool allowPartial)
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true,
+                AllowPartialCatalogImport = allowPartial
+            };
+            var skip = false;
+            var inventoryReads = 0;
+            var inventoryCount = 0;
+            var imports = 0;
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                var rows = request.Parameters.ContainsKey("id")
+                    ? "<outline type='audio' guide_id='s2' text='Saved station'/>"
+                    : "<outline type='audio' guide_id='s1' text='First listing'/>"
+                        + "<outline type='audio' guide_id='s1' text='Duplicate station, different listing'/>"
+                        + "<outline type='link' text='Saved branch' URL='https://opml.radiotime.com/Browse.ashx?id=c123"
+                        + (skip ? "&amp;filter=bad%2Ffilter" : "") + "'/>";
+                return Task.FromResult(XDocument.Parse("<opml><body>" + rows + "</body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-counts-{Guid.NewGuid():N}.xml");
+            try
+            {
+                using (var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        ReadStagedTree(staged, token);
+                        imports++;
+                        inventoryCount = 3;
+                        return Task.CompletedTask;
+                    }, null, countStations: (_, __, token) =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        inventoryReads++;
+                        return inventoryCount;
+                    }))
+                {
+                    Assert.Null(Assert.Single(refresh.Status().Categories).StationCounts);
+                    refresh.Start();
+                    await WaitUntilIdle(refresh);
+                    var counts = Assert.Single(refresh.Status().Categories).StationCounts;
+                    Assert.Equal(2, counts.AvailableStations);
+                    Assert.Equal(3, counts.EmbyStations);
+                    Assert.False(counts.AvailablePartial);
+                    Assert.NotNull(counts.AvailableCheckedUtc);
+                    Assert.NotNull(counts.EmbyCheckedUtc);
+                    var readsAfterImport = inventoryReads;
+                    counts.AvailableStations = 99;
+                    Assert.Equal(2, Assert.Single(refresh.Status().Categories).StationCounts.AvailableStations);
+                    Assert.Equal(readsAfterImport, inventoryReads);
+                    skip = true;
+                    refresh.Start("talk");
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("Partial", refresh.Status().State);
+                    Assert.Equal(allowPartial ? 2 : 1, imports);
+                    counts = Assert.Single(refresh.Status().Categories).StationCounts;
+                    Assert.Equal(1, counts.AvailableStations);
+                    Assert.True(counts.AvailablePartial);
+                    Assert.Equal(3, counts.EmbyStations);
+                    Assert.True(refresh.Status().ReportAvailable);
+                    Assert.Contains("Invalid catalog link parameter: filter", refresh.GetFailureLog().Text);
+                }
+                var readsBeforeRestart = inventoryReads;
+                using var restored = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (_, __, ___, ____, _____) => throw new Exception("No discovery expected."),
+                    (_, __, ___, ____) => throw new Exception("No import expected."), null);
+                var savedCounts = Assert.Single(restored.Status().Categories).StationCounts;
+                Assert.Equal(allowPartial ? 1 : 2, savedCounts.AvailableStations);
+                Assert.Equal(allowPartial, savedCounts.AvailablePartial);
+                Assert.Equal(3, savedCounts.EmbyStations);
+                Assert.Equal(readsBeforeRestart, inventoryReads);
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task InventoryReadFailureIsExplicitAndCancellationIsNotSwallowed(bool cancel)
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var directory = new TuneInDirectory(() => config, (_, __) => Task.FromResult(
+                XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>")));
+            var channel = new TuneInChannel(directory);
+            var imports = 0;
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-inventory-failure-{Guid.NewGuid():N}.xml");
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        imports++;
+                        ReadStagedTree(staged, token);
+                        return Task.CompletedTask;
+                    }, null, countStations: (_, __, ___) => cancel
+                        ? throw new OperationCanceledException() : throw new IOException("Synthetic inventory failure."));
+                refresh.Start();
+                await WaitUntilIdle(refresh);
+                Assert.Equal(cancel ? "Cancelled" : "Completed", refresh.Status().State);
+                Assert.Equal(cancel ? 0 : 1, imports);
+                if (!cancel)
+                {
+                    var counts = Assert.Single(refresh.Status().Categories).StationCounts;
+                    Assert.Equal(1, counts.AvailableStations);
+                    Assert.Null(counts.EmbyStations);
+                    Assert.Equal("Emby inventory read failed; check server log", counts.EmbyCountError);
+                }
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Theory]
+        [InlineData(5)]
+        [InlineData(150)]
+        public async Task SkippedEntryReportCapturesReproducibleDetailsWithRedactionAndBounds(int skipped)
+        {
+            const string privateValue = "private-credential-marker";
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, AllowPartialCatalogImport = true
+            };
+            var reject = true;
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                request.Parameters["username"] = privateValue;
+                request.Parameters["serial"] = privateValue;
+                request.Parameters["latlon"] = privateValue;
+                var body = new XElement("body", new XElement("outline",
+                    new XAttribute("type", "audio"), new XAttribute("guide_id", "s1"),
+                    new XAttribute("text", "private-entry-label")));
+                if (reject)
+                    for (var index = 0; index < skipped; index++)
+                        body.Add(new XElement("outline", new XAttribute("type", "link"),
+                            new XAttribute("text", "private-entry-label"),
+                            new XAttribute("URL", "https://opml.radiotime.com/Browse.ashx?id=c123&filter=bad%2Ffilter"
+                                + "&serial=" + privateValue + "&token=" + privateValue
+                                + (index == skipped - 1 ? "" : "#unsupported&token=" + privateValue))));
+                return Task.FromResult(new XDocument(new XElement("opml", body)));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-skips-report-{Guid.NewGuid():N}.xml");
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) => { ReadStagedTree(staged, token); return Task.CompletedTask; }, null);
+                refresh.Start();
+                await WaitUntilIdle(refresh);
+                var status = refresh.Status();
+                Assert.Equal("Partial", status.State);
+                Assert.True(status.ReportAvailable);
+                var report = refresh.GetFailureLog();
+                Assert.Equal(status.FinishedUtc, report.FinishedUtc);
+                Assert.Contains("State: Partial", report.Text);
+                Assert.Contains("Source: /Browse.ashx; c[1]=\"talk\"", report.Text);
+                Assert.Contains("Rejected link: /Browse.ashx; id[1]=\"c123\"; filter[1]=\"bad/filter\"", report.Text);
+                Assert.Contains("fragment=\"#unsupported&token=[redacted]\"", report.Text);
+                Assert.DoesNotContain(privateValue, report.Text);
+                Assert.DoesNotContain("private-entry-label", report.Text);
+                Assert.DoesNotContain("bad/filter", System.Text.Json.JsonSerializer.Serialize(status));
+                Assert.True(report.Text.Length <= 64 * 1024);
+                Assert.Equal(skipped > 100, report.Truncated);
+                if (skipped > 100) Assert.Contains("Additional skipped-entry details omitted:", report.Text);
+                else Assert.Contains("Invalid catalog link parameter: filter", report.Text);
+                var service = new TuneInRefreshService(refresh);
+                Assert.Throws<UnauthorizedAccessException>(() => service.Get(new GetTuneInRefreshFailureLog()));
+
+                reject = false;
+                refresh.Start();
+                Assert.Throws<InvalidOperationException>(() => refresh.GetFailureLog());
+                await WaitUntilIdle(refresh);
+                Assert.False(refresh.Status().ReportAvailable);
+                Assert.Throws<InvalidOperationException>(() => refresh.GetFailureLog());
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Fact]
+        public void CatalogDiagnosticsPreserveDuplicateFiltersAndEscapeUntrustedFields()
+        {
+            var report = TuneInCatalogDiagnostics.DescribeLink("https://opml.radiotime.com/Browse.ashx?"
+                + "id=c123&filter=invalid%2Ffilter&filter=s%3A~A&pivot=bad%0Aline&sid=secret-sid&partnerid=secret-partner"
+                + "#bad%26token%3Dsecret-token");
+            Assert.Contains("filter[2]=\"invalid/filter\", \"s:~A\"", report);
+            Assert.Contains("pivot[1]=\"bad\\u000aline\"", report);
+            Assert.DoesNotContain("\n", report);
+            Assert.DoesNotContain("secret-", report);
+            Assert.Contains("decoded for redaction", report);
+            foreach (var fragment in new[] { "token=space secret-value", "filter=token=secret-value",
+                "token%25253Dsecret-value" })
+                Assert.DoesNotContain("secret-value", TuneInCatalogDiagnostics.DescribeLink(
+                    "https://opml.radiotime.com/Browse.ashx?filter=invalid#" + fragment));
+            Assert.Equal("(trusted catalog link unavailable)",
+                TuneInCatalogDiagnostics.DescribeLink("https://example.invalid/?token=secret"));
+            Assert.Contains("[truncated; 701 characters]", TuneInCatalogDiagnostics.DescribeLink(
+                "https://opml.radiotime.com/Browse.ashx?filter=" + new string('a', 701)));
+        }
+
         [Fact]
         public async Task RefreshFailureReportIsAdminOnlyBoundedAndAvailableOnlyForLatestFailedRun()
         {

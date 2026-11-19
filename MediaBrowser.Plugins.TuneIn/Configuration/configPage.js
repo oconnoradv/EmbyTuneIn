@@ -401,7 +401,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             'Waiting to refresh (' + queued.length + '/2): ' + queued.map(function (key) {
                 return refreshName(status, key);
             }).join(', ') : '';
-        if (status.State !== 'Error' || !previousStatus || status.FinishedUtc !== previousStatus.FinishedUtc) {
+        if (!hasRefreshReport(status) || status.Busy || !previousStatus || status.FinishedUtc !== previousStatus.FinishedUtc) {
             instance.view.querySelector('.refreshFailureLog').textContent = '';
             instance.view.querySelector('.refreshFailureLog').hidden = true;
             instance.view.querySelector('.refreshLogMessage').textContent = '';
@@ -431,6 +431,21 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 control.setAttribute('aria-label', 'Refresh ' + item.Name);
                 var actions = document.createElement('div');
                 actions.className = 'tuneInRefreshCategoryActions';
+                var counts = document.createElement('dl');
+                counts.className = 'tuneInStationCounts';
+                counts.setAttribute('aria-label', item.Name + ' station counts');
+                var countValues = {};
+                [['available', 'Available (filtered)'], ['emby', 'In Emby'], ['unfiltered', 'TuneIn (unfiltered)']]
+                    .forEach(function (metric) {
+                        var group = document.createElement('div');
+                        var label = document.createElement('dt');
+                        label.textContent = metric[1];
+                        var value = document.createElement('dd');
+                        group.appendChild(label);
+                        group.appendChild(value);
+                        counts.appendChild(group);
+                        countValues[metric[0]] = value;
+                    });
                 var schedule = document.createElement('select');
                 schedule.setAttribute('aria-label', item.Name + ' refresh interval');
                 [['0', 'Schedule: Off'], ['6', 'Every 6 hours'], ['12', 'Every 12 hours'],
@@ -445,11 +460,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     if (!editingBlocked(instance)) instance.refreshSchedules.set(item.Category, Number(schedule.value));
                 });
                 row.appendChild(caption);
+                actions.appendChild(counts);
                 actions.appendChild(control);
                 actions.appendChild(schedule);
                 row.appendChild(actions);
                 list.appendChild(row);
-                rows.set(item.Category, { caption: caption, control: control, schedule: schedule });
+                rows.set(item.Category, { caption: caption, control: control, schedule: schedule, counts: countValues });
             });
             $(list).trigger('create');
         }
@@ -458,6 +474,25 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             if (!status.Busy && item.Category === status.DirtyCategory) text += ' (reconciliation needed)';
             var caption = rows.get(item.Category).caption;
             if (caption.textContent !== text) caption.textContent = text;
+            var metrics = item.StationCounts || {};
+            var values = rows.get(item.Category).counts;
+            function count(value) {
+                return typeof value === 'number' && Number.isInteger(value) && value >= 0
+                    ? value.toLocaleString() : 'Not checked';
+            }
+            values.available.textContent = count(metrics.AvailableStations)
+                + (metrics.AvailablePartial && typeof metrics.AvailableStations === 'number' ? ' (partial)' : '');
+            values.emby.textContent = metrics.EmbyCountError ? 'Unavailable' : count(metrics.EmbyStations);
+            values.unfiltered.textContent = ['local', 'presets'].includes(item.Category) ? 'Not applicable' : 'Not measured';
+            values.available.setAttribute('title', metrics.AvailableCheckedUtc
+                ? 'Discovery checked at ' + new Date(metrics.AvailableCheckedUtc).toLocaleString()
+                    + (metrics.AvailablePartial ? '; skipped branches make this a lower bound.' : '')
+                : 'Run a category refresh to count stations within the saved filters.');
+            values.emby.setAttribute('title', metrics.EmbyCountError || (metrics.EmbyCheckedUtc
+                ? 'Emby inventory checked at ' + new Date(metrics.EmbyCheckedUtc).toLocaleString()
+                : 'Run a category refresh to check Emby inventory.'));
+            values.unfiltered.setAttribute('title',
+                'TuneIn does not provide a verified category-wide total through this catalog. No additional unfiltered crawl is performed.');
         });
     }
 
@@ -472,12 +507,16 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         }
         instance.view.querySelector('.refreshStart').disabled = blocked('all') || !(status.Categories || []).length;
         instance.view.querySelector('.refreshCancel').disabled = !available || !instance.refreshBusy || !!instance.refreshAction;
-        instance.view.querySelector('.refreshLogButton').disabled = !available || !status || status.State !== 'Error'
+        instance.view.querySelector('.refreshLogButton').disabled = !available || !hasRefreshReport(status)
             || status.Busy || !status.FinishedUtc || !!instance.refreshAction || !!instance.refreshLogAction;
         instance.refreshCategoryRows.forEach(function (row, category) {
             row.control.disabled = blocked(category);
         });
         editing(instance);
+    }
+
+    function hasRefreshReport(status) {
+        return !!status && (status.ReportAvailable === true || status.State === 'Error');
     }
 
     function retrieveRefreshLog(instance) {
@@ -489,23 +528,23 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var finishedUtc = instance.refreshStatus.FinishedUtc;
         var requestToken = {};
         instance.refreshLogAction = requestToken;
-        instance.view.querySelector('.refreshLogMessage').textContent = 'Retrieving the latest failed refresh report...';
+        instance.view.querySelector('.refreshLogMessage').textContent = 'Retrieving the latest refresh diagnostic report...';
         refreshControls(instance, instance.refreshAvailable);
         return ApiClient.ajax({
             type: 'GET', dataType: 'json', url: ApiClient.getUrl('TuneIn/Refresh/Log')
         }).then(function (result) {
             if (epoch !== instance.viewEpoch || generation !== (instance.refreshGeneration || 0)
-                || !instance.refreshVisible || !instance.refreshStatus || instance.refreshStatus.State !== 'Error'
+                || !instance.refreshVisible || !hasRefreshReport(instance.refreshStatus) || instance.refreshStatus.Busy
                 || instance.refreshStatus.FinishedUtc !== finishedUtc || result.FinishedUtc !== finishedUtc) return;
             var report = instance.view.querySelector('.refreshFailureLog');
             report.textContent = result.Text || '';
             report.hidden = false;
             instance.view.querySelector('.refreshLogMessage').textContent = result.Truncated
-                ? 'Refresh report retrieved; it was truncated to 64 KB.'
+                ? 'Refresh report retrieved; some details were omitted or truncated.'
                 : 'Refresh report retrieved.';
         }).catch(function () {
             if (epoch === instance.viewEpoch && generation === (instance.refreshGeneration || 0)
-                && instance.refreshStatus && instance.refreshStatus.State === 'Error'
+                && hasRefreshReport(instance.refreshStatus) && !instance.refreshStatus.Busy
                 && instance.refreshStatus.FinishedUtc === finishedUtc)
                 instance.view.querySelector('.refreshLogMessage').textContent =
                     'Could not retrieve the latest refresh report. Check refresh status and try again.';

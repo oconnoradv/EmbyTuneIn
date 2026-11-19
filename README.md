@@ -134,6 +134,41 @@ Untrusted destinations and unrecovered provider request failures still fail
 the refresh even with the policy enabled. Scope guards, cancellation, timeouts,
 and catalog budgets cannot be overridden by this setting.
 
+After a refresh with skipped entries, use **Retrieve refresh log** even if its
+result is **Partial**, not **Error**. The administrator-only report includes
+the outcome, grouped skip counts, and up to 100 skipped-entry examples within
+a 64 KB report. Each example records a timestamp, category, rejection reason,
+source catalog page, and rejected link's navigation query values and fragment.
+Repeated parameter values are identified and field truncation is marked.
+Non-navigation parameters (including usernames, coordinates, serials, partner
+IDs, and tokens) are omitted; credential-like assignments embedded in captured
+values are redacted. Entry labels, full provider responses, and signed item IDs
+are not captured. Review reports before sharing: exception stack traces may
+still contain private server details. Details are kept in memory for the latest
+attempt, are not part of ordinary status polls or routine logs, and clear on a
+new refresh, scope reset, or server restart. Capture starts with this build;
+it cannot reconstruct rejected links from earlier refreshes.
+
+Each enabled category displays station counts to the left of **Refresh**:
+**Available (filtered)** counts distinct station IDs found by the latest
+completed discovery, before any retained saved entries are merged; **Partial**
+marks a lower bound when links were skipped. **In Emby** counts distinct station
+IDs actually present under that category's Emby folder, checked before discovery
+and again after a verified import. Counts are snapshots, not continuously polled
+database/provider queries; hover a value for its check time. Counts saved with a
+successful refresh survive server restarts. A withheld partial discovery updates
+the current dashboard count but leaves the saved catalog untouched.
+Unrecorded counts say **Not checked**, inventory failures say **Unavailable**,
+and interrupted imports require reconciliation rather than showing stale counts
+as authoritative. **TuneIn (unfiltered)** says **Not measured**: OPML category
+responses do not supply a verified category-wide station total, and filtered
+results are never extrapolated into one. Local Radio and Favorites are
+location/account-specific, so their unfiltered global total is **Not applicable**.
+No additional unfiltered catalog crawl is started by this feature.
+Dashboard actions use native Emby buttons, including Cancel and Back, so their
+normal, focused, and disabled colors follow the active user's Emby theme rather
+than plugin-defined button colors.
+
 All Control Panel refreshes have up to 60 minutes for discovery and import
 combined per attempt, with a shared 5,000-page limit regardless of which
 categories are selected. During discovery, the plugin checkpoints validated

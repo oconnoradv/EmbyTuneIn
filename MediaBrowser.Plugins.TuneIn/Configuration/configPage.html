@@ -100,23 +100,6 @@
             outline: 2px solid currentColor;
             outline-offset: 2px;
         }
-        .tuneInRefresh .refreshCancel {
-            background: transparent;
-            color: inherit;
-            border: 1px solid currentColor;
-            border-radius: .25em;
-            font: inherit;
-            padding: .5em .75em;
-            cursor: pointer;
-        }
-        .tuneInRefresh .refreshCancel:focus-visible {
-            outline: 2px solid currentColor;
-            outline-offset: 2px;
-        }
-        .tuneInRefresh .refreshCancel:disabled {
-            opacity: .5;
-            cursor: default;
-        }
         .tuneInRefresh .refreshMetrics {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
@@ -163,6 +146,21 @@
             align-items: center;
             flex-wrap: wrap;
             gap: .5em;
+            margin-inline-start: auto;
+        }
+        .tuneInStationCounts {
+            display: flex;
+            flex-wrap: wrap;
+            gap: .4em 1.25em;
+            margin: .35em .5em .35em 0;
+            font-variant-numeric: tabular-nums;
+        }
+        .tuneInStationCounts dt {
+            font-size: .85em;
+        }
+        .tuneInStationCounts dd {
+            margin: .2em 0 0;
+            font-weight: 600;
         }
         .tuneInSelectors .tuneInSelectorWindow {
             box-sizing: border-box;
@@ -305,12 +303,13 @@
             </details>
             <p class="refreshError" role="alert"></p>
             <button is="emby-button" type="button" class="raised refreshStart" disabled>Refresh all enabled categories</button>
-            <button type="button" class="refreshCancel" disabled>Cancel refresh</button>
+            <button is="emby-button" type="button" class="raised refreshCancel" disabled>Cancel refresh</button>
             <button is="emby-button" type="button" class="raised refreshLogButton" disabled>Retrieve refresh log</button>
             <p class="refreshQueueNote" role="status" hidden></p>
             <p class="refreshLogMessage" role="status"></p>
-            <p class="fieldDescription">The latest failed refresh report is capped at 64 KB and may contain private server details. Redact it before sharing.</p>
-            <pre class="refreshFailureLog" aria-label="Latest failed refresh report" tabindex="0" hidden></pre>
+            <p class="fieldDescription">Failed refreshes and skipped entries have a retrievable report (up to 64 KB). Link details omit non-navigation parameters; exception traces may contain private server details. Review before sharing. A new refresh or server restart clears the report.</p>
+            <pre class="refreshFailureLog" aria-label="Latest refresh diagnostic report" tabindex="0" hidden></pre>
+            <p class="fieldDescription">Distinct stations at the last category refresh. Available uses saved filters; Partial is a lower bound. In Emby checks the library. TuneIn does not supply an unfiltered total; Local Radio and Favorites have no global total.</p>
             <p class="refreshCategoryNote" role="status"></p>
             <ul class="tuneInRefreshCategories" aria-label="Category refresh status"></ul>
             <dialog class="tuneInRecoveryDialog" aria-labelledby="tuneInRecoveryTitle" aria-describedby="tuneInRecoveryText">
@@ -319,7 +318,7 @@
                 <form method="dialog" class="tuneInRecoveryActions">
                     <button is="emby-button" type="button" class="raised refreshResumeFirst">Retry previous first</button>
                     <button is="emby-button" type="button" class="raised refreshNewFirst">Prioritize new refresh</button>
-                    <button is="emby-button" type="submit" class="refreshDismiss" autofocus>Back</button>
+                    <button is="emby-button" type="submit" class="raised refreshDismiss" autofocus>Back</button>
                 </form>
             </dialog>
         </details>

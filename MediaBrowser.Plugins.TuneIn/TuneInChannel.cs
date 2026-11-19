@@ -106,6 +106,39 @@ namespace MediaBrowser.Plugins.TuneIn
             finally { Volatile.Write(ref stagedImport, null); }
         }
 
+        internal int? CountCategoryStations(string folderId, CancellationToken token)
+        {
+            if (library == null) return null;
+            var snapshot = directory.Snapshot();
+            directory.CheckCurrent(snapshot, token);
+            var rootEntry = directory.Resolve(snapshot, folderId);
+            if (rootEntry.StationId != null || rootEntry.SelectionId != null || rootEntry.Request != null)
+                throw new InvalidOperationException("TuneIn station counts require a category root.");
+            var roots = library.GetItemList(new InternalItemsQuery
+            {
+                ExternalId = folderId, IsFolder = true, Limit = 2
+            }, token);
+            if (roots.Length > 1) throw new InvalidOperationException("TuneIn category folder is ambiguous.");
+            if (roots.Length == 0) return 0;
+            var items = library.GetItemList(new InternalItemsQuery
+            {
+                ParentIds = new[] { roots[0].InternalId }, Recursive = true, IsFolder = false,
+                Limit = TuneInStagedImport.MaxItems + 1
+            }, token);
+            if (items.Length > TuneInStagedImport.MaxItems)
+                throw new InvalidOperationException("TuneIn station inventory exceeded its item limit.");
+            var stations = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in items)
+            {
+                token.ThrowIfCancellationRequested();
+                var entry = directory.Resolve(snapshot, item.ExternalId);
+                if (entry.Category == rootEntry.Category && entry.StationId != null)
+                    stations.Add(entry.StationId);
+            }
+            directory.CheckCurrent(snapshot, token);
+            return stations.Count;
+        }
+
         internal void UpdateCategoryArtwork(string folderId, CancellationToken token)
         {
             if (serverHost == null || library == null) throw new InvalidOperationException("TuneIn artwork services are unavailable.");

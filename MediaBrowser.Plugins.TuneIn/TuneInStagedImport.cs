@@ -30,6 +30,9 @@ namespace MediaBrowser.Plugins.TuneIn
         internal ChannelItemInfo Root { get; private set; }
         internal int Count => folders.Count;
         internal bool DiscoveryIncomplete => incompleteFolders.Count != 0;
+        internal int CountStations(Func<string, string> stationId) => folders.Values
+            .SelectMany(folder => folder.Items).Where(item => item.Type == ChannelItemType.Media)
+            .Select(item => stationId(item.Id)).Where(id => id != null).Distinct(StringComparer.Ordinal).Count();
 
         private TuneInStagedImport(CancellationToken token, Action<int, int> report, Action validate)
         {

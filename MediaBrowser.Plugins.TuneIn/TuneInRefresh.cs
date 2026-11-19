@@ -31,6 +31,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public int RateLimitRetries { get; set; }
         public int ActiveRequests { get; set; }
         public bool PartialImportAllowed { get; set; }
+        public bool ReportAvailable { get; set; }
         public int? LastHttpStatus { get; set; }
         public int ImportFoldersTotal { get; set; }
         public int ImportFoldersServed { get; set; }
@@ -64,6 +65,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public string Category { get; set; }
         public string Name { get; set; }
         public string State { get; set; }
+        public TuneInStationCounts StationCounts { get; set; }
     }
 
     public sealed class TuneInRefreshFailureLog
@@ -82,6 +84,8 @@ namespace MediaBrowser.Plugins.TuneIn
         private const int DiscoveryResumeLimit = 10;
         private const int FailureReportLimit = 64 * 1024;
         private const int SkipReasonDisplayLimit = 5;
+        private const int SkippedEntryReportLimit = 100;
+        private const int SkippedEntryCharacterLimit = 48 * 1024;
         private readonly object gate = new object();
         private readonly TuneInDirectory directory;
         private readonly TuneInRefreshStore store;
@@ -91,6 +95,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Func<TuneInChannel, TuneInStagedImport, string, CancellationToken, Task> import;
         private readonly ILogger logger;
         private readonly Action<TuneInChannel, string, CancellationToken> updateArtwork;
+        private readonly Func<TuneInChannel, string, CancellationToken, int?> countStations;
         private readonly Func<DateTime> clock;
         private readonly TimeSpan? timeoutOverride;
         private TuneInRefreshStatus status = new TuneInRefreshStatus();
@@ -101,6 +106,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Dictionary<string, (int IntervalHours, DateTime DueUtc)> scheduled =
             new Dictionary<string, (int, DateTime)>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> categoryStates = new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, TuneInStationCounts> categoryCounts = new Dictionary<string, TuneInStationCounts>(StringComparer.Ordinal);
         private string categoryStateKey;
         private string dirtyCategory;
         private CommittedCatalogue committed = new CommittedCatalogue(null,
@@ -130,7 +136,8 @@ namespace MediaBrowser.Plugins.TuneIn
             Func<TuneInChannel, string, TuneInCatalogueSession, bool, CancellationToken, Task<ChannelItemResult>> getItems,
             Func<TuneInChannel, TuneInStagedImport, string, CancellationToken, Task> import,
             ILogger logger, Func<DateTime> clock = null, TimeSpan? timeoutOverride = null,
-            Action<TuneInChannel, string, CancellationToken> updateArtwork = null)
+            Action<TuneInChannel, string, CancellationToken> updateArtwork = null,
+            Func<TuneInChannel, string, CancellationToken, int?> countStations = null)
         {
             this.directory = directory ?? throw new ArgumentNullException(nameof(directory));
             this.store = store ?? throw new ArgumentNullException(nameof(store));
@@ -141,6 +148,7 @@ namespace MediaBrowser.Plugins.TuneIn
             this.clock = clock ?? (() => DateTime.UtcNow);
             this.timeoutOverride = timeoutOverride;
             this.updateArtwork = updateArtwork;
+            this.countStations = countStations ?? ((channel, folder, token) => channel.CountCategoryStations(folder, token));
             statusConfiguration = directory.Snapshot();
             LoadCategoryStates(statusConfiguration);
         }
@@ -159,6 +167,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 var snapshot = statusConfiguration;
                 var copy = status.Copy();
                 copy.Busy = work != null && !work.IsCompleted;
+                copy.ReportAvailable = !copy.Busy && failureLog != null;
                 if (!copy.Busy && copy.DiscoveryTimeouts > 0)
                     copy.Phase += copy.DiscoveryTimeouts == 1
                         ? " (1 discovery timeout)" : $" ({copy.DiscoveryTimeouts} discovery timeouts)";
@@ -183,7 +192,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     Category = category,
                     Name = TuneInBrowsing.CategoryName(category),
                     State = copy.Busy && copy.State == "Running" && copy.Category == category ? copy.Phase :
-                        categoryStates.TryGetValue(category, out var state) ? state : "No recorded refresh"
+                        categoryStates.TryGetValue(category, out var state) ? state : "No recorded refresh",
+                    StationCounts = categoryCounts.TryGetValue(category, out var counts) ? CountsForStatus(counts) : null
                 }).ToArray();
                 Volatile.Write(ref lastStatus, copy);
                 return copy.Copy();
@@ -398,8 +408,8 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             lock (gate)
             {
-                if (status.State != "Error" || work != null && !work.IsCompleted || failureLog == null)
-                    throw new InvalidOperationException("No recent failed TuneIn refresh is available.");
+                if (work != null && !work.IsCompleted || failureLog == null)
+                    throw new InvalidOperationException("No recent TuneIn refresh diagnostic report is available.");
                 return new TuneInRefreshFailureLog
                 {
                     Text = failureLog.Text,
@@ -414,6 +424,7 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             if (categoryStateKey == snapshot.Key) return;
             categoryStates.Clear();
+            categoryCounts.Clear();
             dirtyCategory = null;
             categoryStateKey = snapshot.Key;
             try
@@ -422,12 +433,56 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (checkpoint?.ConfigurationKey != snapshot.Key) return;
                 dirtyCategory = checkpoint.DirtyCategory;
                 foreach (var category in checkpoint.Categories)
+                {
                     categoryStates[category.Category] = category.DiscoveryPartial ? "Partial (applied)" : "Imported";
+                    if (category.StationCounts != null)
+                        categoryCounts[category.Category] = category.StationCounts.Copy();
+                }
             }
             catch (Exception error)
             {
                 logger?.Error("TuneIn category refresh state could not be read ({0}).", error.GetType().Name);
                 foreach (var category in snapshot.Categories) categoryStates[category] = "Status unavailable";
+            }
+        }
+
+        private TuneInStationCounts CountsForStatus(TuneInStationCounts counts)
+        {
+            var copy = counts.Copy();
+            if (dirtyCategory != null)
+            {
+                copy.EmbyStations = null;
+                copy.EmbyCountError = "Import needs reconciliation";
+            }
+            return copy;
+        }
+
+        private void ReadEmbyStationCount(ConfigurationSnapshot snapshot, TuneInChannel channel, string category,
+            string root, CancellationToken token)
+        {
+            int? count = null;
+            string errorMessage = null;
+            try
+            {
+                count = countStations(channel, root, token);
+                if (count < 0 || count > TuneInStagedImport.MaxItems)
+                    throw new InvalidDataException("Invalid TuneIn Emby inventory count.");
+                if (!count.HasValue) errorMessage = "Emby inventory service unavailable";
+            }
+            catch (Exception error) when (!(error is OperationCanceledException))
+            {
+                count = null;
+                errorMessage = "Emby inventory read failed; check server log";
+                logger?.Warn("TuneIn station inventory could not be read for {0} ({1}).", category, error.GetType().Name);
+            }
+            directory.CheckCurrent(snapshot, token);
+            lock (gate)
+            {
+                if (!categoryCounts.TryGetValue(category, out var counts))
+                    categoryCounts[category] = counts = new TuneInStationCounts();
+                counts.EmbyStations = count;
+                counts.EmbyCheckedUtc = clock();
+                counts.EmbyCountError = errorMessage;
             }
         }
 
@@ -501,6 +556,9 @@ namespace MediaBrowser.Plugins.TuneIn
             string currentCategory = null;
             var completed = new HashSet<string>(StringComparer.Ordinal);
             var skipReasons = new Dictionary<string, int>(StringComparer.Ordinal);
+            var skippedEntries = new List<string>();
+            var skippedEntryCharacters = 0;
+            var skippedEntriesOmitted = 0;
             DateTime started = clock();
             var timedOut = false;
             var discovering = false;
@@ -607,7 +665,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             status.CatalogPagesCached = session.PageCount;
                         }),
                         code => Update(() => status.LastHttpStatus = code), retryRateLimit: true,
-                        skippedBrowseLink: (category, reason) => Update(() =>
+                        skippedBrowseLink: (category, reason, details) => Update(() =>
                         {
                             status.SkippedBrowseLinks++;
                             var label = TuneInBrowsing.CategoryName(category) + ": " + reason.TrimEnd('.');
@@ -618,6 +676,15 @@ namespace MediaBrowser.Plugins.TuneIn
                             status.SkippedBrowseLinkDetails = string.Join("; ", displayed.Select(pair => $"{pair.Value} x {pair.Key}"));
                             var otherCount = status.SkippedBrowseLinks - displayed.Sum(pair => pair.Value);
                             if (otherCount > 0) status.SkippedBrowseLinkDetails += $"; {otherCount} other";
+                            var diagnostic = $"Entry {status.SkippedBrowseLinks} ({clock():O}): {label}"
+                                + Environment.NewLine + details;
+                            if (skippedEntries.Count < SkippedEntryReportLimit
+                                && skippedEntryCharacters + diagnostic.Length <= SkippedEntryCharacterLimit)
+                            {
+                                skippedEntries.Add(diagnostic);
+                                skippedEntryCharacters += diagnostic.Length;
+                            }
+                            else skippedEntriesOmitted++;
                         }), maxPages: TuneInCatalogueSession.MaxRefreshPages,
                         maxBytes: TuneInCatalogueSession.MaxRefreshBytes, timings: timings,
                         rateLimitRetry: () => Update(() => status.RateLimitRetries++));
@@ -631,6 +698,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");
                     var roots = enabled.Select(category => channel.GetCategoryRoot(snapshot, category)).ToArray();
+                    foreach (var category in categories)
+                        ReadEmbyStationCount(snapshot, channel, category, roots[Array.IndexOf(enabled, category)].Id, linked.Token);
                     var importRequired = categories.Length != 0 && (needsRebuild || dirtyAtStart != null || checkpoint.NeedsImport);
                     var changed = new HashSet<string>(StringComparer.Ordinal);
                     var partial = new HashSet<string>(StringComparer.Ordinal);
@@ -670,6 +739,18 @@ namespace MediaBrowser.Plugins.TuneIn
                                 throw new InvalidOperationException("TuneIn category discovery returned no successful provider fetch.");
 
                         listings.TryGetValue(category, out var previous);
+                        var availableStations = staged.CountStations(id =>
+                        {
+                            linked.Token.ThrowIfCancellationRequested();
+                            return directory.Resolve(snapshot, id).StationId;
+                        });
+                        Update(() =>
+                        {
+                            var counts = categoryCounts[category];
+                            counts.AvailableStations = availableStations;
+                            counts.AvailablePartial = staged.DiscoveryIncomplete;
+                            counts.AvailableCheckedUtc = clock();
+                        });
                         var allowExclusions = snapshot.Value.AllowPartialCatalogImport;
                         var categorySnapshot = staged.DiscoveryIncomplete
                             ? (allowExclusions || category == "music" && !importRequired
@@ -682,6 +763,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             cannotApply = true;
                             continue;
                         }
+                        lock (gate) categorySnapshot.StationCounts = categoryCounts[category].Copy();
 
                         if (previous == null || previous.Fingerprint != categorySnapshot.Fingerprint
                             || previous.DiscoveryPartial != categorySnapshot.DiscoveryPartial)
@@ -753,6 +835,11 @@ namespace MediaBrowser.Plugins.TuneIn
                         linked.Token.ThrowIfCancellationRequested();
                         foreach (var root in importedRoots)
                             updateArtwork?.Invoke(channel, root.Id, linked.Token);
+                        foreach (var category in importedCategories)
+                        {
+                            ReadEmbyStationCount(snapshot, channel, category, listings[category].RootId, linked.Token);
+                            lock (gate) listings[category].StationCounts = categoryCounts[category].Copy();
+                        }
                         directory.CheckCurrent(snapshot, linked.Token);
                         checkpoint.Categories = importedCategories.Select(category => listings[category]).ToList();
                         checkpoint.PendingCategories.RemoveAll(listings.ContainsKey);
@@ -764,7 +851,12 @@ namespace MediaBrowser.Plugins.TuneIn
                     else
                     {
                         foreach (var category in categories)
+                        {
                             updateArtwork?.Invoke(channel, roots[Array.IndexOf(enabled, category)].Id, linked.Token);
+                            lock (gate) listings[category].StationCounts = categoryCounts[category].Copy();
+                        }
+                        checkpoint.Categories = enabled.Where(listings.ContainsKey).Select(category => listings[category]).ToList();
+                        Persist(snapshot, checkpoint, started);
                     }
                     lock (gate)
                     {
@@ -853,13 +945,14 @@ namespace MediaBrowser.Plugins.TuneIn
                     lock (gate)
                     {
                         status.FinishedUtc = clock();
-                        failureLog = failure == null ? null : CreateFailureLog(failure, status);
                         if (status.State == "Running")
                         {
                             status.State = "Completed";
                             status.Phase = "Completed";
                             status.Progress = 100;
                         }
+                        failureLog = failure != null || status.SkippedBrowseLinks > 0
+                            ? CreateFailureLog(failure, status, skippedEntries, skippedEntriesOmitted) : null;
                     }
                 }
             }
@@ -877,24 +970,35 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
-        private static TuneInRefreshFailureLog CreateFailureLog(Exception error, TuneInRefreshStatus failedStatus)
+        private static TuneInRefreshFailureLog CreateFailureLog(Exception error, TuneInRefreshStatus failedStatus,
+            IEnumerable<string> skippedEntries = null, int skippedEntriesOmitted = 0)
         {
             var lines = new List<string>
             {
-                "TuneIn Catalog refresh failed.",
+                error == null ? "TuneIn Catalog refresh diagnostics." : "TuneIn Catalog refresh failed.",
+                "Started (UTC): " + failedStatus.StartedUtc?.ToString("O"),
                 "Finished (UTC): " + failedStatus.FinishedUtc?.ToString("O"),
+                "State: " + failedStatus.State,
                 "Category: " + (failedStatus.Category ?? "preparation"),
                 "Phase: " + (failedStatus.Phase ?? "unknown"),
-                "Error: " + error
+                "Import with exclusions allowed: " + failedStatus.PartialImportAllowed
             };
             if (failedStatus.LastHttpStatus.HasValue)
-                lines.Insert(4, "TuneIn HTTP status: " + failedStatus.LastHttpStatus.Value);
+                lines.Add("TuneIn HTTP status: " + failedStatus.LastHttpStatus.Value);
             if (failedStatus.SkippedBrowseLinks != 0)
-                lines.Insert(lines.Count - 1, "Skipped malformed catalog links: " + failedStatus.SkippedBrowseLinks
+                lines.Add("Skipped malformed catalog links: " + failedStatus.SkippedBrowseLinks
                     + ". By reason: " + failedStatus.SkippedBrowseLinkDetails);
+            if (skippedEntries != null)
+            {
+                lines.Add("Skipped-entry details (non-navigation query parameters omitted; review before sharing):");
+                lines.AddRange(skippedEntries);
+            }
+            if (skippedEntriesOmitted > 0)
+                lines.Add("Additional skipped-entry details omitted: " + skippedEntriesOmitted);
+            if (error != null) lines.Add("Error: " + error);
             var report = string.Join(Environment.NewLine, lines);
-            var truncated = report.Length > FailureReportLimit;
-            if (truncated) report = report.Substring(0, FailureReportLimit);
+            var truncated = report.Length > FailureReportLimit || skippedEntriesOmitted > 0;
+            if (report.Length > FailureReportLimit) report = report.Substring(0, FailureReportLimit);
             return new TuneInRefreshFailureLog
             {
                 Text = report,

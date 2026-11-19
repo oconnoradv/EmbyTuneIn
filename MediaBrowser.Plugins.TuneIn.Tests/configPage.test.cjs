@@ -145,6 +145,19 @@ function open(details) {
     return details.handlers.toggle();
 }
 
+test('all dashboard actions use native Emby buttons without plugin color overrides', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const buttons = [...html.matchAll(/<button\b([^>]*)>/g)].map(match => match[1]);
+    assert.ok(buttons.length > 0);
+    for (const attributes of buttons) {
+        assert.match(attributes, /\bis="emby-button"/);
+        assert.match(attributes, /\bclass="[^"]*\braised\b/);
+        assert.doesNotMatch(attributes, /\bstyle=/);
+    }
+    const styles = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+    assert.doesNotMatch(styles, /[^{}]*(?:button|refreshCancel|refreshStart|refreshLogButton|refreshDismiss)[^{}]*\{/);
+});
+
 test('first activation opens and loads Language and Location even when native click defaults are cancelled', async () => {
     const app = harness();
     const visit = app.instance.onResume();
@@ -576,6 +589,72 @@ test('refresh report is retrievable only after the latest run fails and clears w
     assert.equal(app.elements['.refreshFailureLog'].hidden, true);
 });
 
+test('partial reports survive same-run polls and stale retrievals cannot replace a newer report', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    const partial = { State: 'Partial', Busy: false, ReportAvailable: true, FinishedUtc: '2026-11-19T10:00:00Z' };
+    app.refresh[0].resolve(partial);
+    await visit;
+    await settle();
+    const button = app.elements['.refreshLogButton'];
+    assert.equal(button.disabled, false);
+    let retrieval = button.handlers.click();
+    app.refresh[1].resolve({ Text: '<script>untrusted provider text</script>', FinishedUtc: partial.FinishedUtc });
+    await retrieval;
+    const report = app.elements['.refreshFailureLog'];
+    assert.equal(report.textContent, '<script>untrusted provider text</script>');
+    assert.equal(report.childNodes.length, 0);
+    [...app.timers.values()][0].handler();
+    app.refresh[2].resolve(partial);
+    await settle();
+    assert.equal(report.hidden, false);
+    assert.equal(report.textContent, '<script>untrusted provider text</script>');
+    retrieval = button.handlers.click();
+    [...app.timers.values()][0].handler();
+    app.refresh[4].resolve({ ...partial, FinishedUtc: '2026-11-19T11:00:00Z' });
+    await settle();
+    app.refresh[3].resolve({ Text: 'Stale report', FinishedUtc: partial.FinishedUtc });
+    await retrieval;
+    assert.equal(report.hidden, true);
+    assert.equal(report.textContent, '');
+    app.instance.onPause();
+});
+
+test('category counts sit left of Refresh and distinguish zero, partial, unavailable and unmeasured totals', async () => {
+    const app = harness(true);
+    app.elements['.tuneInRefresh'].open = true;
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'Partial', Busy: false, Categories: [
+        { Category: 'talk', Name: 'Talk', State: 'Partial (applied)', StationCounts: {
+            AvailableStations: 123, AvailablePartial: true, EmbyStations: 145,
+            AvailableCheckedUtc: '2026-11-19T10:00:00Z', EmbyCheckedUtc: '2026-11-19T10:05:00Z'
+        } },
+        { Category: 'sports', Name: 'Sports', State: 'Imported',
+            StationCounts: { AvailableStations: 0, EmbyStations: 0 } },
+        { Category: 'local', Name: 'Local Radio', State: 'No recorded refresh' },
+        { Category: 'presets', Name: 'Favorites', State: 'Imported',
+            StationCounts: { AvailableStations: 4, EmbyCountError: '<unsafe> inventory read failed' } }
+    ] });
+    await visit;
+    await settle();
+    const rows = app.elements['.tuneInRefreshCategories'].childNodes;
+    const values = row => row.childNodes[1].childNodes[0].childNodes.map(group => group.childNodes[1]);
+    assert.equal(rows[0].childNodes[1].childNodes[1].textContent, 'Refresh');
+    assert.equal(rows[0].childNodes[1].childNodes[1].attributes.is, 'emby-button');
+    assert.match(rows[0].childNodes[1].childNodes[1].className, /\braised\b/);
+    assert.deepEqual(values(rows[0]).map(value => value.textContent), ['123 (partial)', '145', 'Not measured']);
+    assert.match(values(rows[0])[0].attributes.title, /lower bound/);
+    assert.deepEqual(values(rows[1]).map(value => value.textContent), ['0', '0', 'Not measured']);
+    assert.deepEqual(values(rows[2]).map(value => value.textContent), ['Not checked', 'Not checked', 'Not applicable']);
+    assert.deepEqual(values(rows[3]).map(value => value.textContent), ['4', 'Unavailable', 'Not applicable']);
+    assert.equal(values(rows[3])[1].childNodes.length, 0);
+    assert.equal(app.selectors.length, 0);
+    assert.equal(app.refresh.length, 1);
+    app.instance.onPause();
+});
+
 test('collapsing browsing settings, including Music genres, keeps choices and does not start provider requests', async () => {
     const app = harness();
     const visit = app.instance.onResume();
@@ -605,7 +684,7 @@ test('Catalog Refresh opens by default and can collapse and reopen with fresh st
     const visit = app.instance.onResume();
     const section = app.elements['.tuneInRefresh'];
     const list = app.elements['.tuneInRefreshCategories'];
-    const control = row => row.childNodes[1].childNodes[0];
+    const control = row => row.childNodes[1].childNodes[1];
     app.reads[0].resolve({});
     await visit;
     app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
@@ -662,7 +741,7 @@ for (const resume of [true, false]) {
         app.refresh[0].resolve(failure);
         await visit;
         const rows = app.elements['.tuneInRefreshCategories'].childNodes;
-        const [local, favorites, sports] = rows.map(row => row.childNodes[1].childNodes[0]);
+        const [local, favorites, sports] = rows.map(row => row.childNodes[1].childNodes[1]);
         const action = favorites.handlers.click();
         assert.equal(app.refresh[1].options.url.route, 'TuneIn/Refresh/Start');
         assert.equal(app.refresh[1].options.url.params.Category, 'presets');
@@ -705,7 +784,7 @@ test('category interval dropdowns restore saved values and save changes without 
         { Category: 'talk', Name: 'Talk' }, { Category: 'sports', Name: 'Sports' }] });
     await visit;
     const [talk, sports] = app.elements['.tuneInRefreshCategories'].childNodes
-        .map(row => row.childNodes[1].childNodes[1]);
+        .map(row => row.childNodes[1].childNodes[2]);
     assert.equal(talk.attributes['aria-label'], 'Talk refresh interval');
     assert.equal(talk.value, '24');
     assert.equal(sports.value, '0');

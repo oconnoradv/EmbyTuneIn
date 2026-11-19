@@ -171,6 +171,49 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal("1:talk", proxy.Root.GetProviderId("TuneInCategoryArtwork"));
         }
 
+        [Fact]
+        public void CategoryStationCountsReadScopedEmbyInventoryAndDeduplicateStationIds()
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true
+            };
+            var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("No provider request expected."));
+            var snapshot = directory.Snapshot();
+            var rootId = directory.Register(snapshot, new NavigationEntry { Category = "talk", Name = "Talk" });
+            BaseItem Station(string category, string station, string name) =>
+                new MediaBrowser.Controller.Entities.Audio.Audio
+                {
+                    ExternalId = directory.Register(snapshot, new NavigationEntry
+                    { Category = category, StationId = station, Name = name })
+                };
+            var library = DispatchProxy.Create<ILibraryManager, LibraryProxy>();
+            var proxy = (LibraryProxy)library;
+            proxy.Root = Folder(1, rootId);
+            proxy.Descendants = new[]
+            {
+                Station("talk", "s1", "First"), Station("talk", "s1", "Duplicate listing"),
+                Station("talk", "s2", "Second"), Station("sports", "s3", "Other category")
+            };
+            var channel = new TuneInChannel(directory, library: library);
+            Assert.Equal(2, channel.CountCategoryStations(rootId, CancellationToken.None));
+            Assert.True(proxy.LastInventoryQuery.Recursive);
+            Assert.False(proxy.LastInventoryQuery.IsFolder);
+            Assert.Equal(TuneInStagedImport.MaxItems + 1, proxy.LastInventoryQuery.Limit);
+            using var cancel = new CancellationTokenSource();
+            cancel.Cancel();
+            Assert.Throws<OperationCanceledException>(() => channel.CountCategoryStations(rootId, cancel.Token));
+            Assert.Throws<InvalidOperationException>(() =>
+                channel.CountCategoryStations(proxy.Descendants[0].ExternalId, CancellationToken.None));
+
+            proxy.Descendants = Enumerable.Repeat(proxy.Descendants[0], TuneInStagedImport.MaxItems + 1).ToArray();
+            Assert.Throws<InvalidOperationException>(() => channel.CountCategoryStations(rootId, CancellationToken.None));
+            proxy.Descendants = new BaseItem[] { new MediaBrowser.Controller.Entities.Audio.Audio { ExternalId = "stale" } };
+            Assert.Throws<InvalidOperationException>(() => channel.CountCategoryStations(rootId, CancellationToken.None));
+            proxy.Root = null;
+            Assert.Equal(0, channel.CountCategoryStations(rootId, CancellationToken.None));
+        }
+
         private static Folder Folder(long id, string externalId)
         {
             var folder = new Folder { InternalId = id, ExternalId = externalId };
@@ -195,13 +238,15 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             public BaseItem[] Descendants { get; set; } = Array.Empty<BaseItem>();
             public List<BaseItem> Updated { get; } = new List<BaseItem>();
             public bool FailNextUpdate { get; set; }
+            public InternalItemsQuery LastInventoryQuery { get; private set; }
             protected override object Invoke(MethodInfo method, object[] args)
             {
                 if (method.Name == "GetItemList")
                 {
                     var query = (InternalItemsQuery)args[0];
-                    if (query.ExternalId != null) return new[] { Root };
+                    if (query.ExternalId != null) return Root == null ? Array.Empty<BaseItem>() : new[] { Root };
                     Assert.Equal(new[] { Root.InternalId }, query.ParentIds);
+                    if (query.IsFolder == false) LastInventoryQuery = query;
                     return Descendants.Skip(query.StartIndex ?? 0).Take(query.Limit ?? 100).ToArray();
                 }
                 if (method.Name == "GetItemById")

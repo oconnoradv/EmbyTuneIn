@@ -47,12 +47,24 @@ namespace MediaBrowser.Plugins.TuneIn
         public List<TuneInItemSnapshot> Items { get; set; } = new List<TuneInItemSnapshot>();
     }
 
+    public sealed class TuneInStationCounts
+    {
+        public int? AvailableStations { get; set; }
+        public bool AvailablePartial { get; set; }
+        public DateTime? AvailableCheckedUtc { get; set; }
+        public int? EmbyStations { get; set; }
+        public DateTime? EmbyCheckedUtc { get; set; }
+        public string EmbyCountError { get; set; }
+        internal TuneInStationCounts Copy() => (TuneInStationCounts)MemberwiseClone();
+    }
+
     public sealed class TuneInCategorySnapshot
     {
         public string Category { get; set; }
         public string RootId { get; set; }
         public string Fingerprint { get; set; }
         public bool DiscoveryPartial { get; set; }
+        public TuneInStationCounts StationCounts { get; set; }
         public List<TuneInFolderSnapshot> Folders { get; set; } = new List<TuneInFolderSnapshot>();
     }
 
@@ -177,6 +189,11 @@ namespace MediaBrowser.Plugins.TuneIn
                 || checkpoint.Categories.Any(category => category == null || !validCategories.Contains(category.Category)
                     || string.IsNullOrEmpty(category.RootId) || category.RootId.Length > 6000
                     || category.Folders == null || category.Folders.Count > TuneInStagedImport.MaxFolders
+                    || category.StationCounts?.AvailableStations < 0
+                    || category.StationCounts?.AvailableStations > TuneInStagedImport.MaxItems
+                    || category.StationCounts?.EmbyStations < 0
+                    || category.StationCounts?.EmbyStations > TuneInStagedImport.MaxItems
+                    || (category.StationCounts?.EmbyCountError?.Length ?? 0) > 100
                     || category.Fingerprint?.Length != 64)
                 || checkpoint.Categories.Select(category => category.Category).Distinct().Count() != checkpoint.Categories.Count
                 || checkpoint.Categories.Sum(category => category.Folders.Sum(folder =>
@@ -224,7 +241,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Action completed;
         private readonly Action<int> received;
         private readonly Action rateLimitRetry;
-        private readonly Action<string, string> skippedBrowseLink;
+        private readonly Action<string, string, string> skippedBrowseLink;
         private readonly bool strictBudget;
         private readonly int maxPages;
         private readonly int maxBytes;
@@ -251,7 +268,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal TuneInCatalogueSession(IEnumerable<TuneInCachedPage> cached, TimeSpan lifetime, Func<DateTime> clock,
             Action<bool> requested = null, Action completed = null, Action<int> received = null,
-            bool strictBudget = true, bool retryRateLimit = false, Action<string, string> skippedBrowseLink = null,
+            bool strictBudget = true, bool retryRateLimit = false, Action<string, string, string> skippedBrowseLink = null,
             int maxPages = MaxPages, TuneInRefreshTimings timings = null, int maxBytes = MaxBytes,
             Action rateLimitRetry = null)
         {
@@ -285,7 +302,8 @@ namespace MediaBrowser.Plugins.TuneIn
             pages.Remove(key);
         }
 
-        internal bool TrySkipCatalogLink(string category, string reason, bool stationUrl = false)
+        internal bool TrySkipCatalogLink(string category, string reason, DirectoryRequest source, string rejectedLink,
+            bool stationUrl = false)
         {
             if (skippedBrowseLink == null) return false;
             lock (gate)
@@ -299,7 +317,9 @@ namespace MediaBrowser.Plugins.TuneIn
                 folder.SkippedLink = true;
                 folder.SkippedStation |= stationUrl;
             }
-            skippedBrowseLink(category, stationUrl ? "station URL: " + reason : reason);
+            skippedBrowseLink(category, stationUrl ? "station URL: " + reason : reason,
+                "Source: " + TuneInCatalogDiagnostics.DescribeLink(source.Url)
+                + Environment.NewLine + "Rejected link: " + TuneInCatalogDiagnostics.DescribeLink(rejectedLink));
             return true;
         }
 
