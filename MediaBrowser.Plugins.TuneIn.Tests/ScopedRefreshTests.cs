@@ -293,13 +293,18 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task DiscoveryTimeoutLeavesExistingLibraryUntouched()
+        public async Task FourDiscoveryTimeoutsLeaveExistingLibraryUntouched()
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
             var block = false;
+            var attempts = 0;
             var directory = new TuneInDirectory(() => config, async (_, token) =>
             {
-                if (block) await Task.Delay(Timeout.Infinite, token);
+                if (block)
+                {
+                    attempts++;
+                    await Task.Delay(Timeout.Infinite, token);
+                }
                 return XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>");
             });
             var channel = new TuneInChannel(directory);
@@ -324,10 +329,108 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 refresh.Start("talk");
                 await WaitUntilIdle(refresh);
                 Assert.Equal("TimedOut", refresh.Status().State);
+                Assert.Equal(4, refresh.Status().DiscoveryTimeouts);
+                Assert.Equal(4, attempts);
+                Assert.Null(refresh.Status().DiscoveryCheckpointUtc);
                 Assert.Equal(1, imports);
                 Assert.Equal(checkpoint, File.ReadAllText(path));
             }
             finally { File.Delete(path); }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task DiscoveryReusesTwentyMinuteCheckpointOnRetryOrRestart(bool restart)
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var now = DateTime.UtcNow;
+            var initial = now;
+            var blocked = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var requests = new List<string>();
+            var childAttempts = 0;
+            var imports = 0;
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-discovery-{Guid.NewGuid():N}.xml");
+            var store = new TuneInRefreshStore(path);
+            var directory = new TuneInDirectory(() => config, async (request, token) =>
+            {
+                var id = request.Parameters.GetValueOrDefault("id");
+                requests.Add(id ?? "talk");
+                if (id == null)
+                {
+                    now = initial.AddMinutes(19);
+                    return XDocument.Parse("<opml><body><outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c1'/></body></opml>");
+                }
+                if (id == "c1")
+                {
+                    Assert.False(File.Exists(path + ".discovery"));
+                    now = initial.AddMinutes(20);
+                    return XDocument.Parse("<opml><body><outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c2'/></body></opml>");
+                }
+                if (++childAttempts == 1)
+                {
+                    Assert.True(File.Exists(path + ".discovery"));
+                    Assert.False(File.Exists(path));
+                    blocked.TrySetResult(true);
+                    await Task.Delay(Timeout.Infinite, token);
+                }
+                return XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>");
+            });
+            var channel = new TuneInChannel(directory);
+            TuneInRefresh NewRefresh() => new TuneInRefresh(directory, store, () => channel,
+                (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                (_, staged, __, token) =>
+                {
+                    Assert.Single(ReadStagedTree(staged, token)["Talk"]);
+                    imports++;
+                    return Task.CompletedTask;
+                }, null, clock: () => now, timeoutOverride: TimeSpan.FromSeconds(2));
+            try
+            {
+                using (var refresh = NewRefresh())
+                {
+                    refresh.Start("talk");
+                    await blocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.Equal(initial.AddMinutes(20), refresh.Status().DiscoveryCheckpointUtc);
+                    var key = directory.Snapshot().Key;
+                    Assert.NotNull(store.ReadDiscovery(key, "talk", now, TimeSpan.FromHours(24)));
+                    Assert.Null(store.ReadDiscovery(key, null, now, TimeSpan.FromHours(24)));
+                    Assert.Null(store.ReadDiscovery(new string('0', 64), "talk", now, TimeSpan.FromHours(24)));
+                    Assert.Null(store.ReadDiscovery(key, "talk", initial.AddHours(24), TimeSpan.FromHours(24)));
+                    if (restart) refresh.Cancel();
+                    await WaitUntilIdle(refresh);
+                    if (restart)
+                    {
+                        Assert.Equal("Cancelled", refresh.Status().State);
+                        Assert.Equal(0, imports);
+                    }
+                    else
+                    {
+                        Assert.Equal("Completed", refresh.Status().State);
+                        Assert.Equal(1, refresh.Status().DiscoveryTimeouts);
+                        Assert.Contains("1 discovery timeout", refresh.Status().Phase);
+                        Assert.True(refresh.Status().Resumed);
+                    }
+                }
+                if (restart)
+                {
+                    using var refresh = NewRefresh();
+                    refresh.Start("talk");
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal("Completed", refresh.Status().State);
+                    Assert.True(refresh.Status().Resumed);
+                    Assert.Equal(0, refresh.Status().DiscoveryTimeouts);
+                }
+                Assert.Equal(new[] { "talk", "c1", "c2", "c2" }, requests);
+                Assert.Equal(1, imports);
+                Assert.True(File.Exists(path));
+                Assert.False(File.Exists(path + ".discovery"));
+            }
+            finally
+            {
+                File.Delete(path);
+                store.ClearDiscovery();
+            }
         }
 
         [Fact]

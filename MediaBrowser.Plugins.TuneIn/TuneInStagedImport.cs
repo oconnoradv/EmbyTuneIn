@@ -39,7 +39,7 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static async Task<TuneInStagedImport> DiscoverAsync(TuneInChannel channel, ChannelItemInfo root,
             TuneInCatalogueSession session, CancellationToken token,
             Func<string, TuneInCatalogueSession, bool, CancellationToken, Task<ChannelItemResult>> getItems,
-            Action<int, int> report, Action validate)
+            Action<int, int> report, Action validate, Action checkpoint = null)
         {
             if (channel == null || root == null || session == null || getItems == null)
                 throw new ArgumentNullException("A complete TuneIn discovery context is required.");
@@ -79,6 +79,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
                 }
                 staged.folders.Add(current.Key, new ChannelItemResult { Items = result.Items.ToList() });
+                checkpoint?.Invoke();
             }
             return staged;
         }

@@ -3,9 +3,11 @@ using MediaBrowser.Model.Channels;
 using MediaBrowser.Model.Logging;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -28,6 +30,8 @@ namespace MediaBrowser.Plugins.TuneIn
         public int ImportFoldersServed { get; set; }
         public bool ImportMayHavePartiallyApplied { get; set; }
         public bool Resumed { get; set; }
+        public int DiscoveryTimeouts { get; set; }
+        public DateTime? DiscoveryCheckpointUtc { get; set; }
         public double Progress { get; set; }
         public string ErrorCode { get; set; }
         public DateTime? StartedUtc { get; set; }
@@ -63,6 +67,9 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         private const int ChannelImportVersion = 2;
         private static readonly TimeSpan DefaultTimeout = TimeSpan.FromHours(1);
+        private static readonly TimeSpan DiscoveryCheckpointInterval = TimeSpan.FromMinutes(20);
+        private static readonly TimeSpan DiscoveryCheckpointMaxAge = TimeSpan.FromHours(24);
+        private const int DiscoveryResumeLimit = 3;
         private const int FailureReportLimit = 64 * 1024;
         private const int SkipReasonDisplayLimit = 5;
         private readonly object gate = new object();
@@ -131,6 +138,9 @@ namespace MediaBrowser.Plugins.TuneIn
                 LoadCategoryStates(snapshot);
                 var copy = status.Copy();
                 copy.Busy = work != null && !work.IsCompleted;
+                if (!copy.Busy && copy.DiscoveryTimeouts > 0)
+                    copy.Phase += copy.DiscoveryTimeouts == 1
+                        ? " (1 discovery timeout)" : $" ({copy.DiscoveryTimeouts} discovery timeouts)";
                 copy.DirtyCategory = dirtyCategory;
                 copy.RecoveryCategory = copy.Busy ? null : (snapshot.Enabled(dirtyCategory) ? dirtyCategory : null) ??
                     (copy.State == "Error" && snapshot.Enabled(activeRequest ?? copy.Category) ? activeRequest ?? copy.Category : null);
@@ -200,7 +210,23 @@ namespace MediaBrowser.Plugins.TuneIn
                 var next = category;
                 while (true)
                 {
-                    try { await ExecuteAsync(snapshot, next, cancellation.Token).ConfigureAwait(false); }
+                    try
+                    {
+                        for (var attempt = 0; ; attempt++)
+                        {
+                            if (!await ExecuteAsync(snapshot, next, cancellation.Token).ConfigureAwait(false)
+                                || attempt >= DiscoveryResumeLimit) break;
+                            lock (gate)
+                            {
+                                if (cancellation.IsCancellationRequested || disposed) break;
+                                status = new TuneInRefreshStatus
+                                {
+                                    State = "Running", Phase = "Preparing to retry discovery after timeout", Category = next,
+                                    StartedUtc = status.StartedUtc, DiscoveryTimeouts = status.DiscoveryTimeouts
+                                };
+                            }
+                        }
+                    }
                     catch (Exception error)
                     {
                         logger?.Error("TuneIn refresh worker could not finish ({0}).", error.GetType().Name);
@@ -432,7 +458,7 @@ namespace MediaBrowser.Plugins.TuneIn
             return new CommittedCatalogue(key, folders);
         }
 
-        private async Task ExecuteAsync(ConfigurationSnapshot snapshot, string requestedCategory, CancellationToken serverToken)
+        private async Task<bool> ExecuteAsync(ConfigurationSnapshot snapshot, string requestedCategory, CancellationToken serverToken)
         {
             TuneInCatalogueSession session = null;
             TuneInRefreshCheckpoint checkpoint = null;
@@ -441,6 +467,8 @@ namespace MediaBrowser.Plugins.TuneIn
             var skipReasons = new Dictionary<string, int>(StringComparer.Ordinal);
             DateTime started = clock();
             var timedOut = false;
+            var discovering = false;
+            var discoveryTimedOut = false;
             Exception failure = null;
             using (var timeout = new CancellationTokenSource())
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(serverToken, timeout.Token))
@@ -487,7 +515,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             status.State = "BaselineRequired";
                             status.Phase = "Select Refresh all enabled categories to build the catalog baseline first";
                         }
-                        return;
+                        return false;
                     }
                     var categories = enabled
                         .Where(category => requestedCategory == null || category == requestedCategory)
@@ -496,7 +524,18 @@ namespace MediaBrowser.Plugins.TuneIn
                     lock (gate) status.CategoriesTotal = categories.Length;
                     if (requestedCategory != null && categories.Length == 0)
                         throw new InvalidOperationException("The selected TuneIn category is no longer enabled.");
-                    session = new TuneInCatalogueSession(null, DefaultTimeout, clock,
+                    var now = clock();
+                    var savedDiscovery = LoadDiscovery(snapshot.Key, requestedCategory, now);
+                    var discoveryStarted = savedDiscovery?.StartedUtc ?? now;
+                    var nextCheckpoint = now + DiscoveryCheckpointInterval;
+                    if (savedDiscovery != null)
+                        Update(() =>
+                        {
+                            status.Resumed = true;
+                            status.DiscoveryCheckpointUtc = savedDiscovery.SavedUtc;
+                        });
+                    // Admitted pages must stay cached for the entire attempt, including near the resume age limit.
+                    session = new TuneInCatalogueSession(savedDiscovery?.Pages, DiscoveryCheckpointMaxAge + DefaultTimeout, clock,
                         hit => Update(() => { if (hit) status.CacheHits++; else status.RequestsStarted++; }),
                         () => Update(() => status.RequestsCompleted++),
                         code => Update(() => status.LastHttpStatus = code), retryRateLimit: true,
@@ -513,6 +552,22 @@ namespace MediaBrowser.Plugins.TuneIn
                             if (otherCount > 0) status.SkippedBrowseLinkDetails += $"; {otherCount} other";
                         }), maxPages: TuneInStagedImport.MaxFolders);
 
+                    void SaveDiscoveryIfDue()
+                    {
+                        var savedAt = clock();
+                        if (savedAt < nextCheckpoint) return;
+                        var pages = session.SnapshotPages();
+                        if (pages.Count == 0) return;
+                        directory.CheckCurrent(snapshot, linked.Token);
+                        store.WriteDiscovery(new TuneInDiscoveryCheckpoint
+                        {
+                            ConfigurationKey = snapshot.Key, RequestedCategory = requestedCategory,
+                            StartedUtc = discoveryStarted, SavedUtc = savedAt, Pages = pages
+                        });
+                        nextCheckpoint = savedAt + DiscoveryCheckpointInterval;
+                        Update(() => status.DiscoveryCheckpointUtc = savedAt);
+                    }
+
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");
                     var roots = enabled.Select(category => channel.GetCategoryRoot(snapshot, category)).ToArray();
@@ -520,6 +575,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     var changed = new HashSet<string>(StringComparer.Ordinal);
                     var partial = new HashSet<string>(StringComparer.Ordinal);
                     var cannotApply = false;
+                    discovering = true;
                     foreach (var category in categories)
                     {
                         linked.Token.ThrowIfCancellationRequested();
@@ -530,7 +586,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         Update(() =>
                         {
                             status.Category = category;
-                            status.Phase = "Discovering";
+                            status.Phase = status.DiscoveryTimeouts == 0 ? "Discovering"
+                                : $"Discovering (automatic retry {status.DiscoveryTimeouts} of {DiscoveryResumeLimit} after timeout)";
                             status.ImportFoldersServed = 0;
                             status.ImportFoldersTotal = 0;
                         });
@@ -539,7 +596,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         var staged = await TuneInStagedImport.DiscoverAsync(channel, root, session, linked.Token,
                             (folder, catalogue, strict, token) => getItems(channel, folder, catalogue, strict, token),
                             null,
-                            () => directory.CheckCurrent(snapshot, linked.Token)).ConfigureAwait(false);
+                            () => directory.CheckCurrent(snapshot, linked.Token), SaveDiscoveryIfDue).ConfigureAwait(false);
                         directory.CheckCurrent(snapshot, linked.Token);
                         lock (gate)
                             if (status.RequestsCompleted + status.CacheHits == requestsBefore)
@@ -575,6 +632,9 @@ namespace MediaBrowser.Plugins.TuneIn
                         });
                     }
 
+                    directory.CheckCurrent(snapshot, linked.Token);
+                    discovering = false;
+                    store.ClearDiscovery();
                     if (cannotApply)
                     {
                         directory.CheckCurrent(snapshot, linked.Token);
@@ -585,7 +645,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             status.Phase = "Discovery incomplete; existing library left unchanged";
                             status.Category = requestedCategory;
                         });
-                        return;
+                        return false;
                     }
 
                     var didImport = importRequired || changed.Count != 0;
@@ -660,16 +720,22 @@ namespace MediaBrowser.Plugins.TuneIn
                 catch (Exception error)
                 {
                     timedOut = timeout.IsCancellationRequested && !serverToken.IsCancellationRequested;
+                    discoveryTimedOut = timedOut && discovering;
                     var cancelled = serverToken.IsCancellationRequested || timeout.IsCancellationRequested
                         || error is OperationCanceledException;
                     lock (gate)
                     {
                         status.State = timedOut ? "TimedOut" : cancelled ? "Cancelled" : "Error";
+                        if (discoveryTimedOut) status.DiscoveryTimeouts++;
                         failure = status.State == "Error" ? error : null;
                         if (currentCategory != null && categoryStateKey == snapshot.Key)
                             categoryStates[currentCategory] = timedOut ? "Timed out" : cancelled ? "Cancelled" : "Failed";
                         status.ErrorCode = cancelled ? status.State : error.GetType().Name;
-                        status.Phase = cancelled ? "Stopped and drained" : status.Phase;
+                        status.Phase = discoveryTimedOut
+                            ? (status.DiscoveryCheckpointUtc.HasValue
+                                ? "Discovery timed out; checkpoint saved"
+                                : "Discovery timed out before a checkpoint was saved")
+                            : cancelled ? "Stopped and drained" : status.Phase;
                         if (!cancelled && error is TuneInProviderResponseException provider && provider.StatusCode == 429)
                             status.Phase += " (TuneIn rate limit reached; wait before retrying or increase the API request interval)";
                     }
@@ -693,6 +759,18 @@ namespace MediaBrowser.Plugins.TuneIn
                         }
                     }
                 }
+            }
+            return discoveryTimedOut;
+        }
+
+        private TuneInDiscoveryCheckpoint LoadDiscovery(string configurationKey, string requestedCategory, DateTime now)
+        {
+            try { return store.ReadDiscovery(configurationKey, requestedCategory, now, DiscoveryCheckpointMaxAge); }
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException
+                || error is InvalidOperationException || error is InvalidDataException || error is XmlException)
+            {
+                logger?.Warn("TuneIn discovery checkpoint could not be read; starting discovery again ({0}).", error.GetType().Name);
+                return null;
             }
         }
 

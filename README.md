@@ -102,10 +102,17 @@ Untrusted destinations and unrecovered provider request failures still fail
 the refresh.
 
 All Control Panel refreshes have up to 60 minutes for discovery and import
-combined, with a shared 1,000-page limit per run regardless of which categories
-are selected. The 8 MiB page cache limit, import limits, and rate-limit backoff
-still apply. If a limit stops discovery, no incomplete tree is imported. A retry
-starts discovery from the beginning.
+combined per attempt, with a shared 1,000-page limit regardless of which
+categories are selected. During discovery, the plugin checkpoints validated
+catalog pages separately from the imported library at the first completed
+folder after each 20-minute interval. A discovery timeout is recorded and
+automatically retried up to three times. Retries reuse checkpointed pages
+without requesting them again; work since the last checkpoint may be repeated.
+After a server restart, starting the same refresh can also reuse the checkpoint
+if the settings still match and discovery began less than 24 hours ago.
+Cancellation stops automatic retries, and an import timeout is not retried
+automatically. The 8 MiB page cache limit and rate-limit backoff still apply.
+A timeout during discovery does not import an incomplete tree.
 
 The **Retrieve refresh log** button becomes available when the latest Control
 Panel refresh fails. It retrieves a bounded error report for that run, not the

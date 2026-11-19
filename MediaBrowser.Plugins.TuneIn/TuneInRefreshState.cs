@@ -21,6 +21,15 @@ namespace MediaBrowser.Plugins.TuneIn
         public byte[] Bytes { get; set; }
     }
 
+    public sealed class TuneInDiscoveryCheckpoint
+    {
+        public string ConfigurationKey { get; set; }
+        public string RequestedCategory { get; set; }
+        public DateTime StartedUtc { get; set; }
+        public DateTime SavedUtc { get; set; }
+        public List<TuneInCachedPage> Pages { get; set; } = new List<TuneInCachedPage>();
+    }
+
     public sealed class TuneInItemSnapshot
     {
         public string Id { get; set; }
@@ -63,27 +72,72 @@ namespace MediaBrowser.Plugins.TuneIn
         private const int MaxStateBytes = 24 * 1024 * 1024;
         private readonly string path;
         private static readonly XmlSerializer Serializer = new XmlSerializer(typeof(TuneInRefreshCheckpoint));
+        private static readonly XmlSerializer DiscoverySerializer = new XmlSerializer(typeof(TuneInDiscoveryCheckpoint));
+        private string DiscoveryPath => string.IsNullOrEmpty(path) ? null : path + ".discovery";
 
         internal TuneInRefreshStore(string path) { this.path = path; }
 
         internal TuneInRefreshCheckpoint Read()
         {
-            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
-            if (new FileInfo(path).Length > MaxStateBytes)
-                throw new InvalidDataException("TuneIn refresh state exceeds its limit.");
-            using (var stream = File.OpenRead(path))
-            using (var reader = XmlReader.Create(stream, new XmlReaderSettings
-            { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaxStateBytes }))
-            {
-                var checkpoint = (TuneInRefreshCheckpoint)Serializer.Deserialize(reader);
-                Validate(checkpoint);
-                return checkpoint;
-            }
+            var checkpoint = ReadState<TuneInRefreshCheckpoint>(path, Serializer);
+            if (checkpoint != null) Validate(checkpoint);
+            return checkpoint;
         }
 
         internal void Write(TuneInRefreshCheckpoint checkpoint)
         {
             Validate(checkpoint);
+            WriteState(path, Serializer, checkpoint);
+        }
+
+        internal TuneInDiscoveryCheckpoint ReadDiscovery(string configurationKey, string requestedCategory,
+            DateTime now, TimeSpan maxAge)
+        {
+            var checkpoint = ReadState<TuneInDiscoveryCheckpoint>(DiscoveryPath, DiscoverySerializer);
+            if (checkpoint == null || checkpoint.ConfigurationKey != configurationKey
+                || checkpoint.RequestedCategory != requestedCategory || checkpoint.StartedUtc > checkpoint.SavedUtc
+                || checkpoint.SavedUtc > now || now - checkpoint.StartedUtc >= maxAge)
+                return null;
+            if (checkpoint.Pages == null || checkpoint.Pages.Count == 0
+                || checkpoint.Pages.Count > TuneInStagedImport.MaxFolders
+                || checkpoint.Pages.Any(page => page?.Key == null || page.Key.Length != 64
+                    || page.Bytes == null || page.SavedUtc < checkpoint.StartedUtc || page.SavedUtc > checkpoint.SavedUtc)
+                || checkpoint.Pages.Select(page => page.Key).Distinct(StringComparer.Ordinal).Count() != checkpoint.Pages.Count
+                || checkpoint.Pages.Sum(page => (long)page.Bytes.Length) > TuneInCatalogueSession.MaxBytes)
+                throw new InvalidDataException("Invalid TuneIn discovery checkpoint.");
+            foreach (var page in checkpoint.Pages)
+                TuneInDirectory.ParseCatalogue(page.Bytes);
+            return checkpoint;
+        }
+
+        internal void WriteDiscovery(TuneInDiscoveryCheckpoint checkpoint) =>
+            WriteState(DiscoveryPath, DiscoverySerializer, checkpoint);
+
+        internal void ClearDiscovery()
+        {
+            if (DiscoveryPath != null) File.Delete(DiscoveryPath);
+        }
+
+        private static T ReadState<T>(string path, XmlSerializer serializer) where T : class
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            try
+            {
+                using (var stream = File.OpenRead(path))
+                using (var reader = XmlReader.Create(stream, new XmlReaderSettings
+                { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaxStateBytes }))
+                {
+                    if (stream.Length > MaxStateBytes)
+                        throw new InvalidDataException("TuneIn refresh state exceeds its limit.");
+                    return (T)serializer.Deserialize(reader) ?? throw new InvalidDataException("Empty TuneIn refresh state.");
+                }
+            }
+            catch (FileNotFoundException) { return null; }
+            catch (DirectoryNotFoundException) { return null; }
+        }
+
+        private static void WriteState(string path, XmlSerializer serializer, object checkpoint)
+        {
             if (string.IsNullOrEmpty(path)) throw new InvalidOperationException("TuneIn refresh state path is unavailable.");
             var directory = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
@@ -92,7 +146,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
                 {
-                    Serializer.Serialize(stream, checkpoint);
+                    serializer.Serialize(stream, checkpoint);
                     stream.Flush(true);
                     if (stream.Length > MaxStateBytes)
                         throw new InvalidDataException("TuneIn refresh state exceeds its limit.");
@@ -194,6 +248,11 @@ namespace MediaBrowser.Plugins.TuneIn
             if (stationUrl) SkippedStationUrls++;
             skippedBrowseLink(category, stationUrl ? "station URL: " + reason : reason);
             return true;
+        }
+
+        internal List<TuneInCachedPage> SnapshotPages()
+        {
+            lock (gate) return pages.Values.ToList();
         }
 
         private bool Fresh(TuneInCachedPage page) =>
