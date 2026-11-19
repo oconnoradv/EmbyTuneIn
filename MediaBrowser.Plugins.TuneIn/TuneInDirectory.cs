@@ -198,7 +198,8 @@ namespace MediaBrowser.Plugins.TuneIn
             return copy;
         }
 
-        public static DirectoryRequest ParseLink(string value, Func<string, bool> skipMalformedBrowse = null)
+        public static DirectoryRequest ParseLink(string value, Func<string, bool> skipMalformed = null,
+            bool allowSkippingTune = false)
         {
             if (!Uri.TryCreate(HttpUtility.HtmlDecode(value), UriKind.Absolute, out var uri)
                 || (uri.Scheme != "http" && uri.Scheme != "https") || !uri.IsDefaultPort
@@ -208,7 +209,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
             DirectoryRequest RejectQuery(string reason)
             {
-                if (uri.AbsolutePath == "/Browse.ashx" && skipMalformedBrowse?.Invoke(reason) == true)
+                if ((uri.AbsolutePath == "/Browse.ashx" || allowSkippingTune) && skipMalformed?.Invoke(reason) == true)
                     return null;
                 throw new InvalidDataException(reason);
             }

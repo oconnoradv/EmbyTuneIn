@@ -101,7 +101,14 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     var station = TuneInDirectory.Attribute(row, "guide_id");
                     if (!ValidStation(station))
-                        station = DirectoryRequest.ParseLink(TuneInDirectory.Attribute(row, "URL")).Parameters.GetValueOrDefault("id");
+                    {
+                        var link = DirectoryRequest.ParseLink(TuneInDirectory.Attribute(row, "URL"),
+                            reason => entry.Category == "music"
+                                && session?.TrySkipCatalogLink(entry.Category, reason, stationUrl: true) == true,
+                            allowSkippingTune: true);
+                        if (link == null) continue;
+                        station = link.Parameters.GetValueOrDefault("id");
+                    }
                     if (!ValidStation(station)) throw new InvalidDataException("Invalid TuneIn station identifier.");
                     items.Add(new ChannelItemInfo
                     {
@@ -119,7 +126,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 else if (type == "link")
                 {
                     var link = DirectoryRequest.ParseLink(TuneInDirectory.Attribute(row, "URL"),
-                        reason => session?.TrySkipBrowseLink(entry.Category, reason) == true);
+                        reason => session?.TrySkipCatalogLink(entry.Category, reason) == true,
+                        allowSkippingTune: entry.Category == "music");
                     if (link == null || link.Method != "Browse.ashx") continue;
                     var next = ScopedRequest(snapshot, entry, link);
                     var contentCategory = entry.Category == "language" ? LanguageGroup(entry, next) : null;

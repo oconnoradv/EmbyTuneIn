@@ -17,6 +17,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private const long MaxEstimatedBytes = 32 * 1024 * 1024;
         private readonly Dictionary<string, ChannelItemResult> folders = new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal);
         private readonly HashSet<string> incompleteFolders = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> incompleteStationListings = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> served = new HashSet<string>(StringComparer.Ordinal);
         private readonly CancellationToken token;
         private readonly Action<int, int> report;
@@ -59,8 +60,10 @@ namespace MediaBrowser.Plugins.TuneIn
                     throw new InvalidOperationException("TuneIn discovery exceeded its folder limit.");
 
                 var skippedBefore = session.SkippedBrowseLinks;
+                var stationsSkippedBefore = session.SkippedStationUrls;
                 var result = await getItems(current.Key, session, true, token).ConfigureAwait(false);
                 if (session.SkippedBrowseLinks != skippedBefore) staged.incompleteFolders.Add(current.Key);
+                if (session.SkippedStationUrls != stationsSkippedBefore) staged.incompleteStationListings.Add(current.Key);
                 token.ThrowIfCancellationRequested();
                 validate?.Invoke();
                 if (result?.Items == null) throw new InvalidOperationException("TuneIn returned an incomplete folder.");
@@ -101,7 +104,7 @@ namespace MediaBrowser.Plugins.TuneIn
             return CreateSnapshot(category, folders, false);
         }
 
-        internal TuneInCategorySnapshot MergePartialMusic(TuneInCategorySnapshot previous)
+        internal TuneInCategorySnapshot MergePartialMusic(TuneInCategorySnapshot previous, Func<string, string> stationId)
         {
             if (!DiscoveryIncomplete || previous?.Category != "music" || previous.RootId != Root.Id)
                 return null;
@@ -127,12 +130,19 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 else if (incompleteFolders.Contains(id))
                 {
-                    // A rejected link can hide a folder, not a direct audio row. Retain missing old folder edges only.
-                    var freshIds = new HashSet<string>(listing.Items.Select(item => item.Id), StringComparer.Ordinal);
+                    var freshFolders = new HashSet<string>(listing.Items.Where(item => item.Type == ChannelItemType.Folder)
+                        .Select(item => item.Id), StringComparer.Ordinal);
+                    var freshStations = incompleteStationListings.Contains(id)
+                        ? new HashSet<string>(listing.Items.Where(item => item.Type == ChannelItemType.Media)
+                            .Select(item => stationId(item.Id)), StringComparer.Ordinal)
+                        : null;
                     listing = new ChannelItemResult
                     {
                         Items = listing.Items.Concat(RestoreFolder(saved[id]).Items.Where(item =>
-                            item.Type == ChannelItemType.Folder && freshIds.Add(item.Id))).ToList()
+                            item.Type == ChannelItemType.Folder
+                                ? freshFolders.Add(item.Id)
+                                : item.Type == ChannelItemType.Media && freshStations != null
+                                    && freshStations.Add(stationId(item.Id)))).ToList()
                     };
                 }
                 CheckListingBudget(id, listing, ref estimatedBytes, ref itemCount);

@@ -201,6 +201,62 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             finally { File.Delete(path); }
         }
 
+        [Fact]
+        public async Task MusicRefreshRetainsSavedStationWhenFallbackUrlHasAnInvalidFragment()
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true };
+            config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
+            var mode = 0;
+            var imports = new List<string[]>();
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                var host = mode == 2 ? "example.invalid" : "opml.radiotime.com";
+                var fragment = mode == 0 ? "" : "#not-for-diagnostics";
+                var rows = $"<outline type='audio' text='Saved' URL='https://{host}/Tune.ashx?id=s1{fragment}'/>"
+                    + $"<outline type='audio' guide_id='s2' text='{(mode == 0 ? "Original" : "Updated")}'/>"
+                    + (mode == 0 ? "" : "<outline type='audio' guide_id='s3' text='New'/>");
+                return Task.FromResult(XDocument.Parse($"<opml><body>{rows}</body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-audio-fragment-{Guid.NewGuid():N}.xml");
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        imports.Add(ReadStagedTree(staged, token)["Music"]
+                            .Select(id => directory.Resolve(directory.Snapshot(), id).Name)
+                            .OrderBy(name => name, StringComparer.Ordinal).ToArray());
+                        return Task.CompletedTask;
+                    }, null);
+                refresh.Start("music");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(new[] { "Original", "Saved" }, Assert.Single(imports));
+
+                mode = 1;
+                refresh.Start("music");
+                await WaitUntilIdle(refresh);
+                var status = refresh.Status();
+                Assert.Equal("Partial", status.State);
+                Assert.Contains("valid updates applied", status.Phase);
+                Assert.Equal(1, status.SkippedBrowseLinks);
+                Assert.Contains("station URL: Invalid catalog fragment", status.SkippedBrowseLinkDetails);
+                Assert.DoesNotContain("not-for-diagnostics", status.SkippedBrowseLinkDetails);
+                Assert.Equal(2, imports.Count);
+                Assert.Equal(new[] { "New", "Saved", "Updated" }, imports[1]);
+
+                mode = 2;
+                refresh.Start("music");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Error", refresh.Status().State);
+                Assert.Contains("Untrusted TuneIn catalog link", refresh.GetFailureLog().Text);
+                Assert.Equal(2, imports.Count);
+            }
+            finally { File.Delete(path); }
+        }
+
         [Theory]
         [InlineData("untrusted", "Error", "InvalidDataException")]
         [InlineData("pagination", "Error", "InvalidDataException")]

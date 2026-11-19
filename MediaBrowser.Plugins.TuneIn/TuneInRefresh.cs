@@ -540,7 +540,8 @@ namespace MediaBrowser.Plugins.TuneIn
 
                         listings.TryGetValue(category, out var previous);
                         var categorySnapshot = staged.DiscoveryIncomplete
-                            ? (importRequired ? null : staged.MergePartialMusic(previous))
+                            ? (importRequired ? null : staged.MergePartialMusic(previous,
+                                id => directory.Resolve(snapshot, id).StationId))
                             : staged.CreateSnapshot(category);
                         if (categorySnapshot == null)
                         {
@@ -642,7 +643,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     {
                         status.State = partial.Count == 0 ? "Completed" : "Partial";
                         status.Phase = partial.Count != 0
-                            ? (didImport ? "Partial refresh completed; valid updates applied, saved branches retained"
+                            ? (didImport ? "Partial refresh completed; valid updates applied, saved entries retained"
                                 : "Partial refresh completed; merged library unchanged")
                             : (categories.Length == 0 ? "No enabled categories" : "Completed");
                         if (partial.Count != 0) status.Category = requestedCategory ?? "music";

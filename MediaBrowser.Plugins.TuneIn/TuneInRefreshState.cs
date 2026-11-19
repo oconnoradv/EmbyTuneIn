@@ -166,6 +166,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly bool strictBudget;
         private int rateLimitRetriesRemaining;
         internal int SkippedBrowseLinks { get; private set; }
+        internal int SkippedStationUrls { get; private set; }
 
         internal TuneInCatalogueSession(IEnumerable<TuneInCachedPage> cached, TimeSpan lifetime, Func<DateTime> clock,
             Action<bool> requested = null, Action completed = null, Action<int> received = null,
@@ -183,11 +184,12 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (Fresh(page)) pages[page.Key] = page;
         }
 
-        internal bool TrySkipBrowseLink(string category, string reason)
+        internal bool TrySkipCatalogLink(string category, string reason, bool stationUrl = false)
         {
             if (skippedBrowseLink == null) return false;
             SkippedBrowseLinks++;
-            skippedBrowseLink(category, reason);
+            if (stationUrl) SkippedStationUrls++;
+            skippedBrowseLink(category, stationUrl ? "station URL: " + reason : reason);
             return true;
         }
 
