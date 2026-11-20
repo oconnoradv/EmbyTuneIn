@@ -891,6 +891,9 @@ namespace MediaBrowser.Plugins.TuneIn
                         && enabled.Select((category, index) => listings.TryGetValue(category, out var saved)
                             && saved.RootId == roots[index].Id).All(matches => matches);
                     var progressive = mayScope && requestedCategory == null && replay == null && roots.Length > 0;
+                    if (progressive)
+                        categories = categories.OrderBy(category => category == dirtyAtStart ? 0 : category == "music" ? 2 : 1)
+                            .ToArray();
                     if (!mayScope && checkpoint.DirtyImportWasScoped && requestedCategory == null && activeRecovery.Retries > 0)
                         throw new InvalidOperationException("Cannot widen an interrupted scoped TuneIn import. "
                             + "Complete the interrupted category or explicitly refresh all enabled categories.");

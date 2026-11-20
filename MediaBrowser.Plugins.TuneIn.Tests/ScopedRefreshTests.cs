@@ -144,6 +144,34 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal(failDuringImport ? "sports" : null, fixture.Store.Read().DirtyCategory);
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task ProgressiveRefreshImportsMusicLastUnlessItNeedsRepair(bool repairMusic)
+        {
+            using var fixture = new ExperimentalImportFixture(includeMusic: true);
+            using var refresh = fixture.Create(allowScoped: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Null(Assert.Single(fixture.Manager.Restrictions));
+            if (repairMusic)
+            {
+                var checkpoint = fixture.Store.Read();
+                checkpoint.DirtyCategory = "music";
+                checkpoint.DirtyImportWasScoped = true;
+                fixture.Store.Write(checkpoint);
+            }
+            fixture.Version++;
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            var expected = repairMusic ? new[] { "music", "talk", "sports" } : new[] { "talk", "sports", "music" };
+            Assert.Equal(expected.Select(category => fixture.Category(category).RootId),
+                fixture.Manager.Restrictions.Skip(1));
+            Assert.Equal(new[] { "music", "talk", "sports" }, refresh.Status().Categories.Select(category => category.Category));
+        }
+
         private sealed class ExperimentalImportFixture : IDisposable
         {
             private readonly string path = Path.Combine(Path.GetTempPath(), $"tunein-experimental-{Guid.NewGuid():N}.xml");
@@ -158,12 +186,14 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             internal int Fetches;
             internal Func<CancellationToken, Task> BeforeSports;
 
-            internal ExperimentalImportFixture()
+            internal ExperimentalImportFixture(bool includeMusic = false)
             {
                 var config = new PluginConfiguration
                 {
-                    SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true
+                    SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true,
+                    EnableMusic = includeMusic
                 };
+                if (includeMusic) config.Music.Add(new CatalogSelection { Id = "g1", Name = "Genre" });
                 directory = new TuneInDirectory(() => config, async (request, token) =>
                 {
                     Interlocked.Increment(ref Fetches);
@@ -177,6 +207,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 channel = new TuneInChannel(directory);
                 manager = DispatchProxy.Create<IChannelManager, ExperimentalChannelManager>();
                 Manager = (ExperimentalChannelManager)manager;
+                if (includeMusic) Manager.ExpectedRoots = new[] { "Music", "Talk", "Sports" };
                 Store = new TuneInRefreshStore(path);
             }
 
@@ -208,6 +239,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             internal bool EnumerateChannelRoot = true;
             internal bool SkipDescendants;
             internal bool ReadSibling;
+            internal string[] ExpectedRoots = new[] { "Talk", "Sports" };
             internal Func<string, CancellationToken, Task> BeforeImport;
 
             protected override object Invoke(MethodInfo method, object[] args)
@@ -233,7 +265,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 if (restriction == null || EnumerateChannelRoot || ReadSibling)
                 {
                     var roots = await Read(null);
-                    Assert.Equal(new[] { "Talk", "Sports" }, roots.Items.Select(item => item.Name));
+                    Assert.Equal(ExpectedRoots, roots.Items.Select(item => item.Name));
                     if (ReadSibling)
                         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
                             await Read(roots.Items.Single(root => root.Id != restriction).Id));

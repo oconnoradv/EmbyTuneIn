@@ -329,7 +329,9 @@ it could omit valid siblings during Emby reconciliation.
 
 With an intact, matching baseline, a single-category refresh imports only that
 category. **Refresh all enabled categories** publishes one fully discovered
-category at a time before discovering the next. Incomplete categories are left
+category at a time before discovering the next. Music runs last so other
+categories can publish first, unless an interrupted Music import needs repair.
+Incomplete categories are left
 unchanged during a progressive run. Each verified import is saved before
 discovery continues, so a later failure does not invalidate previously applied
 categories. First builds, topology changes, incompatible checkpoints, and
