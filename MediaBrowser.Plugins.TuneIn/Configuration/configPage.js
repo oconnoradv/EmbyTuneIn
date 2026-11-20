@@ -1,6 +1,8 @@
 define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-checkbox', 'emby-scroller', 'emby-select'], function (BaseView, loading, $) {
     'use strict';
     var pluginId = '10b82431-f939-4507-a8e2-9509dd3fd6ae';
+    var reminderKey = pluginId + ':return-to-channel-root';
+    var pendingRootReminder;
     var categories = [
         ['EnableLocalRadio', 'Local Radio'], ['EnableMusic', 'Music'],
         ['EnableLanguage', 'By Language'], ['EnableLocation', 'By Location'],
@@ -18,6 +20,22 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function message(instance, text) {
         instance.view.querySelector('.status').textContent = text;
+    }
+
+    function showRootReminder(instance, text) {
+        if (text !== undefined) pendingRootReminder = text;
+        try {
+            if (typeof sessionStorage !== 'undefined') {
+                if (text === undefined && pendingRootReminder === undefined)
+                    pendingRootReminder = sessionStorage.getItem(reminderKey);
+                else if (text) sessionStorage.setItem(reminderKey, text);
+                else if (text !== undefined) sessionStorage.removeItem(reminderKey);
+            }
+        } catch (error) {
+            console.warn('TuneIn could not persist the channel-root reminder for this tab.', error);
+        }
+        instance.view.querySelector('.rootReminder').hidden = !pendingRootReminder;
+        instance.view.querySelector('.rootReminderText').textContent = pendingRootReminder || '';
     }
 
     function button(text, action) {
@@ -55,7 +73,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     function browsingStatus(config) {
         if (config.SchemaVersion !== 1 || !config.ConfigurationCompleted)
             return 'Browsing is disabled. Open Global TuneIn Settings, enable configuration browsing, then choose categories and save.';
-        return 'Browsing is enabled. Return to the channel root after saving.';
+        return 'Browsing is enabled.';
     }
 
     function selected(instance, spec, container) {
@@ -945,7 +963,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 instance.settingsLocked = true;
                 if (epoch !== instance.viewEpoch) return;
                 Dashboard.processPluginConfigurationUpdateResult(result);
-                message(instance, 'Configuration saved and locked. ' + browsingStatus(config) + ' No catalog crawl was started.');
+                var savedMessage = 'Configuration saved and locked. ' + browsingStatus(config);
+                if (config.ConfigurationCompleted) {
+                    message(instance, '');
+                    showRootReminder(instance, savedMessage + ' Return to the channel root after saving. No catalog crawl was started.');
+                } else {
+                    showRootReminder(instance, '');
+                    message(instance, savedMessage + ' No catalog crawl was started.');
+                }
             }, function (error) {
                 instance.settingsLocked = undefined;
                 console.error('Unable to lock TuneIn settings after saving.', error);
@@ -980,6 +1005,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         });
         view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });
         view.querySelector('.configurationCompleted').addEventListener('change', function () { editing(instance); });
+        view.querySelector('.rootReminderConfirm').addEventListener('click', function () {
+            showRootReminder(instance, '');
+            view.querySelector('.globalSummary').focus();
+        });
         var dialog = view.querySelector('.tuneInRecoveryDialog');
         instance.refreshSection.addEventListener('toggle', function () {
             if (!instance.refreshSection.open && dialog.open) dialog.close();
@@ -1030,6 +1059,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var instance = this;
         var epoch = instance.viewEpoch = (instance.viewEpoch || 0) + 1;
         instance.refreshVisible = true;
+        showRootReminder(instance);
         clearCleanupPreview(instance);
         instance.view.querySelector('.cleanupError').textContent = '';
         instance.view.querySelector('.refreshStatus').textContent = 'Reading refresh status...';
