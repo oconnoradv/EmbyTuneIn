@@ -35,7 +35,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public TuneInChannel(IHttpClient httpClient, ILogManager logManager, IApplicationHost appHost,
             IServerApplicationHost serverHost, ILibraryManager libraryManager)
-            : this(TuneInRequests.Directory(httpClient, appHost), httpClient,
+            : this(TuneInRequests.Directory(httpClient, appHost), null,
                 logManager.GetLogger(typeof(TuneInChannel).Name),
                 serverHost ?? throw new ArgumentNullException(nameof(serverHost)),
                 libraryManager ?? throw new ArgumentNullException(nameof(libraryManager))) { }

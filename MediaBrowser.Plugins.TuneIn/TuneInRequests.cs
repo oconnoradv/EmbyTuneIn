@@ -18,7 +18,7 @@ namespace MediaBrowser.Plugins.TuneIn
     internal static class TuneInRequests
     {
         private static readonly object Gate = new object();
-        private static readonly TuneInRequestPacer Pacer = new TuneInRequestPacer();
+        internal static readonly TuneInRequestPacer Pacer = new TuneInRequestPacer();
         private static TuneInDirectory directory;
 
         internal static TuneInDirectory Directory(IHttpClient client, IApplicationHost host)
@@ -103,14 +103,6 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (started && timings != null) Interlocked.Decrement(ref timings.ActiveResponses);
                 }
             }
-        }
-
-        internal static Task<HttpResponseInfo> SendAsync(IHttpClient client, HttpRequestOptions options, string method,
-            int intervalSeconds, bool catalogueRequest = false, bool bufferContent = true, TuneInRefreshTimings timings = null)
-        {
-            options.BufferContent = bufferContent;
-            return Pacer.SendAsync(() => client.SendAsync(options, method), intervalSeconds,
-                options.CancellationToken, catalogueRequest, timings);
         }
 
     }

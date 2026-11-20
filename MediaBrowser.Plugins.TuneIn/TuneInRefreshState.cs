@@ -31,6 +31,14 @@ namespace MediaBrowser.Plugins.TuneIn
         public List<TuneInCachedPage> Pages { get; set; } = new List<TuneInCachedPage>();
     }
 
+    public sealed class TuneInRefreshRecovery
+    {
+        public string ConfigurationKey { get; set; }
+        public string RequestedCategory { get; set; }
+        public int Retries { get; set; }
+        public string Phase { get; set; } = "discovery";
+    }
+
     public sealed class TuneInItemSnapshot
     {
         public string Id { get; set; }
@@ -88,7 +96,9 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly string path;
         private static readonly XmlSerializer Serializer = new XmlSerializer(typeof(TuneInRefreshCheckpoint));
         private static readonly XmlSerializer DiscoverySerializer = new XmlSerializer(typeof(TuneInDiscoveryCheckpoint));
+        private static readonly XmlSerializer RecoverySerializer = new XmlSerializer(typeof(TuneInRefreshRecovery));
         private string DiscoveryPath => string.IsNullOrEmpty(path) ? null : path + ".discovery";
+        private string RecoveryPath => string.IsNullOrEmpty(path) ? null : path + ".recovery";
 
         internal TuneInRefreshStore(string path) { this.path = path; }
 
@@ -131,6 +141,35 @@ namespace MediaBrowser.Plugins.TuneIn
         internal void ClearDiscovery()
         {
             if (DiscoveryPath != null) File.Delete(DiscoveryPath);
+        }
+
+        internal TuneInRefreshRecovery ReadRecovery()
+        {
+            var recovery = ReadState<TuneInRefreshRecovery>(RecoveryPath, RecoverySerializer, 16384);
+            if (recovery != null) ValidateRecovery(recovery);
+            return recovery;
+        }
+
+        internal void WriteRecovery(TuneInRefreshRecovery recovery)
+        {
+            ValidateRecovery(recovery);
+            WriteState(RecoveryPath, RecoverySerializer, recovery, 16384);
+        }
+
+        internal void ClearRecovery()
+        {
+            if (RecoveryPath != null) File.Delete(RecoveryPath);
+        }
+
+        private static void ValidateRecovery(TuneInRefreshRecovery recovery)
+        {
+            if (recovery == null || recovery.ConfigurationKey?.Length != 64
+                || recovery.Retries < 0 || recovery.Retries > TuneInRefresh.InterruptionRetryLimit
+                || (recovery.Phase != "discovery" && recovery.Phase != "import")
+                || (recovery.RequestedCategory != null && !new[]
+                    { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" }
+                    .Contains(recovery.RequestedCategory)))
+                throw new InvalidDataException("Invalid TuneIn refresh recovery state.");
         }
 
         private static T ReadState<T>(string path, XmlSerializer serializer, int maxBytes = MaxStateBytes) where T : class

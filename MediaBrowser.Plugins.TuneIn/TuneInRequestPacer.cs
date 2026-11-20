@@ -41,10 +41,14 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         private const int SuccessesBeforeRecovery = 20;
         private readonly object gate = new object();
-        private readonly LinkedList<bool> waiting = new LinkedList<bool>();
+        private readonly LinkedList<bool> catalogue = new LinkedList<bool>();
+        private readonly LinkedList<bool> playback = new LinkedList<bool>();
+        private const int PlaybackBurst = 2;
         private TaskCompletionSource<bool> slotChanged = NewSlotSignal();
-        private int active;
-        private bool exclusive;
+        private int activeCatalogue;
+        private bool parallelCatalogueActive;
+        private bool activePlayback;
+        private int playbackBurst;
         private bool serialCatalogue;
         private readonly Func<DateTime> clock;
         private readonly Func<TimeSpan, CancellationToken, Task> delay;
@@ -70,7 +74,11 @@ namespace MediaBrowser.Plugins.TuneIn
             Task<HttpResponseInfo> request;
             TimeSpan interval;
             LinkedListNode<bool> turn;
-            lock (gate) turn = waiting.AddLast(parallel);
+            lock (gate)
+            {
+                turn = (catalogueRequest ? catalogue : playback).AddLast(parallel);
+                SignalWaiters();
+            }
             try
             {
                 while (true)
@@ -85,7 +93,12 @@ namespace MediaBrowser.Plugins.TuneIn
                             Math.Max(PluginConfiguration.MinApiRequestIntervalSeconds,
                                 Math.Max(intervalSeconds, catalogueRequest ? catalogueIntervalSeconds : 0))));
                         var now = clock();
-                        if (waiting.First != turn || (active != 0 && (!parallel || exclusive || serialCatalogue || active >= 2)))
+                        var catalogReady = catalogue.First != null && (activeCatalogue == 0
+                            || (activeCatalogue == 1 && parallelCatalogueActive && !serialCatalogue && catalogue.First.Value));
+                        var playbackReady = playback.First != null && !activePlayback;
+                        var next = playbackReady && (!catalogReady || playbackBurst < PlaybackBurst)
+                            ? playback.First : catalogReady ? catalogue.First : null;
+                        if (next != turn)
                             slot = slotChanged.Task;
                         else
                         {
@@ -99,27 +112,51 @@ namespace MediaBrowser.Plugins.TuneIn
                                     lock (timings.Gate) timings.RecordInterval((int)interval.TotalSeconds);
                                 lastRequestUtc = now;
                                 nextRequestUtc = now + interval;
-                                active++;
-                                exclusive = !parallel;
-                                waiting.Remove(turn);
+                                if (catalogueRequest)
+                                {
+                                    activeCatalogue++;
+                                    parallelCatalogueActive = parallel;
+                                    playbackBurst = 0;
+                                }
+                                else
+                                {
+                                    activePlayback = true;
+                                    playbackBurst = catalogue.Count == 0 ? 0 : Math.Min(PlaybackBurst, playbackBurst + 1);
+                                }
+                                turn.List.Remove(turn);
                                 SignalWaiters();
                                 try { request = send(); }
                                 catch (Exception error) { request = Task.FromException<HttpResponseInfo>(error); }
                                 break;
                             }
+                            slot = slotChanged.Task;
                         }
                     }
                     var elapsed = timings == null ? null : Stopwatch.StartNew();
                     if (backoff && timings != null) Interlocked.Increment(ref timings.BackoffWaiters);
                     try
                     {
-                        if (slot != null)
+                        if (wait <= TimeSpan.Zero)
                         {
                             var cancelled = NewSlotSignal();
                             using (token.Register(() => cancelled.TrySetCanceled()))
                                 await (await Task.WhenAny(slot, cancelled.Task).ConfigureAwait(false)).ConfigureAwait(false);
                         }
-                        else await delay(wait > TimeSpan.FromDays(1) ? TimeSpan.FromDays(1) : wait, token).ConfigureAwait(false);
+                        else
+                        {
+                            using (var wake = CancellationTokenSource.CreateLinkedTokenSource(token))
+                            {
+                                var timer = delay(wait > TimeSpan.FromDays(1) ? TimeSpan.FromDays(1) : wait, wake.Token);
+                                if (await Task.WhenAny(slot, timer).ConfigureAwait(false) == timer)
+                                    await timer.ConfigureAwait(false);
+                                else
+                                {
+                                    wake.Cancel();
+                                    try { await timer.ConfigureAwait(false); }
+                                    catch (OperationCanceledException) when (wake.IsCancellationRequested) { }
+                                }
+                            }
+                        }
                     }
                     finally
                     {
@@ -128,7 +165,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             if (backoff) Interlocked.Decrement(ref timings.BackoffWaiters);
                             lock (timings.Gate)
                             {
-                                if (slot != null) timings.PacerQueue += elapsed.Elapsed;
+                                if (wait <= TimeSpan.Zero) timings.PacerQueue += elapsed.Elapsed;
                                 else if (backoff) timings.Backoff += elapsed.Elapsed;
                                 else timings.Pacing += elapsed.Elapsed;
                             }
@@ -141,7 +178,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 lock (gate)
                     if (turn.List != null)
                     {
-                        waiting.Remove(turn);
+                        turn.List.Remove(turn);
+                        if (catalogue.Count == 0) playbackBurst = 0;
                         SignalWaiters();
                     }
             }
@@ -153,7 +191,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 lock (gate)
                 {
                     ObserveResponse(response, catalogueRequest, intervalSeconds, (int)interval.TotalSeconds);
-                    active--;
+                    if (catalogueRequest) activeCatalogue--;
+                    else activePlayback = false;
                     SignalWaiters();
                 }
             }
@@ -192,7 +231,7 @@ namespace MediaBrowser.Plugins.TuneIn
     if (!catalogueRequest) return;
     if (code != 200) { consecutiveCatalogueSuccesses = 0; return; }
     // A response already in flight when throttled must not count as recovery.
-    if (clock() < retryNotBeforeUtc || (serialCatalogue && active > 1)) return;
+    if (clock() < retryNotBeforeUtc || (serialCatalogue && activeCatalogue > 1)) return;
     consecutiveCatalogueRateLimits = 0;
     if ((serialCatalogue || catalogueIntervalSeconds > configured) &&
         ++consecutiveCatalogueSuccesses >= SuccessesBeforeRecovery)
