@@ -56,6 +56,18 @@
         .settingsLocked:disabled + .tuneInLockTrack {
             opacity: .6;
         }
+        .settingsLockAction {
+            font-weight: 600;
+        }
+        .settingsLockStatus:empty {
+            margin: 0;
+        }
+        .settingsLockAction[data-lock-state="unlocked"] {
+            color: color-mix(in srgb, #23813e 58%, currentColor);
+        }
+        .settingsLockAction[data-lock-state="locked"] {
+            color: color-mix(in srgb, #c23e46 58%, currentColor);
+        }
         @media (forced-colors: active) {
             .tuneInLockTrack, .tuneInLockTrack::before {
                 forced-color-adjust: none;
@@ -370,9 +382,9 @@
                 </div>
             </fieldset>
             <label class="tuneInLockToggle">
-                <input type="checkbox" role="switch" class="settingsLocked" aria-describedby="tuneInLockStatus" disabled />
+                <input type="checkbox" role="switch" class="settingsLocked" aria-label="Settings lock" aria-describedby="tuneInLockStatus" disabled />
                 <span class="tuneInLockTrack" aria-hidden="true"></span>
-                <span>Lock settings</span>
+                <span class="settingsLockAction">Settings Lock</span>
             </label>
             <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
             <p class="status" role="status" aria-live="polite"></p>

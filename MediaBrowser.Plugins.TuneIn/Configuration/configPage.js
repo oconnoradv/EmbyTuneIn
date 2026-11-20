@@ -318,11 +318,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         toggle.disabled = typeof instance.settingsLocked !== 'boolean' || !!instance.lockChanging || !!instance.saving ||
             !!instance.cleanupBusy || !!instance.cleanupAction;
         toggle.checked = instance.lockChanging ? instance.lockRequested : instance.settingsLocked === true;
+        var action = instance.view.querySelector('.settingsLockAction');
+        var confirmed = instance.settingsLocked;
+        action.textContent = confirmed === true ? 'Unlock Settings' : confirmed === false ? 'Lock Settings' : 'Settings Lock';
+        action.setAttribute('data-lock-state', confirmed === true ? 'locked' : confirmed === false ? 'unlocked' : 'unknown');
         var note = instance.view.querySelector('.settingsLockStatus');
         var text = instance.lockError || (instance.saving ? 'Saving and locking settings...' :
             instance.lockChanging ? 'Updating settings lock...' :
-            instance.settingsLocked === true ? 'Settings are locked. Unlock to make changes.' :
-            instance.settingsLocked === false ? 'Settings are unlocked.' : 'Reading settings lock...');
+            typeof confirmed === 'boolean' ? '' : 'Reading settings lock...');
         if (note.textContent !== text) note.textContent = text;
     }
 
