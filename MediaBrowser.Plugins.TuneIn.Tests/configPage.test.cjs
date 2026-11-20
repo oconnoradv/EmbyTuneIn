@@ -49,7 +49,6 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.apiRequestIntervalSeconds': requestInterval };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
-        '.rootReminder', '.rootReminderText', '.rootReminderConfirm',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
         '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
@@ -1235,29 +1234,6 @@ test('a failed lock write leaves edits blocked until the server confirms the sta
     assert.equal(toggle.disabled, false);
     assert.equal(app.elements['.button-submit'].disabled, true);
     assert.equal(state.textContent, 'Locked');
-});
-
-test('the channel-root reminder stays visible across visits until acknowledged', async () => {
-    const app = harness();
-    const visit = app.instance.onResume();
-    const config = { SchemaVersion: 1, ConfigurationCompleted: true };
-    app.reads[0].resolve(config);
-    await visit;
-    const reminder = app.elements['.rootReminder'];
-    assert.equal(reminder.hidden, true);
-
-    app.formHandlers.submit({ preventDefault() {} });
-    await settle();
-    assert.equal(reminder.hidden, false);
-    assert.match(app.elements['.rootReminderText'].textContent, /Return to the channel root.*No catalog crawl was started/);
-
-    app.instance.onPause();
-    const revisit = app.instance.onResume();
-    app.reads[1].resolve(config);
-    await revisit;
-    assert.equal(reminder.hidden, false);
-    app.elements['.rootReminderConfirm'].handlers.click();
-    assert.equal(reminder.hidden, true);
 });
 
 for (const outcome of ['locked', 'save failed', 'lock unconfirmed']) {

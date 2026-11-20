@@ -107,8 +107,6 @@ including nested Music, Talk, and Sports items under By Language. Navigation
 IDs are signed and bounded and survive restarts. Scope changes invalidate
 affected IDs; return to the channel root after saving. Stale library entries
 cannot bypass the current settings.
-The dashboard highlights this reminder in the same browser tab until you
-select **I returned to the channel root**.
 
 Configurations without schema version 1 retain their username and coordinates
 but do not automatically enable browsing or categories. Save explicit choices
