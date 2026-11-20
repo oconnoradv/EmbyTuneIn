@@ -51,7 +51,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
-        '.localSelector', '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
+        '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
         '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
         '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
         '.cleanupConfirm', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.backupStart',
@@ -60,7 +60,6 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         ['.globalSection', '.globalSummary', true],
         ['.categoriesSection', '.categoriesSummary', true],
         ['.stationSelectionsSection', '.stationSelectionsSummary', true],
-        ['.localSection', '.localSummary', true],
         ['.maintenanceSection', '.maintenanceSummary', false],
         ['.tuneInRefresh', '.refreshSummary', false]
     ]) {
@@ -406,7 +405,9 @@ test('only explicit selector actions fetch branches and save multiple local sele
     app.reads[0].resolve({});
     await visit;
     enableBrowsing(app);
-    const section = app.elements['.localSelector'].childNodes[0];
+    const section = app.elements['.selectors'].childNodes.find(node =>
+        node.childNodes[0].textContent === 'Local Cities and Regions');
+    assert.equal(section.tagName, 'details');
     const root = section.descendants().find(node => node.tagName === 'details');
     const loading = open(root);
     assert.equal(open(root), loading);
@@ -730,8 +731,8 @@ test('collapsing browsing settings, including Music genres, keeps choices and do
     await visit;
     const music = app.elements['.selectors'].childNodes[2];
     assert.equal(music.childNodes[0].textContent, 'Music Genres');
-    const summaries = [app.elements['.categoriesSummary'], app.elements['.stationSelectionsSummary'], app.elements['.localSummary'],
-        ...app.elements['.selectors'].childNodes.slice(0, 3).map(section => section.childNodes[0])];
+    const summaries = [app.elements['.categoriesSummary'], app.elements['.stationSelectionsSummary'],
+        ...app.elements['.selectors'].childNodes.filter(section => section.open).map(section => section.childNodes[0])];
     for (const summary of summaries) {
         assert.equal(summary.parentNode.open, true);
         summary.handlers.click({ preventDefault() {} });

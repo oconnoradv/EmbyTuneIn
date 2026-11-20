@@ -237,12 +237,9 @@
             margin: .2em 0 0;
             font-weight: 600;
         }
-        .tuneInSelectorCategory > h3 {
-            margin: 0;
-        }
         @supports selector(details::details-content) {
             .tuneInSelectors { container-type: inline-size; }
-            .tuneInSelectorCategory:where([open], section) {
+            .tuneInSelectorCategory[open] {
                 display: grid;
                 grid-template-columns: minmax(0, 1fr) auto auto;
                 align-items: baseline;
@@ -273,7 +270,7 @@
                 grid-column: 1 / -1;
             }
             @container (max-width: 35em) {
-                .tuneInSelectorCategory:where([open], section) {
+                .tuneInSelectorCategory[open] {
                     grid-template-columns: minmax(0, 1fr) auto;
                 }
                 .tuneInSelectors .tuneInSelectorRoot > summary { grid-column: 2; }
@@ -281,7 +278,7 @@
                 .tuneInSelectorMode + .tuneInSelectorPicker .tuneInSelectorRoot > summary { grid-row: 2; }
             }
             @container (max-width: 18em) {
-                .tuneInSelectorCategory:where([open], section) {
+                .tuneInSelectorCategory[open] {
                     grid-template-columns: minmax(0, 1fr);
                 }
                 .tuneInSelectorMode,
@@ -418,10 +415,6 @@
                 <div class="tuneInSectionBox">
                 <p>Music, By Language, and By Location require enabled saved selections. Open a selector to see its choices, then expand a branch or add a selection.</p>
                 <div class="selectors tuneInSelectors"></div>
-                <details class="tuneInSection">
-                    <summary class="localSummary">Local Cities</summary>
-                    <div class="localSelector tuneInSelectors tuneInSectionBox"></div>
-                </details>
                 </div>
             </details>
             </fieldset>

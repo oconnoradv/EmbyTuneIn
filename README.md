@@ -66,7 +66,7 @@ branches are marked, and saved choices are preserved.
 browser sessions and server restarts. **Save** locks settings after a successful
 save; unlock them to edit again. Locking does not save pending changes or stop
 a refresh. **Station Selections** groups Music Genres, Languages, Locations,
-Local Cities, Talk Topics, Sports & Leagues, and Podcast Topics. Collapsing it keeps unsaved choices; opening it
+Local Cities and Regions, Talk Topics, Sports & Leagues, and Podcast Topics. Collapsing it keeps unsaved choices; opening it
 does not fetch from TuneIn by itself.
 Buttons use the active user's native Emby theme.
 

@@ -9,10 +9,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     ];
     var selectors = [
         ['language', 'Languages', 'By Language'], ['location', 'Locations', 'By Location'],
-        ['local', 'LocalCities', 'Local Radio cities/regions'], ['music', 'Music', 'Music Genres'],
+        ['music', 'Music', 'Music Genres'],
         ['talk', 'TalkIds', 'Talk Topics', 'TalkMode'],
         ['sports', 'SportsIds', 'Sports & Leagues', 'SportsMode'],
-        ['podcast', 'PodcastIds', 'Podcast Topics', 'PodcastsMode']
+        ['podcast', 'PodcastIds', 'Podcast Topics', 'PodcastsMode'],
+        ['local', 'LocalCities', 'Local Cities and Regions']
     ];
 
     function message(instance, text) {
@@ -89,17 +90,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function createSelector(instance, spec, openByDefault) {
         var epoch = instance.viewEpoch;
-        var collapsible = spec[0] !== 'local';
-        var section = document.createElement(collapsible ? 'details' : 'section');
-        var heading = document.createElement(collapsible ? 'summary' : 'h3');
+        var section = document.createElement('details');
+        var heading = document.createElement('summary');
         heading.textContent = spec[2];
         section.appendChild(heading);
         section.className = 'tuneInSection tuneInSelectorCategory';
         heading.className = 'tuneInSectionLabel';
-        if (collapsible) {
-            section.open = openByDefault && !spec[3];
-            bindDisclosure(heading);
-        }
+        section.open = openByDefault && !spec[3];
+        bindDisclosure(heading);
         var picker = document.createElement('div');
         picker.className = 'tuneInSectionBox tuneInSelectorPicker';
         var topicNames = new Map();
@@ -969,7 +967,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.maintenanceSection = view.querySelector('.maintenanceSummary').parentNode;
         instance.refreshCategoryRows = new Map();
         instance.refreshSchedules = new Map();
-        ['.globalSummary', '.categoriesSummary', '.stationSelectionsSummary', '.localSummary', '.refreshSummary', '.maintenanceSummary'].forEach(function (selector) {
+        ['.globalSummary', '.categoriesSummary', '.stationSelectionsSummary', '.refreshSummary', '.maintenanceSummary'].forEach(function (selector) {
             bindDisclosure(view.querySelector(selector));
         });
         view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });
@@ -1067,7 +1065,6 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             var openByDefault = config.SchemaVersion !== 1;
             view.querySelector('.categoriesSummary').parentNode.open = openByDefault;
             view.querySelector('.stationSelectionsSummary').parentNode.open = openByDefault;
-            view.querySelector('.localSummary').parentNode.open = openByDefault;
             var list = view.querySelector('.categories');
             list.textContent = '';
             categories.forEach(function (spec) {
@@ -1079,10 +1076,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             });
             var pickerList = view.querySelector('.selectors');
             pickerList.textContent = '';
-            var localPicker = view.querySelector('.localSelector');
-            localPicker.textContent = '';
             selectors.forEach(function (spec) {
-                (spec[0] === 'local' ? localPicker : pickerList).appendChild(createSelector(instance, spec, openByDefault));
+                pickerList.appendChild(createSelector(instance, spec, openByDefault));
             });
             $(view).trigger('create');
             message(instance, browsingStatus(config) + (ambiguous && config.EnableLocalRadio ?
