@@ -33,6 +33,7 @@ class Element {
     setAttribute(name, value) { this.attributes[name] = value; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
     showModal() { this.open = true; }
+    focus() { this.focused = true; }
     close() { this.open = false; if (this.handlers.close) this.handlers.close(); }
     descendants() { return this.childNodes.flatMap(child => [child, ...child.descendants()]); }
 }
@@ -52,10 +53,13 @@ function harness(manualStatus = false, manualSave = false) {
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
         '.localSelector', '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
         '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
-        '.refreshResumeFirst', '.refreshNewFirst']) elements[name] = new Element();
+        '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
+        '.cleanupConfirm', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText']) elements[name] = new Element();
     for (const [section, summary, open] of [
         ['.categoriesSection', '.categoriesSummary', true],
+        ['.stationSelectionsSection', '.stationSelectionsSummary', true],
         ['.localSection', '.localSummary', true],
+        ['.maintenanceSection', '.maintenanceSummary', false],
         ['.tuneInRefresh', '.refreshSummary', false]
     ]) {
         elements[section] = new Element('details');
@@ -78,6 +82,7 @@ function harness(manualStatus = false, manualSave = false) {
     const selectors = [];
     const refresh = [];
     const locks = [];
+    const cleanup = [];
     const timers = new Map();
     let timerId = 0;
     let serverLocked = false;
@@ -111,7 +116,8 @@ function harness(manualStatus = false, manualSave = false) {
             else if (options.url.route.startsWith('TuneIn/Refresh/')) {
                 refresh.push({ options, ...request });
                 if (!manualStatus && options.type === 'GET') request.resolve({ SettingsLocked: serverLocked });
-            } else selectors.push({ options, ...request });
+            } else if (options.url.route.startsWith('TuneIn/Cleanup/')) cleanup.push({ options, ...request });
+            else selectors.push({ options, ...request });
             return request.promise;
         }
     };
@@ -137,7 +143,7 @@ function harness(manualStatus = false, manualSave = false) {
     });
 
     return { instance: new PluginView(view), username, latLon, requestInterval, formHandlers, reads, writes, notices, errors, loader,
-        elements, selectors, enhanced, calls, handlers, refresh, locks, timers };
+        elements, selectors, enhanced, calls, handlers, refresh, locks, cleanup, timers };
 }
 
 function open(details) {
@@ -256,7 +262,7 @@ test('native view lifecycle loads labeled upstream settings on each visit', asyn
     await first;
     assert.equal(app.username.value, 'listener');
     assert.equal(app.latLon.value, '1,2');
-    assert.equal(String(app.requestInterval.value), '3');
+    assert.equal(String(app.requestInterval.value), '1');
     app.instance.onPause('away');
     const second = app.instance.onResume();
     app.reads[1].resolve({ Username: null, LatLon: null });
@@ -287,7 +293,7 @@ test('save retains unrelated configuration and converts empty fields to null', a
     assert.equal(app.writes[0].config.Other, 42);
     assert.equal(app.writes[0].config.SchemaVersion, 1);
     assert.equal(app.writes[0].config.ConfigurationCompleted, false);
-    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 3);
+    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 1);
     assert.deepEqual(app.notices, ['saved']);
 });
 
@@ -704,7 +710,7 @@ test('collapsing browsing settings, including Music genres, keeps choices and do
     await visit;
     const music = app.elements['.selectors'].childNodes[2];
     assert.equal(music.childNodes[0].textContent, 'Music genres');
-    const summaries = [app.elements['.categoriesSummary'], app.elements['.localSummary'],
+    const summaries = [app.elements['.categoriesSummary'], app.elements['.stationSelectionsSummary'], app.elements['.localSummary'],
         ...app.elements['.selectors'].childNodes.map(section => section.childNodes[0])];
     for (const summary of summaries) {
         assert.equal(summary.parentNode.open, true);
@@ -717,6 +723,44 @@ test('collapsing browsing settings, including Music genres, keeps choices and do
     assert.match(music.textContent, /Rock/);
     assert.equal(app.latLon.value, '1,2');
     assert.ok(app.elements['.categories'].descendants().some(item => item.checked));
+});
+
+test('maintenance previews before confirming and blocks settings and refresh until cleanup stops', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true, ApiRequestIntervalSeconds: 3 });
+    const live = { SettingsLocked: false, Categories: [{ Category: 'talk', Name: 'Talk' }] };
+    app.refresh[0].resolve(live);
+    await visit;
+    await settle();
+    assert.equal(app.requestInterval.value, 3);
+    await open(app.elements['.maintenanceSection']);
+    const click = name => app.elements[name].handlers.click();
+    assert.equal(click('.cleanupConfirm'), undefined);
+    assert.equal(app.cleanup.length, 0);
+    const preview = click('.cleanupPreview');
+    assert.equal(app.cleanup[0].options.url.route, 'TuneIn/Cleanup/Preview');
+    app.cleanup[0].resolve({ Token: 'preview-token', Folders: 2, Stations: 7 });
+    await preview;
+    assert.match(app.elements['.cleanupPreviewText'].textContent, /2 folders and 7 station entries/);
+    assert.equal(app.elements['.cleanupConfirmation'].hidden, false);
+    assert.equal(app.elements['.cleanupBack'].focused, true);
+    const start = click('.cleanupConfirm');
+    assert.equal(app.cleanup[1].options.url.route, 'TuneIn/Cleanup/Start');
+    assert.equal(JSON.parse(app.cleanup[1].options.data).Token, 'preview-token');
+    assert.equal(app.elements['.cleanupConfirmation'].hidden, true);
+    assert.equal(app.elements['.button-submit'].disabled, true);
+    app.refresh[1].resolve(live);
+    app.cleanup[1].resolve({ ...live, Cleanup: { State: 'Running', Total: 9, Removed: 0 } });
+    await start;
+    assert.equal(app.elements['.settingsLocked'].disabled, true);
+    assert.equal(app.elements['.refreshStart'].disabled, true);
+    assert.equal(app.elements['.cleanupPreview'].disabled, true);
+    assert.match(app.elements['.cleanupStatus'].textContent, /0 of 9/);
+    app.refresh.at(-1).resolve({ ...live, Cleanup: { State: 'Partial', Total: 9, Removed: 8, Failed: 1 } });
+    await settle();
+    assert.match(app.elements['.cleanupStatus'].textContent, /8 of 9.*1 entries could not be removed/);
+    assert.equal(app.elements['.settingsLocked'].disabled, false);
 });
 
 test('Catalog Refresh opens by default and can collapse and reopen with fresh status', async () => {

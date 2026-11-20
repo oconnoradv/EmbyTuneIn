@@ -217,7 +217,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     }
 
     function editingBlocked(instance) {
-        return !instance.config || instance.settingsLocked !== false || instance.lockChanging || instance.saving || instance.refreshBusy;
+        return !instance.config || instance.settingsLocked !== false || instance.lockChanging || instance.saving ||
+            instance.refreshBusy || instance.cleanupBusy || instance.cleanupAction;
     }
 
     function editing(instance) {
@@ -227,7 +228,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.button-submit').disabled = disabled;
         instance.refreshCategoryRows.forEach(function (row) { row.schedule.disabled = disabled; });
         var toggle = instance.view.querySelector('.settingsLocked');
-        toggle.disabled = typeof instance.settingsLocked !== 'boolean' || !!instance.lockChanging || !!instance.saving;
+        toggle.disabled = typeof instance.settingsLocked !== 'boolean' || !!instance.lockChanging || !!instance.saving ||
+            !!instance.cleanupBusy || !!instance.cleanupAction;
         toggle.checked = instance.lockChanging ? instance.lockRequested : instance.settingsLocked === true;
         var note = instance.view.querySelector('.settingsLockStatus');
         var text = instance.lockError || (instance.saving ? 'Saving and locking settings...' :
@@ -311,6 +313,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function renderRefresh(instance, status) {
         instance.refreshBusy = !!status.Busy;
+        renderCleanup(instance, status.Cleanup);
         if (typeof status.SettingsLocked === 'boolean' && !instance.lockChanging && !instance.saving) {
             instance.settingsLocked = status.SettingsLocked;
             instance.lockError = '';
@@ -506,8 +509,77 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         });
     }
 
+    function renderCleanup(instance, cleanup) {
+        instance.cleanupBusy = !!cleanup && cleanup.State === 'Running';
+        var target = instance.view.querySelector('.cleanupStatus');
+        var text = '';
+        if (cleanup && cleanup.State !== 'Idle') {
+            text = cleanup.Removed + ' of ' + cleanup.Total + ' entries removed.';
+            if (cleanup.Failed) text += ' ' + cleanup.Failed + ' entries could not be removed.';
+            if (cleanup.Message) text += ' ' + cleanup.Message;
+        }
+        if (target.textContent !== text) target.textContent = text;
+    }
+
+    function clearCleanupPreview(instance) {
+        instance.cleanupPreview = null;
+        instance.view.querySelector('.cleanupConfirmation').hidden = true;
+    }
+
+    function doCleanup(instance, start) {
+        var view = instance.view;
+        var summary = view.querySelector('.maintenanceSummary');
+        var button = view.querySelector(start ? '.cleanupConfirm' : '.cleanupPreview');
+        if (!instance.refreshVisible || !summary.parentNode.open || button.disabled || (start && !instance.cleanupPreview)) return;
+        var epoch = instance.viewEpoch;
+        var preview = instance.cleanupPreview;
+        clearCleanupPreview(instance);
+        instance.cleanupAction = true;
+        instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
+        var error = view.querySelector('.cleanupError');
+        error.textContent = '';
+        view.querySelector('.cleanupStatus').textContent = start ? 'Starting cleanup...' : 'Checking channel entries...';
+        refreshControls(instance, instance.refreshAvailable);
+        return ApiClient.ajax({
+            type: 'POST', dataType: 'json',
+            url: ApiClient.getUrl('TuneIn/Cleanup/' + (start ? 'Start' : 'Preview')),
+            contentType: 'application/json',
+            data: JSON.stringify(start ? { Token: preview.Token } : {})
+        }).then(function (result) {
+            if (epoch !== instance.viewEpoch) return;
+            if (start) {
+                renderRefresh(instance, result);
+                return;
+            }
+            if (!summary.parentNode.open) return;
+            if (!result.Token) {
+                error.textContent = result.Message || 'Nothing to clean up.';
+                return;
+            }
+            instance.cleanupPreview = result;
+            view.querySelector('.cleanupPreviewText').textContent =
+                'Remove ' + result.Folders + ' folders and ' + result.Stations + ' station entries?' +
+                (result.Message ? ' ' + result.Message : '');
+            view.querySelector('.cleanupStatus').textContent = '';
+            view.querySelector('.cleanupConfirmation').hidden = false;
+        }).catch(function () {
+            if (epoch === instance.viewEpoch) error.textContent = start
+                ? 'Could not confirm cleanup started. Check its status, then preview again if needed.'
+                : 'Could not preview cleanup. Wait for any refresh or settings changes to finish, then try again.';
+        }).finally(function () {
+            instance.cleanupAction = false;
+            if (epoch === instance.viewEpoch) {
+                refreshControls(instance, instance.refreshAvailable);
+                if (instance.cleanupPreview) view.querySelector('.cleanupBack').focus();
+                if (start && summary.parentNode.open) summary.focus();
+            }
+            if (instance.refreshVisible) pollStatus(instance, instance.viewEpoch);
+        });
+    }
+
     function refreshControls(instance, available) {
-        var cannotStart = !available || !instance.config || !!instance.refreshAction || instance.saving;
+        var cannotStart = !available || !instance.config || !!instance.refreshAction || instance.saving ||
+            instance.cleanupBusy || instance.cleanupAction;
         var status = instance.refreshStatus;
         instance.refreshAvailable = available;
         var queued = status && status.QueuedRequests || [];
@@ -522,6 +594,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshCategoryRows.forEach(function (row, category) {
             row.control.disabled = blocked(category);
         });
+        var cannotClean = !available || !!instance.refreshBusy || !!instance.refreshAction || !!instance.saving ||
+            !!instance.lockChanging || !!instance.cleanupBusy || !!instance.cleanupAction;
+        instance.view.querySelector('.cleanupPreview').disabled = cannotClean;
+        instance.view.querySelector('.cleanupConfirm').disabled = cannotClean || !instance.cleanupPreview;
         editing(instance);
     }
 
@@ -569,13 +645,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     function scheduleStatus(instance, epoch) {
         if (epoch !== instance.viewEpoch || !instance.refreshVisible) return;
         clearTimeout(instance.refreshTimer);
-        instance.refreshTimer = setTimeout(function () { pollStatus(instance, epoch); }, instance.refreshBusy ? 1500 : 10000);
+        instance.refreshTimer = setTimeout(function () { pollStatus(instance, epoch); },
+            instance.refreshBusy || instance.cleanupBusy ? 1500 : 10000);
     }
 
     function pollStatus(instance, epoch) {
         if (epoch !== instance.viewEpoch || !instance.refreshVisible) return;
         clearTimeout(instance.refreshTimer);
-        if (instance.refreshAction || instance.lockChanging) return scheduleStatus(instance, epoch);
+        if (instance.refreshAction || instance.lockChanging || instance.cleanupAction) return scheduleStatus(instance, epoch);
         if (instance.refreshPoll) return instance.refreshPoll;
         var generation = instance.refreshGeneration || 0;
         instance.refreshPoll = ApiClient.ajax({
@@ -736,7 +813,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshSection = view.querySelector('.tuneInRefresh');
         instance.refreshCategoryRows = new Map();
         instance.refreshSchedules = new Map();
-        ['.categoriesSummary', '.localSummary', '.refreshSummary'].forEach(function (selector) {
+        ['.categoriesSummary', '.stationSelectionsSummary', '.localSummary', '.refreshSummary', '.maintenanceSummary'].forEach(function (selector) {
             bindDisclosure(view.querySelector(selector));
         });
         view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });
@@ -754,6 +831,16 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         view.querySelector('.refreshStart').addEventListener('click', function () { return doRefresh(instance, 'Start'); });
         view.querySelector('.refreshCancel').addEventListener('click', function () { return doRefresh(instance, 'Cancel'); });
         view.querySelector('.refreshLogButton').addEventListener('click', function () { return retrieveRefreshLog(instance); });
+        view.querySelector('.cleanupPreview').addEventListener('click', function () { return doCleanup(instance, false); });
+        view.querySelector('.cleanupConfirm').addEventListener('click', function () { return doCleanup(instance, true); });
+        view.querySelector('.cleanupBack').addEventListener('click', function () {
+            clearCleanupPreview(instance);
+            refreshControls(instance, instance.refreshAvailable);
+            view.querySelector('.maintenanceSummary').focus();
+        });
+        view.querySelector('.maintenanceSummary').parentNode.addEventListener('toggle', function () {
+            if (!this.open) clearCleanupPreview(instance);
+        });
         dialog.addEventListener('close', function () {
             if (!dialog.open) instance.refreshRecovery = null;
         });
@@ -775,6 +862,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var instance = this;
         var epoch = instance.viewEpoch = (instance.viewEpoch || 0) + 1;
         instance.refreshVisible = true;
+        clearCleanupPreview(instance);
+        instance.view.querySelector('.cleanupError').textContent = '';
         instance.view.querySelector('.refreshStatus').textContent = 'Reading refresh status...';
         instance.view.querySelector('.refreshError').textContent = '';
         instance.view.querySelector('.refreshFailureLog').textContent = '';
@@ -802,7 +891,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.txtUsername').value = config.Username || '';
             view.querySelector('.txtLatLon').value = config.LatLon || '';
             view.querySelector('.apiRequestIntervalSeconds').value =
-                config.ApiRequestIntervalSeconds == null ? 3 : Math.min(config.ApiRequestIntervalSeconds, 30);
+                config.ApiRequestIntervalSeconds == null ? 1 : Math.min(config.ApiRequestIntervalSeconds, 30);
             view.querySelector('.hideRegionalGenres').checked = config.HideRegionalGenres !== false;
             view.querySelector('.allowPartialCatalogImport').checked = config.AllowPartialCatalogImport !== false;
             var hasRegions = (config.LocalCities || []).some(function (item) {
@@ -814,6 +903,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.configurationCompleted').checked = config.SchemaVersion === 1 && !!config.ConfigurationCompleted;
             var openByDefault = config.SchemaVersion !== 1;
             view.querySelector('.categoriesSummary').parentNode.open = openByDefault;
+            view.querySelector('.stationSelectionsSummary').parentNode.open = openByDefault;
             view.querySelector('.localSummary').parentNode.open = openByDefault;
             var list = view.querySelector('.categories');
             list.textContent = '';
@@ -851,6 +941,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     View.prototype.onPause = function () {
         this.viewEpoch = (this.viewEpoch || 0) + 1;
         this.refreshVisible = false;
+        clearCleanupPreview(this);
         this.refreshRecovery = null;
         var dialog = this.view.querySelector('.tuneInRecoveryDialog');
         if (dialog.open) dialog.close();

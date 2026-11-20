@@ -14,6 +14,7 @@ namespace MediaBrowser.Plugins.TuneIn
 {
     public sealed class TuneInRefreshStatus
     {
+        public TuneInCleanupStatus Cleanup { get; set; }
         public string State { get; set; } = "NeverRun";
         public bool Busy { get; set; }
         public string Category { get; set; }
@@ -123,6 +124,14 @@ namespace MediaBrowser.Plugins.TuneIn
         private string activeRequest;
         private string recoveryId = Guid.NewGuid().ToString("N");
         private bool disposed;
+        private readonly TuneInLibraryCleanup libraryCleanup;
+        private TuneInLibraryCleanup.Plan cleanupPlan;
+        private string cleanupToken;
+        private DateTime cleanupExpires;
+        private TuneInCleanupStatus cleanup = new TuneInCleanupStatus();
+        private CancellationTokenSource cleanupCancellation;
+        private Task cleanupWork;
+        private bool Cleaning => cleanup.State == "Running";
 
         private sealed class PendingImport
         {
@@ -155,7 +164,8 @@ namespace MediaBrowser.Plugins.TuneIn
             Func<TuneInChannel, TuneInStagedImport, string, CancellationToken, Task> import,
             ILogger logger, Func<DateTime> clock = null, TimeSpan? timeoutOverride = null,
             Action<TuneInChannel, string, CancellationToken> updateArtwork = null,
-            Func<TuneInChannel, string, CancellationToken, int?> countStations = null)
+            Func<TuneInChannel, string, CancellationToken, int?> countStations = null,
+            TuneInLibraryCleanup libraryCleanup = null)
         {
             this.directory = directory ?? throw new ArgumentNullException(nameof(directory));
             this.store = store ?? throw new ArgumentNullException(nameof(store));
@@ -166,6 +176,7 @@ namespace MediaBrowser.Plugins.TuneIn
             this.clock = clock ?? (() => DateTime.UtcNow);
             this.timeoutOverride = timeoutOverride;
             this.updateArtwork = updateArtwork;
+            this.libraryCleanup = libraryCleanup;
             this.countStations = countStations ?? ((channel, folder, token) => channel.CountCategoryStations(folder, token));
             statusConfiguration = directory.Snapshot();
             LoadCategoryStates(statusConfiguration);
@@ -184,6 +195,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 var snapshot = statusConfiguration;
                 var copy = status.Copy();
+                copy.Cleanup = cleanup.Copy();
                 copy.Busy = work != null && !work.IsCompleted;
                 copy.ReportAvailable = !copy.Busy && failureLog != null;
                 if (!copy.Busy && copy.DiscoveryTimeouts > 0)
@@ -228,6 +240,8 @@ namespace MediaBrowser.Plugins.TuneIn
             lock (gate)
             {
                 if (disposed) throw new ObjectDisposedException(nameof(TuneInRefresh));
+                EnsureNoCleanup();
+                cleanupPlan = null;
                 var snapshot = directory.Snapshot();
                 statusConfiguration = snapshot;
                 LoadCategoryStates(snapshot);
@@ -269,6 +283,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private void Begin(ConfigurationSnapshot snapshot, string category, TuneInRefreshRecovery recovery = null)
         {
+            cleanupPlan = null;
             startupRecoveryChecked = true;
             Prepare(snapshot, category, recovery);
             work = Task.Run(async () =>
@@ -379,13 +394,127 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
+        internal TuneInCleanupPreview PreviewCleanup()
+        {
+            lock (gate)
+            {
+                EnsureCleanupAvailable();
+                cleanupPlan = null;
+                var plan = libraryCleanup.Preview(directory.Snapshot());
+                if (plan.Targets.Length == 0)
+                    return new TuneInCleanupPreview { Message = "No verified generated entries were found in the TuneIn channel." };
+                cleanupPlan = plan;
+                cleanupToken = Guid.NewGuid().ToString("N");
+                cleanupExpires = clock().AddMinutes(5);
+                var folders = plan.Targets.Count(item => item.IsFolder);
+                return new TuneInCleanupPreview
+                {
+                    Token = cleanupToken,
+                    Folders = folders,
+                    Stations = plan.Targets.Length - folders,
+                    Message = plan.Unverified == 0 ? null : $"{plan.Unverified} unverified entries will be left alone."
+                };
+            }
+        }
+
+        internal TuneInRefreshStatus StartCleanup(string token)
+        {
+            lock (gate)
+            {
+                EnsureCleanupAvailable();
+                if (cleanupPlan == null || token != cleanupToken || clock() >= cleanupExpires)
+                    throw new InvalidOperationException("The TuneIn cleanup preview is no longer current. Preview again.");
+                var plan = cleanupPlan;
+                cleanupPlan = null;
+                cleanup = new TuneInCleanupStatus { State = "Running", Total = plan.Targets.Length };
+                cleanupCancellation?.Dispose();
+                cleanupCancellation = new CancellationTokenSource();
+                var cancellationToken = cleanupCancellation.Token;
+                cleanupWork = Task.Run(() => RunCleanupAsync(plan, cancellationToken));
+                return Status();
+            }
+        }
+
+        private async Task RunCleanupAsync(TuneInLibraryCleanup.Plan plan, CancellationToken token)
+        {
+            var stopped = false;
+            try
+            {
+                // Clear every replay source before deleting the first library entry. A restart
+                // during deletion will then require a fresh baseline rather than replay old metadata.
+                store.ClearRecovery();
+                store.ClearDiscovery();
+                store.Clear();
+                lock (gate)
+                {
+                    pendingImport = null;
+                    activeRecovery = null;
+                    dirtyCategory = null;
+                    status = new TuneInRefreshStatus();
+                    failureLog = null;
+                    recoveryId = Guid.NewGuid().ToString("N");
+                    committed = new CommittedCatalogue(null, new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal));
+                    categoryStateKey = null;
+                    LoadCategoryStates(statusConfiguration);
+                }
+                await libraryCleanup.RunAsync(plan, (removed, failed) =>
+                {
+                    lock (gate)
+                    {
+                        cleanup.Removed = removed;
+                        cleanup.Failed = failed;
+                    }
+                }, token).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                stopped = true;
+                logger?.Error("TuneIn library cleanup stopped ({0}).", error.GetType().Name);
+            }
+            finally
+            {
+                lock (gate)
+                {
+                    cleanup.State = stopped ? "Failed" : cleanup.Failed > 0 ? "Partial" : "Completed";
+                    cleanup.Message = stopped ? "Cleanup stopped before completing. Review the server log and preview again if needed."
+                        : "Run Refresh all enabled categories to rebuild the catalog.";
+                }
+            }
+        }
+
+        private void EnsureCleanupAvailable()
+        {
+            if (disposed || libraryCleanup == null) throw new InvalidOperationException("TuneIn cleanup is unavailable.");
+            EnsureNoCleanup();
+            if (work != null && !work.IsCompleted)
+                throw new InvalidOperationException("TuneIn cleanup cannot run while refresh work is active or draining.");
+        }
+
+        internal void EnsureNoCleanup()
+        {
+            lock (gate)
+                if (Cleaning) throw new InvalidOperationException("TuneIn library cleanup is active.");
+        }
+
+        internal T SetSettingsLock<T>(Func<T> update)
+        {
+            lock (gate)
+            {
+                EnsureNoCleanup();
+                cleanupPlan = null;
+                return update();
+            }
+        }
+
         internal void UpdateConfiguration(Action update)
         {
             if (update == null) throw new ArgumentNullException(nameof(update));
             lock (gate)
             {
+                EnsureNoCleanup();
                 if (work != null && !work.IsCompleted)
                     throw new InvalidOperationException("TuneIn settings cannot change while refresh work is active or draining.");
+                cleanupPlan = null;
                 var previous = directory.Snapshot();
                 var checkpoint = store.Read();
                 update();
@@ -440,7 +569,7 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             lock (gate)
             {
-                if (disposed) return;
+                if (disposed || Cleaning) return;
                 var snapshot = directory.Snapshot();
                 statusConfiguration = snapshot;
                 if (!startupRecoveryChecked && (work == null || work.IsCompleted))
@@ -1268,22 +1397,27 @@ namespace MediaBrowser.Plugins.TuneIn
         public void Dispose()
         {
             Task pending;
+            Task pendingCleanup;
             lock (gate)
             {
                 if (disposed) return;
                 disposed = true;
                 if (work != null && !work.IsCompleted) cancellation.Cancel();
+                cleanupCancellation?.Cancel();
                 pending = work;
+                pendingCleanup = cleanupWork;
             }
             if (pending != null)
             {
                 try { pending.GetAwaiter().GetResult(); }
                 catch (Exception error) { logger?.Error("TuneIn refresh drain failed ({0}).", error.GetType().Name); }
             }
+            pendingCleanup?.GetAwaiter().GetResult();
             lock (gate)
             {
                 cancellation?.Dispose();
                 cancellation = null;
+                cleanupCancellation?.Dispose();
             }
         }
     }

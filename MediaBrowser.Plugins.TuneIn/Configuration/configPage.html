@@ -255,12 +255,13 @@
                     <label for="tuneInApiInterval">API request interval (seconds):</label>
                     <input id="tuneInApiInterval" type="number" class="apiRequestIntervalSeconds" min="1" max="30" step="1" aria-describedby="tuneInApiIntervalHint" required />
                 </div>
-                <div class="fieldDescription" id="tuneInApiIntervalHint">Minimum delay between TuneIn API requests: 1 to 30 seconds (default: 3). TuneIn retry delays are always honored.</div>
+                <div class="fieldDescription" id="tuneInApiIntervalHint">Minimum delay between TuneIn API request starts: 1 to 30 seconds (default: 1). TuneIn retry delays are always honored.</div>
             </div>
             <label class="emby-checkbox-label">
                 <input type="checkbox" is="emby-checkbox" class="hideRegionalGenres" />
-                <span>Hide genre folders in Local Radio and By Location</span>
+                <span>Hide the individual genre folders</span>
             </label>
+            <p class="fieldDescription">Hides genre shortcuts in Local Radio, By Location, Talk, Sports and Podcasts. The By Genre folder stays available where TuneIn provides it.</p>
             <label class="emby-checkbox-label">
                 <input type="checkbox" is="emby-checkbox" class="allowPartialCatalogImport" aria-describedby="tuneInPartialImportHint" />
                 <span>Import valid results when catalog entries are skipped</span>
@@ -275,12 +276,14 @@
                 <div class="categories"></div>
             </details>
             <details class="tuneInSection">
-                <summary class="localSummary">Local Radio</summary>
-                <div class="localSelector tuneInSelectors"></div>
+                <summary class="stationSelectionsSummary">Station Selections</summary>
+                <p>Music, By Language, and By Location require enabled saved selections. Open a selector to see its choices, then expand a branch or add a selection.</p>
+                <div class="selectors tuneInSelectors"></div>
+                <details class="tuneInSection">
+                    <summary class="localSummary">Local Cities</summary>
+                    <div class="localSelector tuneInSelectors"></div>
+                </details>
             </details>
-            <h2>Saved selections</h2>
-            <p>Music, By Language, and By Location require enabled saved selections. Open a selector to see its choices, then expand a branch or add a selection.</p>
-            <div class="selectors tuneInSelectors"></div>
             </fieldset>
             <br />
             <div>
@@ -300,6 +303,20 @@
             <details class="tuneInSection refreshDiagnostics">
                 <summary>Diagnostics</summary>
                 <p class="refreshDiagnosticsText"></p>
+            </details>
+            <details class="auto-center tuneInSection">
+                <summary class="maintenanceSummary">Maintenance</summary>
+                <h3>Clean Up Library Folders</h3>
+                <p>Remove generated folders and station entries from the TuneIn channel in Emby. This does not remove the channel, saved settings or media files.</p>
+                <p class="fieldDescription">Playlist entries and other references to removed items may break. After cleanup, use Refresh all enabled categories to rebuild the catalog.</p>
+                <button is="emby-button" type="button" class="raised cleanupPreview" disabled>Preview cleanup</button>
+                <div class="cleanupConfirmation" hidden>
+                    <p class="cleanupPreviewText" role="status"></p>
+                    <button is="emby-button" type="button" class="raised cleanupConfirm" disabled>Remove generated entries</button>
+                    <button is="emby-button" type="button" class="raised cleanupBack">Back</button>
+                </div>
+                <p class="cleanupStatus" role="status"></p>
+                <p class="cleanupError" role="alert"></p>
             </details>
             <p class="refreshError" role="alert"></p>
             <button is="emby-button" type="button" class="raised refreshStart" disabled>Refresh all enabled categories</button>

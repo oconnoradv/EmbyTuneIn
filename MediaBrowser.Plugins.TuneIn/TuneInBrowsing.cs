@@ -145,9 +145,9 @@ namespace MediaBrowser.Plugins.TuneIn
                         throw new InvalidDataException("TuneIn pagination escaped its selected node ("
                             + (request.Parameters.GetValueOrDefault("id") ?? "(no ID)") + " to "
                             + (next.Parameters.GetValueOrDefault("id") ?? "(no ID)") + ").");
-                    if (snapshot.Value.HideRegionalGenres && (entry.Category == "local" || entry.Category == "location")
+                    if (snapshot.Value.HideRegionalGenres && HidesGenreAliases(entry.Category)
                         && !rowKey.StartsWith("next", StringComparison.Ordinal) && !next.Parameters.ContainsKey("offset")
-                        && ConfigurationSnapshot.ValidId(next.Parameters.GetValueOrDefault("id"), "location")
+                        && !IsGenrePivot(request) && !IsGenrePivot(next)
                         && Regex.IsMatch(next.Parameters.GetValueOrDefault("filter") ?? "",
                             @"\A(?:g[1-9][0-9]{0,9}|s:g[1-9][0-9]{0,9}:country)\z"))
                         continue;
@@ -167,6 +167,16 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
             }
             return Deduplicate(snapshot, items);
+        }
+
+        private static bool HidesGenreAliases(string category) =>
+            category == "local" || category == "location" || category == "talk" ||
+            category == "sports" || category == "podcast";
+
+        private static bool IsGenrePivot(DirectoryRequest request)
+        {
+            var pivot = request.Parameters.GetValueOrDefault("pivot");
+            return pivot == "genre" || pivot == "genres";
         }
 
         internal static bool IsForwardPage(ConfigurationSnapshot snapshot, NavigationEntry parent, NavigationEntry child)

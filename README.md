@@ -63,19 +63,24 @@ branches are marked, and saved choices are preserved.
 **Lock settings** prevents accidental edits and saves. The lock persists across
 browser sessions and server restarts. **Save** locks settings after a successful
 save; unlock them to edit again. Locking does not save pending changes or stop
-a refresh. Settings sections can be collapsed without losing unsaved choices.
+a refresh. **Station Selections** groups the Music, By Language, By Location
+and Local Cities selectors. Collapsing it keeps unsaved choices; opening it
+does not fetch from TuneIn by itself.
 Buttons use the active user's native Emby theme.
 
 ### Browsing options
 
-- **Hide genre folders in Local Radio and By Location** skips recognized
-  regional genre links while retaining stations, popular listings, and
-  pagination. Refresh the affected categories after changing it.
+- **Hide the individual genre folders** hides recognized genre shortcuts in
+  Local Radio, By Location, Talk, Sports and Podcasts. It keeps provider-supplied
+  **By Genre** folders and their contents, stations, popular listings and
+  pagination. Music and By Language are unaffected. Refresh the affected
+  categories after changing it.
 - **Import valid results when catalog entries are skipped** permits partial
   imports of valid results when malformed trusted provider links are skipped.
   See [Partial results](#partial-results).
 - **API request interval** sets minimum request spacing from 1 to 30 seconds,
-  defaulting to 3. TuneIn retry delays take precedence.
+  defaulting to 1 second between request starts when unset. Previously saved
+  intervals are preserved. TuneIn retry delays take precedence.
 
 Both checkboxes default to checked when the settings are absent. Explicitly
 saved unchecked choices remain unchanged. Changing these options does not
@@ -223,6 +228,22 @@ server details.
 Reports remain in memory until a new refresh, scope reset, or server restart.
 Detailed rejected links are not included in routine status polls or refresh
 summary logs and cannot be reconstructed from past aggregate skip counts.
+
+### Clean up the TuneIn library
+
+Administrators can open **Maintenance → Clean Up Library Folders** and
+select **Preview cleanup**. The preview counts generated folders and station
+entries verified under the TuneIn channel. Confirm within five minutes to
+remove those entries in background batches. Unknown or unsigned entries are
+left alone; a folder with remaining children is not deleted. The channel root,
+settings and media files are not cleanup targets. Playlists and other
+references to removed entries may break.
+
+Refreshes (including schedules and recovery) and settings writes cannot run
+while cleanup is active. The dashboard reports progress and partial failures.
+Before removing entries, cleanup clears refresh checkpoints and counts so an
+interruption cannot cause old reconciliation data to be replayed. Afterwards,
+select **Refresh all enabled categories** to rebuild the baseline.
 
 ### Request limits and recovery
 

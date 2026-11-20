@@ -57,6 +57,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken cancellationToken)
         {
+            TuneInRefreshService.EnsureNoCleanup();
             var snapshot = directory.Snapshot();
             directory.CheckCurrent(snapshot, cancellationToken);
             if (snapshot.Ready && !string.IsNullOrEmpty(query.FolderId))

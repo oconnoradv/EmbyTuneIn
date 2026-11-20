@@ -58,6 +58,75 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal(new[] { "Popular", "Radio" },
                 (await browser.GetItemsAsync(folder, Token)).Items.Select(item => item.Name).OrderBy(name => name));
         }
+
+        [Theory]
+        [InlineData("local")]
+        [InlineData("location")]
+        [InlineData("talk")]
+        [InlineData("sports")]
+        [InlineData("podcast")]
+        public async Task KeepsProviderGenrePivotAndItsContentsButNotIndividualAliases(string category)
+        {
+            var config = Ready();
+            config.EnableLocation = config.EnableTalk = config.EnableSports = config.EnablePodcasts = true;
+            config.EnableLocalRadio = true;
+            config.LocalRadioSource = "regions";
+            config.LocalCities.Add(new CatalogSelection { Id = "r10" });
+            config.Locations.Add(new CatalogSelection { Id = "r10" });
+            var id = category == "location" || category == "local" ? "r10" : "c100";
+            var directory = new TuneInDirectory(() => config, (request, _) => Task.FromResult(Opml(
+                (request.Parameters.ContainsKey("pivot") ? "" :
+                    "<outline type='link' text='By Genre' URL='https://opml.radiotime.com/Browse.ashx?id=" + id +
+                    "&amp;pivot=genre&amp;filter=country'/>") +
+                "<outline type='link' text='Rock' URL='https://opml.radiotime.com/Browse.ashx?id=" + id + "&amp;filter=g79'/>" +
+                "<outline type='audio' text='Radio' guide_id='s1'/>")));
+            var snapshot = directory.Snapshot();
+            var browser = new TuneInBrowsing(directory, _ => null);
+            var listing = category == "location"
+                ? directory.Register(snapshot, TuneInBrowsing.StartingEntries(snapshot, category).Single())
+                : browser.CategoryRoot(snapshot, category).Id;
+            var visible = (await browser.GetItemsAsync(listing, Token)).Items;
+            Assert.DoesNotContain(visible, item => item.Name == "Rock");
+            var pivot = Assert.Single(visible, item => item.Name == "By Genre");
+            var grouped = (await browser.GetItemsAsync(pivot.Id, Token)).Items;
+            Assert.Contains(grouped, item => item.Name == "Rock");
+            Assert.Contains(grouped, item => item.Name == "Radio");
+        }
+
+        [Theory]
+        [InlineData("", 1)]
+        [InlineData("<ApiRequestIntervalSeconds>3</ApiRequestIntervalSeconds>", 3)]
+        [InlineData("<ApiRequestIntervalSeconds>17</ApiRequestIntervalSeconds>", 17)]
+        public void RequestIntervalDefaultsOnlyWhenNotSaved(string setting, int expected)
+        {
+            using var reader = new StringReader("<PluginConfiguration>" + setting + "</PluginConfiguration>");
+            var config = (PluginConfiguration)new XmlSerializer(typeof(PluginConfiguration)).Deserialize(reader);
+            Assert.Equal(expected, config.ApiRequestIntervalSeconds);
+        }
+
+        [Fact]
+        public async Task DiscoveryCoalescesIdenticalInFlightPagesWithoutMergingDifferentQueries()
+        {
+            var requests = new List<bool>();
+            var session = new TuneInCatalogueSession(null, TimeSpan.FromMinutes(1), () => DateTime.UtcNow,
+                requested: hit => requests.Add(hit), timings: new TuneInRefreshTimings());
+            var request = new DirectoryRequest();
+            request.Parameters.Add("id", "r10");
+            request.Parameters.Add("filter", "s:popular");
+            var page = new TaskCompletionSource<XDocument>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var first = session.FetchAsync(request, () => page.Task, Token);
+            var same = session.FetchAsync(request.Copy(), () => throw new InvalidOperationException("Duplicate fetch"), Token);
+            Assert.False(same.IsCompleted);
+            page.SetResult(Opml("<outline type='audio' guide_id='s1'/>"));
+            await Task.WhenAll(first, same);
+            foreach (var difference in new[] { "offset", "pivot", "username", "latlon" })
+            {
+                var other = request.Copy();
+                other.Parameters[difference] = "2";
+                await session.FetchAsync(other, () => Task.FromResult(Opml("<outline type='audio' guide_id='s2'/>")), Token);
+            }
+            Assert.Equal(new[] { false, true, false, false, false, false }, requests);
+        }
         [Fact]
         public async Task PartialImportPolicyPreservesNavigationAndDiscoveryIdentity()
         {
@@ -452,7 +521,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public void InvalidAdminConfigurationIsRejectedServerSide()
         {
             var config = Ready();
-            Assert.Equal(3, new PluginConfiguration().ApiRequestIntervalSeconds);
+            Assert.Equal(1, new PluginConfiguration().ApiRequestIntervalSeconds);
             config.ApiRequestIntervalSeconds = 0;
             Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
             config.ApiRequestIntervalSeconds = 31;

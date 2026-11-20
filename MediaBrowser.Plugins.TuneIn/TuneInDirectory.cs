@@ -365,22 +365,33 @@ namespace MediaBrowser.Plugins.TuneIn
             };
         }
 
-        private NavigationEntry ResolveSigned(ConfigurationSnapshot snapshot, string id)
+        // Ownership survives settings changes; navigation still requires the current key and scope.
+        internal static bool IsGeneratedId(ConfigurationSnapshot snapshot, string id) =>
+            ReadSignedPayload(snapshot, id) != null;
+
+        private static byte[] ReadSignedPayload(ConfigurationSnapshot snapshot, string id)
         {
             if (id == null || id.Length > 6000 || !Regex.IsMatch(id, @"\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}\z"))
-                throw new InvalidOperationException("Invalid TuneIn navigation identifier. Return to the channel root.");
+                return null;
             var parts = id.Split('.');
-            if (parts[0].Length % 4 == 1) throw new InvalidOperationException("Invalid TuneIn navigation encoding.");
+            if (parts[0].Length % 4 == 1) return null;
             var bytes = Decode(parts[0]);
             var supplied = Decode(parts[1]);
-            if (bytes.Length > 4096) throw new InvalidOperationException("TuneIn navigation entry exceeds limit.");
+            if (bytes.Length > 4096) return null;
             using (var hmac = new HMACSHA256(Convert.FromBase64String(snapshot.Value.NavigationSecret)))
             {
                 var expected = hmac.ComputeHash(bytes);
                 var difference = expected.Length ^ supplied.Length;
                 for (var i = 0; i < expected.Length && i < supplied.Length; i++) difference |= expected[i] ^ supplied[i];
-                if (difference != 0) throw new InvalidOperationException("TuneIn navigation signature rejected.");
+                return difference == 0 ? bytes : null;
             }
+        }
+
+        private NavigationEntry ResolveSigned(ConfigurationSnapshot snapshot, string id)
+        {
+            var bytes = ReadSignedPayload(snapshot, id);
+            if (bytes == null)
+                throw new InvalidOperationException("Invalid or unauthenticated TuneIn navigation identifier. Return to the channel root.");
             using (var stream = new MemoryStream(bytes))
             using (var reader = XmlReader.Create(stream, new XmlReaderSettings
             { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 4096 }))

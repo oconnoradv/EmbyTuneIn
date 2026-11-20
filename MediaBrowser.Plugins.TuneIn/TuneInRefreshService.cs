@@ -2,11 +2,15 @@ using MediaBrowser.Common;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Controller.Channels;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Services;
 using System;
 using System.IO;
+using System.Linq;
+using System.Threading;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -38,6 +42,17 @@ namespace MediaBrowser.Plugins.TuneIn
         public bool? Locked { get; set; }
     }
 
+    [Route("/TuneIn/Cleanup/Preview", "POST")]
+    [Authenticated(Roles = "Admin")]
+    public sealed class PreviewTuneInCleanup : IReturn<TuneInCleanupPreview> { }
+
+    [Route("/TuneIn/Cleanup/Start", "POST")]
+    [Authenticated(Roles = "Admin")]
+    public sealed class StartTuneInCleanup : IReturn<TuneInRefreshStatus>
+    {
+        public string Token { get; set; }
+    }
+
     public sealed class TuneInRefreshService : IService, IRequiresRequest
     {
         private static readonly object SharedGate = new object();
@@ -47,8 +62,8 @@ namespace MediaBrowser.Plugins.TuneIn
         public IRequest Request { get; set; }
 
         public TuneInRefreshService(IHttpClient client, IApplicationHost host, IApplicationPaths paths,
-            IChannelManager manager, ILogManager logManager)
-            : this(GetShared(client, host, paths, manager, logManager)) { }
+            IChannelManager manager, ILogManager logManager, ILibraryManager library)
+            : this(GetShared(client, host, paths, manager, logManager, library)) { }
 
         internal TuneInRefreshService(TuneInRefresh refresh)
         {
@@ -85,12 +100,24 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             EnsureAdmin();
             if (!request.Locked.HasValue) throw new ArgumentException("Specify whether to lock TuneIn settings.");
-            return Plugin.Instance.SettingsLock.Set(request.Locked.Value);
+            return refresh.SetSettingsLock(() => Plugin.Instance.SettingsLock.Set(request.Locked.Value));
+        }
+
+        public TuneInCleanupPreview Post(PreviewTuneInCleanup request)
+        {
+            EnsureAdmin();
+            return refresh.PreviewCleanup();
+        }
+
+        public TuneInRefreshStatus Post(StartTuneInCleanup request)
+        {
+            EnsureAdmin();
+            return refresh.StartCleanup(request.Token);
         }
 
         private void EnsureAdmin()
         {
-            if (Request == null) throw new UnauthorizedAccessException("TuneIn refresh requires administrator access.");
+            if (Request == null) throw new UnauthorizedAccessException("This TuneIn operation requires administrator access.");
         }
 
         internal static void UpdateConfiguration(Action update)
@@ -126,14 +153,30 @@ namespace MediaBrowser.Plugins.TuneIn
             coordinator?.Dispose();
         }
 
+        internal static void EnsureNoCleanup()
+        {
+            TuneInRefresh coordinator;
+            lock (SharedGate) coordinator = shared;
+            coordinator?.EnsureNoCleanup();
+        }
+
         internal static TuneInRefresh GetShared(IHttpClient client, IApplicationHost host, IApplicationPaths paths,
-            IChannelManager manager, ILogManager logManager)
+            IChannelManager manager, ILogManager logManager, ILibraryManager library)
         {
             lock (SharedGate)
             {
                 if (shared != null) return shared;
                 var directory = TuneInRequests.Directory(client, host);
                 var statePath = Path.Combine(paths.PluginConfigurationsPath, "TuneIn.refresh.xml");
+                var logger = logManager.GetLogger(typeof(TuneInRefreshService).Name);
+                var cleanup = new TuneInLibraryCleanup(library, () =>
+                {
+                    var source = manager.GetChannel<TuneInChannel>();
+                    if (source == null) throw new InvalidOperationException("The TuneIn channel is not registered.");
+                    return library.GetItemList(new InternalItemsQuery { IncludeItemTypes = new[] { nameof(Channel) } },
+                        CancellationToken.None).OfType<Channel>()
+                        .SingleOrDefault(channel => string.Equals(channel.Name, source.Name, StringComparison.Ordinal));
+                }, logger);
                 shared = new TuneInRefresh(directory, new TuneInRefreshStore(statePath),
                     () => manager.GetChannel<TuneInChannel>(),
                     (channel, folder, session, strict, token) =>
@@ -141,8 +184,9 @@ namespace MediaBrowser.Plugins.TuneIn
                     (channel, staged, folder, token) =>
                         channel.ImportAsync(staged,
                             () => manager.RefreshChannelContent(channel, staged.ImportRefreshLevel, null, token)),
-                    logManager.GetLogger(typeof(TuneInRefreshService).Name),
-                    updateArtwork: (channel, folder, token) => channel.UpdateCategoryArtwork(folder, token));
+                    logger,
+                    updateArtwork: (channel, folder, token) => channel.UpdateCategoryArtwork(folder, token),
+                    libraryCleanup: cleanup);
                 return shared;
             }
         }
