@@ -58,15 +58,19 @@
         }
         .settingsLockAction {
             font-weight: 600;
+            border-radius: .3em;
+            padding: .2em .45em;
         }
         .settingsLockStatus:empty {
             margin: 0;
         }
         .settingsLockAction[data-lock-state="unlocked"] {
             color: color-mix(in srgb, #23813e 58%, currentColor);
+            background: color-mix(in srgb, #23813e 15%, transparent);
         }
         .settingsLockAction[data-lock-state="locked"] {
             color: color-mix(in srgb, #c23e46 58%, currentColor);
+            background: color-mix(in srgb, #c23e46 15%, transparent);
         }
         @media (forced-colors: active) {
             .tuneInLockTrack, .tuneInLockTrack::before {
@@ -118,14 +122,40 @@
             border-radius: .35em;
             padding: .8em 1em;
         }
-        .tuneInGlobal, .tuneInRefresh {
+        .tuneInGlobalPanel, .tuneInRefresh {
             background: var(--tunein-neutral-surface);
             border-radius: .35em;
             padding: 0 1em;
         }
-        .tuneInGlobal[open], .tuneInRefresh[open] { padding-block-end: 1em; }
-        .tuneInGlobal[data-saved="true"], .tuneInRefreshCategories [data-outcome="Completed"] {
+        .tuneInGlobalPanel:has(> .tuneInGlobal[open]), .tuneInRefresh[open] { padding-block-end: 1em; }
+        .tuneInGlobalPanel:has(> .tuneInGlobal[data-saved="true"]), .tuneInRefreshCategories [data-outcome="Completed"] {
             background: color-mix(in srgb, #38864c 17%, transparent);
+        }
+        .tuneInGlobalPanel {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            column-gap: .6em;
+        }
+        .tuneInGlobal {
+            grid-column: 1 / -1;
+            margin: 0;
+        }
+        .tuneInGlobalPanel > .tuneInLockToggle {
+            grid-area: 1 / 2;
+            max-inline-size: 47vw;
+            min-inline-size: 0;
+        }
+        .globalSummary, .settingsLockAction {
+            overflow-wrap: anywhere;
+        }
+        .tuneInGlobalPanel > .settingsLockStatus {
+            grid-column: 1 / -1;
+        }
+        @supports selector(details::details-content) {
+            .tuneInGlobal { display: contents; }
+            .globalSummary { grid-area: 1 / 1; }
+            .tuneInGlobal::details-content { grid-column: 1 / -1; }
         }
         .tuneInRefreshCategories [data-outcome="Partial"] {
             background: color-mix(in srgb, #bc6b19 17%, transparent);
@@ -381,14 +411,9 @@
                     </div>
                 </div>
             </fieldset>
-            <label class="tuneInLockToggle">
-                <input type="checkbox" role="switch" class="settingsLocked" aria-label="Settings lock" aria-describedby="tuneInLockStatus" disabled />
-                <span class="tuneInLockTrack" aria-hidden="true"></span>
-                <span class="settingsLockAction">Settings Lock</span>
-            </label>
-            <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
             <p class="status" role="status" aria-live="polite"></p>
-            <details class="tuneInSection tuneInSectionBox tuneInGlobal" open>
+            <div class="tuneInSection tuneInSectionBox tuneInGlobalPanel">
+            <details class="tuneInSection tuneInGlobal" open>
                 <summary class="globalSummary">Global TuneIn Settings</summary>
                 <fieldset class="globalFields" disabled aria-label="Global TuneIn Settings">
                     <label class="emby-checkbox-label">
@@ -415,6 +440,13 @@
                     </div>
                 </fieldset>
             </details>
+                <label class="tuneInLockToggle">
+                    <input type="checkbox" role="switch" class="settingsLocked" aria-label="Settings lock" aria-describedby="tuneInLockStatus" disabled />
+                    <span class="tuneInLockTrack" aria-hidden="true"></span>
+                    <span class="settingsLockAction">Settings Lock</span>
+                </label>
+                <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
+            </div>
             <fieldset class="configurationFields tuneInSectionBox" disabled>
             <legend>Catalog Browsing</legend>
             <p>Choose categories and station selections for the TuneIn library.</p>
