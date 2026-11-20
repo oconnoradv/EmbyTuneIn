@@ -82,7 +82,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public async Task DoesNotRestrictWhenTheBaselineOrOptInDoesNotPermitIt(string reason)
         {
             using var fixture = new ExperimentalImportFixture();
-            using var refresh = fixture.Create(allowScoped: reason != "default");
+            using var refresh = fixture.Create();
             refresh.Start();
             await WaitUntilIdle(refresh);
             var checkpoint = fixture.Store.Read();
@@ -183,7 +183,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             internal TuneInCategorySnapshot Category(string category) =>
                 Store.Read().Categories.Single(saved => saved.Category == category);
 
-            internal TuneInRefresh Create(bool allowScoped) => new TuneInRefresh(directory, Store, () => channel,
+            internal TuneInRefresh Create(bool allowScoped = false) => new TuneInRefresh(directory, Store, () => channel,
                 (source, folder, session, strict, token) => source.GetRefreshChannelItems(folder, session, strict, token),
                 (source, staged, restriction, token) => TuneInRefreshService.ImportChannel(manager, source, staged, restriction, token),
                 null, timeoutOverride: TimeSpan.FromSeconds(10), allowScopedImport: allowScoped,

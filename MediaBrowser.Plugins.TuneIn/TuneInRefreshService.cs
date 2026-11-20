@@ -190,8 +190,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     (channel, staged, folder, token) => ImportChannel(manager, channel, staged, folder, token),
                     logger,
                     updateArtwork: (channel, folder, token) => channel.UpdateCategoryArtwork(folder, token),
-                    libraryCleanup: cleanup,
-                    allowScopedImport: Environment.GetEnvironmentVariable("TUNEIN_EXPERIMENTAL_SCOPED_IMPORT") == "1");
+                    libraryCleanup: cleanup, allowScopedImport: true);
                 return shared;
             }
         }

@@ -14,8 +14,10 @@ the files.
 The [maintenance RC1 prerelease](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-maintenance-browsing-refresh-rc.1)
 was rebuilt with 48-hour discovery/import deadlines and interruption-only
 automatic recovery. Timeouts and manual cancellation do not trigger recovery
-retries. The playback-start improvements remain included; the importer redesign
-is deferred, so allowed import retries still replay the complete staged tree.
+retries. The playback-start improvements remain included. Compatible catalog
+updates use top-level category-scoped imports; see
+[Category-scoped and progressive imports](#category-scoped-and-progressive-imports)
+for eligibility and recovery limits.
 If you downloaded RC1 before this update, download the new assets: the release
 tag and assembly version are unchanged, but the source commit and checksums differ.
 
@@ -323,22 +325,21 @@ individual folders based on a confirmed database write.
 Skipping served folders or returning shortened listings is not a safe remedy;
 it could omit valid siblings during Emby reconciliation.
 
-#### Experimental category-by-category imports
-
-The default is unchanged: TuneIn finishes discovery before handing Emby the
-complete staged tree. On a disposable test server only, set
-`TUNEIN_EXPERIMENTAL_SCOPED_IMPORT=1` in the Emby process environment and restart
-Emby to opt in. This path has been tested with fixtures, not a live Emby server.
+#### Category-scoped and progressive imports
 
 With an intact, matching baseline, a single-category refresh imports only that
-category. **Refresh all enabled categories** can publish one fully discovered
-category at a time without waiting for later categories. Incomplete categories
-are left unchanged during a progressive run. Each verified import is saved
-before discovery continues, so a later failure does not invalidate previously
-applied categories. First builds and topology changes use the full-tree path.
-An interrupted scoped import is not automatically retried as a full-tree
-import. After a restart, TuneIn may rediscover or replay an entire category;
-there is no within-category cursor, and a served folder is not a commit.
+category. **Refresh all enabled categories** publishes one fully discovered
+category at a time before discovering the next. Incomplete categories are left
+unchanged during a progressive run. Each verified import is saved before
+discovery continues, so a later failure does not invalidate previously applied
+categories. First builds, topology changes, incompatible checkpoints, and
+unrelated interrupted imports use the full-tree path. An interrupted scoped
+import is not automatically retried as a full-tree import. After a restart,
+TuneIn may rediscover or replay an entire category; there is no within-category
+cursor, and a served folder is not a commit.
+
+These paths are fixture-tested, but have not been exercised on an isolated
+Emby server.
 
 While a staged import is stalled, the server logs the time since progress,
 the unread folder count, and whether Emby is still importing or draining after

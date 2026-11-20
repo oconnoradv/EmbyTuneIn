@@ -892,8 +892,8 @@ namespace MediaBrowser.Plugins.TuneIn
                             && saved.RootId == roots[index].Id).All(matches => matches);
                     var progressive = mayScope && requestedCategory == null && replay == null && roots.Length > 0;
                     if (!mayScope && checkpoint.DirtyImportWasScoped && requestedCategory == null && activeRecovery.Retries > 0)
-                        throw new InvalidOperationException("Cannot automatically widen an interrupted scoped TuneIn import. "
-                            + "Restore the experimental option or explicitly refresh all enabled categories.");
+                        throw new InvalidOperationException("Cannot widen an interrupted scoped TuneIn import. "
+                            + "Complete the interrupted category or explicitly refresh all enabled categories.");
                     var partial = replay?.Partial ?? new HashSet<string>(StringComparer.Ordinal);
                     var didImport = true;
                     var progressivelyApplied = new HashSet<string>(StringComparer.Ordinal);
@@ -1206,7 +1206,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             ? listings[requestedCategory].RootId : null;
                         if (restriction == null && checkpoint.DirtyImportWasScoped && requestedCategory == dirtyAtStart)
                             throw new InvalidOperationException("Cannot safely retry the interrupted scoped TuneIn import. "
-                                + "Restore the experimental option and complete discovery, or explicitly refresh all enabled categories.");
+                                + "Complete the interrupted category or explicitly refresh all enabled categories.");
                         await ApplyImport(restriction).ConfigureAwait(false);
                     }
                     else
