@@ -48,6 +48,7 @@ function harness(manualStatus = false, manualSave = false) {
         '.apiRequestIntervalSeconds': requestInterval };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.categories', '.selectors',
         '.loginFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
+        '.catalogRefreshPrompt',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
         '.localSelector', '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
@@ -375,7 +376,32 @@ test('opening settings is lazy and native checkbox captions remain visible text'
     assert.equal(saved.textContent, '<img src=x onerror=alert(1)>');
     assert.equal(saved.childNodes.length, 0);
     assert.ok(app.enhanced.some(event => event.event === 'create'));
-    assert.match(app.elements['.status'].textContent, /Browsing is disabled/);
+    assert.match(app.elements['.status'].textContent, /TuneIn catalog refresh is unavailable/);
+});
+
+test('yellow first-refresh prompt appears only until refresh history exists', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.refresh[0].resolve({ State: 'NeverRun', HasRefreshBeenStarted: false, SettingsLocked: false });
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    await visit;
+    await settle();
+
+    const prompt = app.elements['.catalogRefreshPrompt'];
+    assert.equal(prompt.hidden, false);
+    assert.equal(prompt.textContent,
+        "Please go to the Catalog Refresh section to refresh your library's TuneIn catalog");
+
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /\.catalogRefreshPrompt\s*\{[^}]*background:\s*#fff2a8/i);
+
+    const timer = [...app.timers.values()].find(item => item.delay === 10000);
+    assert.ok(timer);
+    timer.handler();
+    app.refresh[1].resolve({ State: 'NeverRun', HasRefreshBeenStarted: true, SettingsLocked: false });
+    await settle();
+    assert.equal(prompt.hidden, true);
+    assert.equal(prompt.textContent, '');
 });
 
 test('only explicit selector actions fetch branches and save multiple local selections', async () => {

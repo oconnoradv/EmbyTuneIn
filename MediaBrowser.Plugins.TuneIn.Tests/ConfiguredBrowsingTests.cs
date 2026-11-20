@@ -32,6 +32,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         {
             var config = Ready();
             config.HideRegionalGenres = false;
+            config.HasStartedCatalogRefresh = true;
             config.EnableLocation = true;
             config.Locations.Add(new CatalogSelection { Id = "r10" });
             var directory = new TuneInDirectory(() => config, (_, __) => Task.FromResult(Opml(
@@ -41,7 +42,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 + "<outline type='audio' text='Radio' guide_id='s1'/>")));
             var before = directory.Snapshot();
             var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
-            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "HideRegionalGenres", "AllowPartialCatalogImport" })
+            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "HideRegionalGenres",
+                "AllowPartialCatalogImport", "HasStartedCatalogRefresh" })
                 legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });
             using (var xml = new StringWriter(System.Globalization.CultureInfo.InvariantCulture))
             {

@@ -7,6 +7,7 @@ using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Services;
 using System;
 using System.IO;
+using System.Linq;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -60,6 +61,10 @@ namespace MediaBrowser.Plugins.TuneIn
             EnsureAdmin();
             var status = refresh.Status();
             status.SettingsLocked = Plugin.Instance.SettingsLock.TryReadStatus();
+            status.HasRefreshBeenStarted = Plugin.Instance.Configuration.HasStartedCatalogRefresh
+                || status.State != "NeverRun"
+                || (status.Categories ?? Array.Empty<TuneInCategoryRefreshStatus>())
+                    .Any(category => category.State != "No recorded refresh");
             return status;
         }
 
@@ -72,7 +77,10 @@ namespace MediaBrowser.Plugins.TuneIn
         public TuneInRefreshStatus Post(StartTuneInRefresh request)
         {
             EnsureAdmin();
-            return refresh.Start(request.Category, request.ExpectedRecoveryId, request.ResumeFirst);
+            Plugin.Instance.MarkCatalogRefreshStarted();
+            var status = refresh.Start(request.Category, request.ExpectedRecoveryId, request.ResumeFirst);
+            status.HasRefreshBeenStarted = true;
+            return status;
         }
 
         public TuneInRefreshStatus Post(CancelTuneInRefresh request)

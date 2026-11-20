@@ -15,6 +15,7 @@ namespace MediaBrowser.Plugins.TuneIn
     /// </summary>
     public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IHasThumbImage
     {
+        private readonly object configurationGate = new object();
         
         public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
             : base(applicationPaths, xmlSerializer)
@@ -53,13 +54,29 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             var value = (PluginConfiguration)configuration;
             ConfigurationSnapshot.Validate(value);
-            // The signing key is server-owned; clients cannot replace it when saving settings.
-            TuneInRefreshService.UpdateConfiguration(() => SettingsLock.SaveConfiguration(() =>
+            lock (configurationGate)
             {
+                // These values are server-owned; clients cannot replace them when saving settings.
                 value.NavigationSecret = Configuration.NavigationSecret;
+                value.HasStartedCatalogRefresh = Configuration.HasStartedCatalogRefresh;
+                TuneInRefreshService.UpdateConfiguration(() => SettingsLock.SaveConfiguration(() =>
+                {
+                    base.UpdateConfiguration(value);
+                    TuneInPlayback.CancelChangedScopes();
+                }));
+            }
+        }
+
+        internal void MarkCatalogRefreshStarted()
+        {
+            lock (configurationGate)
+            {
+                if (Configuration.HasStartedCatalogRefresh) return;
+                var value = Configuration;
+                value.HasStartedCatalogRefresh = true;
+                // Persist server-owned history without resetting active refresh state or requiring unlocked settings.
                 base.UpdateConfiguration(value);
-                TuneInPlayback.CancelChangedScopes();
-            }));
+            }
         }
 
         private Guid _id = new Guid("10b82431-f939-4507-a8e2-9509dd3fd6ae");

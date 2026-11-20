@@ -53,6 +53,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.True(refresh.Start().Busy);
                 await WaitUntilIdle(refresh);
                 Assert.Equal("Completed", refresh.Status().State);
+                Assert.True(refresh.Status().HasRefreshBeenStarted);
                 Assert.False(refresh.TryGetCommitted(snapshot, folderId, out _));
                 refresh.Start();
                 try

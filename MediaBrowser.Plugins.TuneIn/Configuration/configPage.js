@@ -50,8 +50,20 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function browsingStatus(config) {
         if (config.SchemaVersion !== 1 || !config.ConfigurationCompleted)
-            return 'Browsing is disabled. Check "Enable configured browsing after saving", enable categories and save.';
-        return 'Browsing is enabled. Return to the channel root after saving.';
+            return 'The TuneIn catalog refresh is unavailable until Global Settings have been reviewed and saved.';
+        return '';
+    }
+
+    function renderCatalogRefreshPrompt(instance) {
+        var element = instance.view.querySelector('.catalogRefreshPrompt');
+        var status = instance.refreshStatus;
+        var configured = instance.config && instance.config.SchemaVersion === 1 && instance.config.ConfigurationCompleted;
+        var visible = !!configured && !!status && status.State === 'NeverRun'
+            && status.HasRefreshBeenStarted === false && !status.StartedUtc;
+        element.hidden = !visible;
+        element.textContent = visible
+            ? 'Please go to the Catalog Refresh section to refresh your library\'s TuneIn catalog'
+            : '';
     }
 
     function selected(instance, spec, container) {
@@ -317,6 +329,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         }
         var previousStatus = instance.refreshStatus;
         instance.refreshStatus = status;
+        renderCatalogRefreshPrompt(instance);
         var category = ({ local: 'Local Radio', music: 'Music', language: 'By Language', location: 'By Location',
             talk: 'Talk', sports: 'Sports', podcast: 'Podcasts', presets: 'My Favorites' })[status.Category];
         var elapsed = formatDuration(elapsedSeconds(status));
@@ -707,7 +720,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 instance.settingsLocked = true;
                 if (epoch !== instance.viewEpoch) return;
                 Dashboard.processPluginConfigurationUpdateResult(result);
-                message(instance, 'Configuration saved and locked. ' + browsingStatus(config) + ' No catalog crawl was started.');
+                message(instance, ['Configuration saved and locked.', browsingStatus(config), 'No catalog crawl was started.']
+                    .filter(Boolean).join(' '));
+                renderCatalogRefreshPrompt(instance);
             }, function (error) {
                 instance.settingsLocked = undefined;
                 console.error('Unable to lock TuneIn settings after saving.', error);
@@ -777,6 +792,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshVisible = true;
         instance.view.querySelector('.refreshStatus').textContent = 'Reading refresh status...';
         instance.view.querySelector('.refreshError').textContent = '';
+        instance.view.querySelector('.catalogRefreshPrompt').hidden = true;
+        instance.view.querySelector('.catalogRefreshPrompt').textContent = '';
         instance.view.querySelector('.refreshFailureLog').textContent = '';
         instance.view.querySelector('.refreshFailureLog').hidden = true;
         instance.view.querySelector('.refreshLogMessage').textContent = '';
@@ -792,6 +809,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
             if (epoch !== instance.viewEpoch) return;
             instance.config = config;
+            renderCatalogRefreshPrompt(instance);
             instance.refreshSchedules = new Map((config.RefreshSchedules || []).map(function (schedule) {
                 return [schedule.Category, schedule.IntervalHours];
             }));

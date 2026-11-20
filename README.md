@@ -89,6 +89,8 @@ Save browsing settings before refreshing. In **Catalog Refresh**, select
 **Refresh** beside a category or **Refresh all enabled categories**. Opening
 the panel reads status without starting a refresh; leaving it stops polling,
 not the server-side run.
+Before the first refresh, the Control Panel highlights a reminder. It stays
+dismissed after an administrator starts a refresh, including across restarts.
 
 Discovery finishes before any import begins. When changes require an import,
 the plugin supplies Emby with the **complete staged channel tree**, including

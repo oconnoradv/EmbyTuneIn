@@ -57,6 +57,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public int QueueSlotsAvailable { get; set; }
         public TuneInCategoryRefreshStatus[] Categories { get; set; }
         public bool? SettingsLocked { get; set; }
+        public bool HasRefreshBeenStarted { get; set; }
         public DateTime? LastProgressUtc { get; set; }
         public string Activity { get; set; }
         internal TuneInRefreshStatus Copy() => (TuneInRefreshStatus)MemberwiseClone();
@@ -184,6 +185,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 var snapshot = statusConfiguration;
                 var copy = status.Copy();
+                copy.HasRefreshBeenStarted = categoryStates.Count > 0;
                 copy.Busy = work != null && !work.IsCompleted;
                 copy.ReportAvailable = !copy.Busy && failureLog != null;
                 if (!copy.Busy && copy.DiscoveryTimeouts > 0)

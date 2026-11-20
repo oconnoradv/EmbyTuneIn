@@ -22,6 +22,7 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public List<CategoryRefreshSchedule> RefreshSchedules { get; set; } = new List<CategoryRefreshSchedule>();
         public int SchemaVersion { get; set; }
         public bool ConfigurationCompleted { get; set; }
+        public bool HasStartedCatalogRefresh { get; set; }
         public bool EnableLocalRadio { get; set; }
         public bool EnableMusic { get; set; }
         public bool EnableLanguage { get; set; }

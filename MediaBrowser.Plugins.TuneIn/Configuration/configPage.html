@@ -100,6 +100,14 @@
             outline: 2px solid currentColor;
             outline-offset: 2px;
         }
+        .catalogRefreshPrompt {
+            margin: .75em 0;
+            padding: .75em;
+            border: 1px solid #8a6800;
+            border-radius: .25em;
+            background: #fff2a8;
+            color: #332900;
+        }
         .tuneInRefresh .refreshMetrics {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
@@ -247,6 +255,7 @@
             </label>
             <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
             <p class="status" role="status" aria-live="polite"></p>
+            <p class="status catalogRefreshPrompt" role="status" hidden></p>
             <fieldset class="configurationFields" disabled>
             <legend>Catalog browsing</legend>
             <p>Enable browsing and choose categories before opening TuneIn. Existing username and coordinates are retained, but do not enable browsing automatically.</p>
