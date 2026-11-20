@@ -341,7 +341,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             description += ' (requested: ' + refreshName(status, status.ActiveRequest) + ')';
         if (status.AutomaticRetry && status.AutomaticRetryLimit)
             description += '. Automatic retry ' + status.AutomaticRetry + ' of ' + status.AutomaticRetryLimit
-                + ' after ' + (status.AutomaticRetryPhase === 'import' ? 'import' : 'discovery') + ' timed out';
+                + ' after ' + (status.AutomaticRetryPhase === 'import' ? 'import' : 'discovery') + ' was interrupted';
         if (status.Busy && status.Activity) description += '. ' + status.Activity;
         var work = '-';
         if (status.Busy && status.Phase === 'Importing' && status.ImportFoldersTotal)

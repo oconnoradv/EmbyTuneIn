@@ -908,16 +908,15 @@ for (const phase of ['discovery', 'import']) test('refresh status identifies the
     app.reads[0].resolve({});
     app.refresh[0].resolve({
         State: 'Running', Phase: 'Importing', Category: 'music', Busy: true,
-        AutomaticRetry: 2, AutomaticRetryLimit: phase === 'import' ? 3 : 10,
-        AutomaticRetryPhase: phase, ImportTimeouts: phase === 'import' ? 2 : 0,
+        AutomaticRetry: 2, AutomaticRetryLimit: 3,
+        AutomaticRetryPhase: phase, ImportTimeouts: 0,
         ImportMayHavePartiallyApplied: true
     });
     await visit;
     const text = app.elements['.refreshStatus'].textContent;
     assert.ok(text.includes('Running - Importing - Music. Automatic retry 2 of '
-        + (phase === 'import' ? 3 : 10) + ' after ' + phase + ' timed out'));
-    if (phase === 'import') assert.match(app.elements['.refreshDiagnosticsText'].textContent, /Import timeouts: 2/);
-    assert.doesNotMatch(text, /interrupted import/);
+        + '3 after ' + phase + ' was interrupted'));
+    assert.doesNotMatch(text, /timed out/);
     app.instance.onPause();
 });
 

@@ -12,12 +12,16 @@ The plugin assembly version is **1.2.8.0**. Release downloads include
 the files.
 
 The [maintenance RC1 prerelease](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-maintenance-browsing-refresh-rc.1)
-was rebuilt with the playback-start and staged-import reliability changes.
+was rebuilt with 48-hour discovery/import deadlines and interruption-only
+automatic recovery. Timeouts and manual cancellation do not trigger recovery
+retries. The playback-start improvements remain included; the importer redesign
+is deferred, so allowed import retries still replay the complete staged tree.
 If you downloaded RC1 before this update, download the new assets: the release
 tag and assembly version are unchanged, but the source commit and checksums differ.
 
 1. Stop Emby and back up the existing plugin DLL, TuneIn configuration,
-   `TuneIn.refresh.xml`, and `tunein-fork-settings-lock.xml` if present.
+   `TuneIn.refresh.xml` (including `.discovery` and `.recovery` sidecars), and
+   `tunein-fork-settings-lock.xml` if present.
    A full server-data backup also preserves library metadata for rollback.
 2. Replace `MediaBrowser.Plugins.TuneIn.dll` in the plugins directory.
    Keep only one copy; do not copy dependency DLLs or reset the configuration.
@@ -166,6 +170,11 @@ pages against the safety limit. During import, progress switches to folders
 served out of the known total. Discovery does not estimate a percentage or ETA
 from the page cap.
 
+Import progress advances only on the first request for each staged folder.
+Repeated requests still return the complete listing but do not reset the last
+progress time or suppress stall warnings. Folders served measures provider
+consumption, not confirmed Emby database commits.
+
 **Diagnostics** shows provider attempts and successes, cached-page replays,
 active HTTP requests, rate-limit retries, checkpoint resume, and skipped-link
 counts grouped by category and reason. Up to five reason groups are displayed;
@@ -193,7 +202,7 @@ polling does not recrawl TuneIn or query the library inventory.
 ### Diagnostic reports
 
 After a failed or timed-out refresh, or a run with skipped entries or recovered
-import timeouts, select **Retrieve refresh log**. This administrator-only report
+interruptions, select **Retrieve refresh log**. This administrator-only report
 covers the latest discovery and its import attempts, not the full Emby server
 log. It is also available for **Partial** outcomes.
 
@@ -201,7 +210,7 @@ Reports include the outcome, grouped skip counts, and up to 100 skipped-entry
 examples within a 64 KB report. Examples record the timestamp, category,
 rejection reason, source page, and rejected navigation query values and
 fragment. Duplicate parameters and truncation are identified. Timeout reports
-record the phase that stopped, discovery/import timeout counts and retry limits,
+record the phase that stopped, discovery/import timeout counts and interruption retry limits,
 checkpoint time, and whether an import may have partially applied. Live status
 identifies whether an automatic retry is for discovery or import.
 
@@ -219,13 +228,13 @@ summary logs and cannot be reconstructed from past aggregate skip counts.
 
 | Limit | Behavior |
 | --- | --- |
-| Discovery attempt | Up to 60 minutes, independent of import time |
-| Import attempt | A fresh 60 minutes for staging, importing and verification/finalization |
+| Discovery attempt | Up to 48 hours, independent of import time |
+| Import attempt | A fresh 48 hours for staging, importing and verification/finalization |
 | Catalog cache | Up to 5,000 pages and 40 MiB per refresh |
 | Catalog HTTP response | 90 seconds including body reads, excluding pacing and provider cooldowns |
-| Discovery checkpoint | At the first completed folder after each 20-minute interval, and on discovery timeout when possible |
-| Automatic discovery retries | Up to 10 after the initial attempt, reusing validated checkpoint pages |
-| Automatic import retries | Up to 3 after the initial attempt, replaying the complete validated staged catalog without provider requests |
+| Discovery checkpoint | At the first completed folder after each 20-minute interval, and on discovery interruption or timeout when possible |
+| Automatic refresh retries | Up to 3 for interrupted work, shared across discovery, import, and server restarts |
+| Timeout or manual Cancel | Drains active work and stops; never triggers an automatic recovery retry |
 | Checkpoint resume window | 48 hours from discovery start, with matching settings and requested category scope |
 | Folder depth | Eight levels; forward pagination does not consume depth but still consumes page and folder budgets |
 
@@ -241,29 +250,57 @@ It can start alongside discovery without preempting in-flight work. When
 both queues can start, at most two playback requests go ahead of a waiting
 catalog request. Both queues still share API request spacing and `Retry-After`.
 
-A discovery timeout saves additional validated pages when possible, then retries
-after active work drains. Checkpoints remain available until import preparation
-succeeds. The interrupted page may be requested again.
-After a server restart, starting the same refresh can reuse a matching
-checkpoint. Discovery timeouts do not publish incomplete trees.
+A discovery timeout saves additional validated pages when possible, then reports
+**TimedOut** without retrying. An import deadline also cancels and drains its
+attempt, then stops without retrying. The separate 90-second catalog HTTP
+response timeout is unchanged and likewise does not trigger a refresh retry.
+Checkpoints remain available for a manual refresh until import preparation
+succeeds. Timeouts never publish incomplete trees.
 
-An import deadline cancels the current attempt and waits for it to drain before
-retrying. Each retry has a fresh deadline and fresh folder-consumption tracking,
-but reuses the same complete validated catalog, including saved siblings and
-any Partial outcome. It does not recrawl TuneIn or continue halfway through
-Emby's nontransactional import. The interrupted-import marker remains set until
-the entire import and verification succeed.
+Unexpected cancellation of an active operation (without a refresh cancellation
+request), transport I/O failures, and provider HTTP 5xx failures other than 504
+can trigger a bounded interruption retry, after the failed operation drains.
+Invalid data, unsupported/incomplete trees, other provider HTTP errors, saved
+scope changes, and manual **Cancel refresh** do not trigger recovery retries.
+Provider rate-limit request retries remain a separate policy.
 
-Cancellation, scope changes, and actual import failures stop automatic recovery.
+The small `TuneIn.refresh.xml.recovery` sidecar records the active request and
+retry count. After a server restart, the startup check automatically retries
+that interrupted request if the saved settings still match and retry budget
+remains. Timeout, manual cancellation, completion, and terminal errors clear
+this marker; shutdown while work is active retains it. The startup check begins
+about 15 seconds after Emby starts and repeats with the existing schedule timer.
+Queued requests are not recovered. Old versions without the sidecar do not
+automatically retry a previously interrupted run.
+
+Each recovery attempt has fresh deadlines. Import retries reuse the complete
+staged catalog, including saved siblings and any Partial outcome, only while
+it remains in memory, compatible with saved settings, and less than 48 hours
+old from discovery start. A restart loses that in-memory catalog; recovery then
+uses available discovery page checkpoints or discovers again. The interrupted
+page may be requested again. No retry continues halfway through Emby's
+nontransactional import. The interrupted-import marker remains set until the
+entire import and verification succeed.
+
 Host operations that ignore cancellation can delay draining; another import
 never starts while the prior import task is still running. Once all three
-automatic retries are exhausted, the refresh reports **TimedOut**, retains the
-repair requirement, and makes a diagnostic report available. After a failed
-import, manually refreshing the same scope replays the staged catalog without
-discovery if it is still in memory, compatible with the saved settings, and
-less than 48 hours old from discovery start. Changing settings, cancelling,
-starting a different refresh, or restarting Emby discards that in-memory
-catalog; the next refresh then runs discovery before repairing the library.
+interruption retries are exhausted, the refresh reports **Error**, retains any
+import repair requirement, and stops automatic recovery. A manual refresh starts
+a new retry budget. Changing settings, cancelling, or starting a different
+refresh discards the in-memory staged catalog.
+
+**Limitation: import recovery is replay, not resumable import.** Neither the
+referenced 4.9.1.90 SDK nor the published 4.11.0.5-beta6 SDK exposes a per-folder
+import commit acknowledgment or resume cursor. Their
+[`IChannelManager.RefreshChannelContent`](https://dev.emby.media/reference/pluginapi/MediaBrowser.Controller.Channels.IChannelManager.html)
+accepts `maxRefreshLevel` and `restrictTopLevelFolderId`: it can restrict a run
+to a top-level category, not resume at an arbitrary nested Music folder.
+Successful discovery is retained in memory for import retries, not durably
+across a server restart. Page checkpoints recover interrupted discovery, not
+completed database writes. The current recovery behavior therefore does not
+meet a requirement to preserve and skip confirmed completed import work.
+Skipping served folders or returning shortened listings is not a safe remedy;
+it could omit valid siblings during Emby reconciliation.
 
 While a staged import is stalled, the server logs the time since progress,
 the unread folder count, and whether Emby is still importing or draining after

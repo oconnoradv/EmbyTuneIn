@@ -346,8 +346,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     var key = folder ?? string.Empty;
                     if (!folders.TryGetValue(key, out var result))
                         throw new InvalidOperationException("Emby requested a folder outside the staged TuneIn channel.");
-                    served.Add(key);
-                    report?.Invoke(folders.Count, served.Count);
+                    if (served.Add(key))
+                        report?.Invoke(folders.Count, served.Count);
                     return new ChannelItemResult { Items = result.Items.ToList() };
                 }
                 catch (Exception error) { failure = error; throw; }
