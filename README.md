@@ -11,9 +11,10 @@ import-stall diagnostics, and interrupted-refresh recovery. Discovery and import
 attempts retain 60-minute deadlines and bounded timeout retries. Restarting Emby
 alone never starts a refresh.
 
-The published `v1.2.8-music-refresh-resilience-rc.1` was built from an earlier
-commit and does **not** contain the updated Control Panel or these later
-improvements. The behavior described below applies to this branch, not that RC.
+The original `v1.2.8-music-refresh-resilience-rc.1` assets were built from an
+earlier commit and lacked the updated Control Panel. The RC1 assets were
+replaced with the combined build; check `build-info.json` and `SHA256SUMS.txt`
+to identify and verify your download.
 
 ## Requirements and installation
 
