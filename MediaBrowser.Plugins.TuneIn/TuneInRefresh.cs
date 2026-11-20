@@ -108,7 +108,6 @@ namespace MediaBrowser.Plugins.TuneIn
         private TuneInRefreshFailureLog failureLog;
         private PendingImport pendingImport;
         private TuneInRefreshRecovery activeRecovery;
-        private bool startupRecoveryChecked;
         private readonly Dictionary<string, (int IntervalHours, DateTime DueUtc)> scheduled =
             new Dictionary<string, (int, DateTime)>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> categoryStates = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -283,11 +282,10 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
-        private void Begin(ConfigurationSnapshot snapshot, string category, TuneInRefreshRecovery recovery = null)
+        private void Begin(ConfigurationSnapshot snapshot, string category)
         {
             cleanupPlan = null;
-            startupRecoveryChecked = true;
-            Prepare(snapshot, category, recovery);
+            Prepare(snapshot, category);
             work = Task.Run(async () =>
             {
                 var next = category;
@@ -362,9 +360,9 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
-        private void Prepare(ConfigurationSnapshot snapshot, string category, TuneInRefreshRecovery recovery = null)
+        private void Prepare(ConfigurationSnapshot snapshot, string category)
         {
-            activeRecovery = recovery ?? new TuneInRefreshRecovery
+            activeRecovery = new TuneInRefreshRecovery
             {
                 ConfigurationKey = snapshot.Key, RequestedCategory = category
             };
@@ -574,33 +572,6 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (disposed || Cleaning) return;
                 var snapshot = directory.Snapshot();
                 statusConfiguration = snapshot;
-                if (!startupRecoveryChecked && (work == null || work.IsCompleted))
-                {
-                    var recovery = store.ReadRecovery();
-                    startupRecoveryChecked = true;
-                    if (recovery != null)
-                    {
-                        if (recovery.ConfigurationKey == snapshot.Key && snapshot.Ready
-                            && (recovery.RequestedCategory == null || snapshot.Enabled(recovery.RequestedCategory)))
-                        {
-                            if (recovery.Retries < InterruptionRetryLimit)
-                            {
-                                recovery.Retries++;
-                                logger?.Info("TuneIn refresh for {0}: recovering interrupted work after server restart (retry {1} of {2}).",
-                                    recovery.RequestedCategory ?? "all", recovery.Retries, InterruptionRetryLimit);
-                                Begin(snapshot, recovery.RequestedCategory, recovery);
-                                return;
-                            }
-                            status.State = "Error";
-                            status.Phase = "Interrupted refresh retry limit reached; refresh manually";
-                            status.ErrorCode = "InterruptionRetryLimit";
-                            status.FinishedUtc = clock();
-                            failureLog = CreateFailureLog(null, status);
-                            logger?.Warn("TuneIn interrupted refresh recovery reached its retry limit; automatic recovery stopped.");
-                        }
-                        store.ClearRecovery();
-                    }
-                }
                 var now = clock();
                 var enabled = (snapshot.Value.RefreshSchedules ?? new List<Configuration.CategoryRefreshSchedule>())
                     .Where(schedule => ConfigurationSnapshot.ValidSchedule(schedule) && snapshot.Enabled(schedule.Category))

@@ -266,7 +266,7 @@ select **Refresh all enabled categories** to rebuild the baseline.
 | Catalog cache | Up to 5,000 pages and 40 MiB per refresh |
 | Catalog HTTP response | 90 seconds including body reads, excluding pacing and provider cooldowns |
 | Discovery checkpoint | At the first completed folder after each 20-minute interval, and on discovery interruption or timeout when possible |
-| Automatic refresh retries | Up to 3 for interrupted work, shared across discovery, import, and server restarts |
+| Automatic refresh retries | Up to 3 for interrupted work within an active refresh, shared across discovery and import |
 | Timeout or manual Cancel | Drains active work and stops; never triggers an automatic recovery retry |
 | Checkpoint resume window | 48 hours from discovery start, with matching settings and requested category scope |
 | Folder depth | Eight levels; forward pagination does not consume depth but still consumes page and folder budgets |
@@ -298,13 +298,10 @@ scope changes, and manual **Cancel refresh** do not trigger recovery retries.
 Provider rate-limit request retries remain a separate policy.
 
 The small `TuneIn.refresh.xml.recovery` sidecar records the active request and
-retry count. After a server restart, the startup check automatically retries
-that interrupted request if the saved settings still match and retry budget
-remains. Timeout, manual cancellation, completion, and terminal errors clear
-this marker; shutdown while work is active retains it. The startup check begins
-about 15 seconds after Emby starts and repeats with the existing schedule timer.
-Queued requests are not recovered. Old versions without the sidecar do not
-automatically retry a previously interrupted run.
+retry count. Starting or restarting Emby never starts a refresh, even if a
+refresh was interrupted. Only a manual request or a due configured schedule can
+start new work; compatible discovery checkpoints and required reconciliation
+remain available to that run. Queued requests are not recovered.
 
 Each recovery attempt has fresh deadlines. Import retries reuse the complete
 staged catalog, including saved siblings and any Partial outcome, only while

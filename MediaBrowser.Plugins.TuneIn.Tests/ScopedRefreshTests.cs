@@ -997,6 +997,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 using var restarted = Create();
                 restarted.CheckSchedules();
                 await WaitUntilIdle(restarted);
+                Assert.Equal(1, imports);
+                Assert.Equal(2, requests);
+                Assert.NotNull(store.Read().DirtyCategory);
+                restarted.Start();
+                await WaitUntilIdle(restarted);
                 Assert.Equal("Completed", restarted.Status().State);
                 Assert.Equal(2, imports);
                 Assert.Equal(4, requests);
@@ -1012,25 +1017,35 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData("discovery", 0, true)]
+        [InlineData("discovery", 0, false)]
         [InlineData("import", 1, true)]
         [InlineData("discovery", 3, true)]
-        [InlineData("import", 0, false)]
-        public async Task StartupRecoveryUsesCompatibleMarkerAndPreservesRetryBudget(string phase, int retries, bool compatible)
+        public async Task InterruptedRefreshDoesNotRunBeforeManualRequestOrDueSchedule(string phase, int retries, bool scheduled)
         {
-            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true,
+                RefreshSchedules = new List<CategoryRefreshSchedule>
+                {
+                    new CategoryRefreshSchedule { Category = "talk", IntervalHours = 6 }
+                }
+            };
+            var now = DateTime.UtcNow;
             var imports = 0;
+            var requests = 0;
             var directory = new TuneInDirectory(() => config, (_, __) =>
-                Task.FromResult(XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>")));
+            {
+                requests++;
+                return Task.FromResult(XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>"));
+            });
             var channel = new TuneInChannel(directory);
             var path = Path.Combine(Path.GetTempPath(), $"tunein-startup-recovery-{Guid.NewGuid():N}.xml");
             var store = new TuneInRefreshStore(path);
             store.WriteRecovery(new TuneInRefreshRecovery
             {
-                ConfigurationKey = compatible ? directory.Snapshot().Key : new string('0', 64),
+                ConfigurationKey = directory.Snapshot().Key,
                 RequestedCategory = "talk", Phase = phase, Retries = retries
             });
-            TuneInRefresh runningRefresh = null;
             try
             {
                 using var refresh = new TuneInRefresh(directory, store, () => channel,
@@ -1038,22 +1053,29 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     (_, staged, __, token) =>
                     {
                         imports++;
-                        Assert.Equal(retries + 1, store.ReadRecovery().Retries);
-                        Assert.Equal(retries + 1, runningRefresh.Status().AutomaticRetry);
-                        Assert.Equal(phase, runningRefresh.Status().AutomaticRetryPhase);
+                        Assert.Equal(0, store.ReadRecovery().Retries);
                         ReadStagedTree(staged, token);
                         return Task.CompletedTask;
-                    }, null);
-                runningRefresh = refresh;
+                    }, null, clock: () => now);
                 refresh.CheckSchedules();
                 await WaitUntilIdle(refresh);
-                var recovers = compatible && retries < 3;
-                Assert.Equal(recovers ? 1 : 0, imports);
-                Assert.Equal(recovers ? "Completed" : compatible ? "Error" : "NeverRun", refresh.Status().State);
+                now = now.AddHours(6).AddSeconds(-1);
+                refresh.CheckSchedules();
+                Assert.Equal(0, imports);
+                Assert.Equal(0, requests);
+                Assert.Equal("NeverRun", refresh.Status().State);
+                Assert.Equal(retries, store.ReadRecovery().Retries);
+                if (scheduled)
+                {
+                    now = now.AddSeconds(1);
+                    refresh.CheckSchedules();
+                }
+                else refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(1, imports);
+                Assert.Equal(1, requests);
                 Assert.Null(store.ReadRecovery());
-                refresh.CheckSchedules();
-                await WaitUntilIdle(refresh);
-                Assert.Equal(recovers ? 1 : 0, imports);
             }
             finally
             {
@@ -1482,8 +1504,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 {
                     now = initial.AddHours(47);
                     using var refresh = NewRefresh();
-                    if (restart) refresh.CheckSchedules();
-                    else refresh.Start("talk");
+                    if (restart)
+                    {
+                        refresh.CheckSchedules();
+                        Assert.False(refresh.Status().Busy);
+                    }
+                    refresh.Start("talk");
                     await WaitUntilIdle(refresh);
                     Assert.Equal("Completed", refresh.Status().State);
                     Assert.True(refresh.Status().Resumed);
