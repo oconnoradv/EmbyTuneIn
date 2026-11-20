@@ -125,6 +125,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private string recoveryId = Guid.NewGuid().ToString("N");
         private bool disposed;
         private readonly TuneInLibraryCleanup libraryCleanup;
+        private readonly bool allowScopedImport;
         private TuneInLibraryCleanup.Plan cleanupPlan;
         private string cleanupToken;
         private DateTime cleanupExpires;
@@ -165,7 +166,7 @@ namespace MediaBrowser.Plugins.TuneIn
             ILogger logger, Func<DateTime> clock = null, TimeSpan? timeoutOverride = null,
             Action<TuneInChannel, string, CancellationToken> updateArtwork = null,
             Func<TuneInChannel, string, CancellationToken, int?> countStations = null,
-            TuneInLibraryCleanup libraryCleanup = null)
+            TuneInLibraryCleanup libraryCleanup = null, bool allowScopedImport = false)
         {
             this.directory = directory ?? throw new ArgumentNullException(nameof(directory));
             this.store = store ?? throw new ArgumentNullException(nameof(store));
@@ -177,6 +178,7 @@ namespace MediaBrowser.Plugins.TuneIn
             this.timeoutOverride = timeoutOverride;
             this.updateArtwork = updateArtwork;
             this.libraryCleanup = libraryCleanup;
+            this.allowScopedImport = allowScopedImport;
             this.countStations = countStations ?? ((channel, folder, token) => channel.CountCategoryStations(folder, token));
             statusConfiguration = directory.Snapshot();
             LoadCategoryStates(statusConfiguration);
@@ -881,8 +883,20 @@ namespace MediaBrowser.Plugins.TuneIn
                     var channel = categories.Length == 0 ? null
                         : getChannel() ?? throw new InvalidOperationException("TuneIn channel is not registered.");
                     var roots = enabled.Select(category => channel.GetCategoryRoot(snapshot, category)).ToArray();
+                    var mayScope = allowScopedImport && compatible && !needsRebuild
+                        && !checkpoint.NeedsImport && checkpoint.PendingCategories.Count == 0
+                        && (dirtyAtStart == null || checkpoint.DirtyImportWasScoped
+                            && (requestedCategory == null || dirtyAtStart == requestedCategory))
+                        && checkpoint.Categories.Count == roots.Length
+                        && enabled.Select((category, index) => listings.TryGetValue(category, out var saved)
+                            && saved.RootId == roots[index].Id).All(matches => matches);
+                    var progressive = mayScope && requestedCategory == null && replay == null && roots.Length > 0;
+                    if (!mayScope && checkpoint.DirtyImportWasScoped && requestedCategory == null && activeRecovery.Retries > 0)
+                        throw new InvalidOperationException("Cannot automatically widen an interrupted scoped TuneIn import. "
+                            + "Restore the experimental option or explicitly refresh all enabled categories.");
                     var partial = replay?.Partial ?? new HashSet<string>(StringComparer.Ordinal);
                     var didImport = true;
+                    var progressivelyApplied = new HashSet<string>(StringComparer.Ordinal);
                     if (replay != null)
                     {
                         foreach (var listing in replay.Listings) listings[listing.Category] = listing;
@@ -1000,6 +1014,13 @@ namespace MediaBrowser.Plugins.TuneIn
                                 counts.AvailableCheckedUtc = clock();
                             });
                             var allowExclusions = snapshot.Value.AllowPartialCatalogImport;
+                            if (progressive && staged.DiscoveryIncomplete)
+                            {
+                                partial.Add(category);
+                                Update(() => categoryStates[category] = "Incomplete (left unchanged)");
+                                if (checkpoint.DirtyCategory == category) break;
+                                continue;
+                            }
                             var categorySnapshot = staged.DiscoveryIncomplete
                                 ? (allowExclusions || category == "music" && !importRequired
                                     ? staged.MergePartialCategory(category, previous,
@@ -1029,6 +1050,22 @@ namespace MediaBrowser.Plugins.TuneIn
                                 status.CategoriesCompleted = completed.Count;
                                 status.Progress = 99d * completed.Count / categories.Length;
                             });
+                            if (progressive && (changed.Contains(category) || checkpoint.DirtyCategory == category))
+                            {
+                                discoveryTime.Stop();
+                                await ApplyImport(categorySnapshot.RootId, progressiveCategory: category).ConfigureAwait(false);
+                                progressivelyApplied.Add(category);
+                                lock (gate)
+                                {
+                                    activeRecovery.Phase = "discovery";
+                                    store.WriteRecovery(activeRecovery);
+                                }
+                                var remaining = (timeoutOverride ?? DefaultTimeout) - discoveryTime.Elapsed;
+                                if (remaining <= TimeSpan.Zero) throw new TimeoutException("TuneIn discovery deadline reached.");
+                                timeout.CancelAfter(remaining);
+                                discoveryTime.Start();
+                                discovering = true;
+                            }
                         }
 
                         directory.CheckCurrent(snapshot, linked.Token);
@@ -1048,16 +1085,19 @@ namespace MediaBrowser.Plugins.TuneIn
                             return false;
                         }
 
-                        didImport = importRequired || changed.Count != 0;
+                        didImport = !progressive && (importRequired || changed.Count != 0);
                     }
-                    if (didImport)
+
+                    async Task ApplyImport(string restriction, string progressiveCategory = null)
                     {
                         Update(() => status.Phase = "Preparing import");
                         // Only newly enabled, never-imported categories may wait outside the complete saved tree.
                         var importedCategories = enabled.Where(listings.ContainsKey).ToArray();
                         var importedRoots = roots.Where(root => importedCategories.Any(category => listings[category].RootId == root.Id)).ToArray();
                         var importedListings = importedCategories.Select(category => listings[category]).ToArray();
-                        currentCategory = requestedCategory ?? dirtyAtStart ?? categories.First();
+                        var appliedCategories = restriction == null ? importedCategories : new[] { progressiveCategory ?? requestedCategory };
+                        var appliedRoots = restriction == null ? importedRoots : importedRoots.Where(root => root.Id == restriction);
+                        currentCategory = progressiveCategory ?? requestedCategory ?? dirtyAtStart ?? categories.First();
                         directory.CheckCurrent(snapshot, linked.Token);
                         timeout.CancelAfter(Timeout.InfiniteTimeSpan);
                         linked.Token.ThrowIfCancellationRequested();
@@ -1081,18 +1121,19 @@ namespace MediaBrowser.Plugins.TuneIn
                                     status.ImportFoldersServed = 0;
                                     status.LastProgressUtc = clock();
                                 });
-                                var full = TuneInStagedImport.ForChannel(importedRoots, importedListings, importToken,
+                                var staged = TuneInStagedImport.ForChannel(importedRoots, importedListings, importToken,
                                     (total, served) => Update(() =>
                                     {
                                         status.ImportFoldersTotal = total;
                                         status.ImportFoldersServed = served;
                                         status.LastProgressUtc = clock();
-                                    }), () => directory.CheckCurrent(snapshot, importToken));
+                                    }), () => directory.CheckCurrent(snapshot, importToken), restriction);
                                 directory.CheckCurrent(snapshot, importToken);
-                                checkpoint.DirtyCategory = dirtyAtStart ?? currentCategory;
+                                checkpoint.DirtyCategory = checkpoint.DirtyCategory ?? currentCategory;
+                                checkpoint.DirtyImportWasScoped = restriction != null;
                                 Persist(snapshot, checkpoint, started);
-                                store.ClearDiscovery();
-                                pendingImport = new PendingImport
+                                if (progressiveCategory == null) store.ClearDiscovery();
+                                pendingImport = progressiveCategory != null ? null : new PendingImport
                                 {
                                     DiscoveryKey = snapshot.DiscoveryKey,
                                     RequestedCategory = requestedCategory,
@@ -1113,20 +1154,21 @@ namespace MediaBrowser.Plugins.TuneIn
                                 Update(() =>
                                 {
                                     status.Phase = "Importing";
-                                    status.ImportFoldersTotal = full.Count;
+                                    status.ImportFoldersTotal = staged.Count;
+                                    if (restriction != null) status.Activity = "Importing only " + TuneInBrowsing.CategoryName(appliedCategories[0]);
                                 });
                                 importTime.Start();
                                 try
                                 {
-                                    var importTask = import(channel, full, null, importToken);
+                                    var importTask = import(channel, staged, restriction, importToken);
                                     await AwaitImportWithDiagnostics(importTask, importToken).ConfigureAwait(false);
                                 }
                                 finally { importTime.Stop(); }
-                                full.Verify();
+                                staged.Verify();
                                 importToken.ThrowIfCancellationRequested();
-                                foreach (var root in importedRoots)
+                                foreach (var root in appliedRoots)
                                     updateArtwork?.Invoke(channel, root.Id, importToken);
-                                foreach (var category in importedCategories)
+                                foreach (var category in appliedCategories)
                                 {
                                     ReadEmbyStationCount(snapshot, channel, category, listings[category].RootId, importToken);
                                     lock (gate) listings[category].StationCounts = categoryCounts[category].Copy();
@@ -1149,16 +1191,31 @@ namespace MediaBrowser.Plugins.TuneIn
                         checkpoint.PendingCategories.RemoveAll(listings.ContainsKey);
                         checkpoint.NeedsImport = false;
                         checkpoint.DirtyCategory = null;
+                        checkpoint.DirtyImportWasScoped = false;
                         checkpoint.ChannelImportVersion = ChannelImportVersion;
                         Persist(snapshot, checkpoint, started, BuildCommitted(checkpoint, snapshot.Key));
                         pendingImport = null;
+                        lock (gate)
+                            foreach (var category in appliedCategories)
+                                categoryStates[category] = listings[category].DiscoveryPartial ? "Partial (applied)" : "Imported";
+                    }
+
+                    if (didImport)
+                    {
+                        var restriction = mayScope && requestedCategory != null && !listings[requestedCategory].DiscoveryPartial
+                            ? listings[requestedCategory].RootId : null;
+                        if (restriction == null && checkpoint.DirtyImportWasScoped && requestedCategory == dirtyAtStart)
+                            throw new InvalidOperationException("Cannot safely retry the interrupted scoped TuneIn import. "
+                                + "Restore the experimental option and complete discovery, or explicitly refresh all enabled categories.");
+                        await ApplyImport(restriction).ConfigureAwait(false);
                     }
                     else
                     {
                         discovering = false;
                         store.ClearDiscovery();
                         Update(() => status.Phase = "Finishing refresh");
-                        foreach (var category in categories)
+                        foreach (var category in categories.Where(category => !progressive
+                            || completed.Contains(category) && !progressivelyApplied.Contains(category)))
                         {
                             updateArtwork?.Invoke(channel, roots[Array.IndexOf(enabled, category)].Id, linked.Token);
                             lock (gate) listings[category].StationCounts = categoryCounts[category].Copy();
@@ -1168,13 +1225,11 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
                     lock (gate)
                     {
-                        if (didImport)
-                            foreach (var category in enabled.Where(listings.ContainsKey))
-                                categoryStates[category] = listings[category].DiscoveryPartial ? "Partial (applied)" : "Imported";
-                        else
-                            foreach (var category in categories)
+                        if (!didImport)
+                            foreach (var category in categories.Where(category => !progressive
+                                || completed.Contains(category) && !progressivelyApplied.Contains(category)))
                                 categoryStates[category] = partial.Contains(category) ? "Partial (unchanged)" : "Unchanged";
-                        status.CategoriesSkipped = didImport ? 0 : completed.Count;
+                        status.CategoriesSkipped = didImport ? 0 : completed.Count - progressivelyApplied.Count;
                     }
 
                     linked.Token.ThrowIfCancellationRequested();
@@ -1185,7 +1240,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         store.ClearRecovery();
                         status.State = partial.Count == 0 ? "Completed" : "Partial";
                         status.Phase = partial.Count != 0
-                            ? (didImport ? "Partial refresh completed; valid updates applied, rejected entries excluded"
+                            ? (progressive ? "Partial refresh completed; incomplete categories left unchanged" :
+                                didImport ? "Partial refresh completed; valid updates applied, rejected entries excluded"
                                 : "Partial refresh completed; merged library unchanged")
                             : (categories.Length == 0 ? "No enabled categories" : "Completed");
                         if (partial.Count != 0) status.Category = requestedCategory ?? partial.OrderBy(category => category, StringComparer.Ordinal).First();

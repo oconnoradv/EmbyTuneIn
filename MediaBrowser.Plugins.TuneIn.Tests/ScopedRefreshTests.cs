@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
@@ -16,6 +17,231 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 {
     public sealed class ScopedRefreshTests
     {
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task RestrictedImportUsesTheEmbyArgumentAndOnlyRequiresItsCategory(bool enumerateChannelRoot)
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Null(Assert.Single(fixture.Manager.Restrictions));
+            var oldSports = fixture.Category("sports").Fingerprint;
+            fixture.Artwork.Clear();
+            fixture.Inventory.Clear();
+            fixture.Manager.EnumerateChannelRoot = enumerateChannelRoot;
+            fixture.Version++;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Equal(fixture.Category("talk").RootId, fixture.Manager.Restrictions.Last());
+            Assert.Equal(oldSports, fixture.Category("sports").Fingerprint);
+            Assert.Equal(new[] { "talk" }, fixture.Artwork);
+            Assert.Equal(new[] { "talk", "talk" }, fixture.Inventory);
+            Assert.Equal(2, refresh.Status().ImportFoldersServed);
+            Assert.Equal(2, refresh.Status().ImportFoldersTotal);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task IncompleteOrOutOfScopeReadLeavesDirtyStateAndRetriesWithTheSameRestriction(bool readSibling)
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            var originalTalk = fixture.Category("talk").Fingerprint;
+            var talkId = fixture.Category("talk").RootId;
+            fixture.Manager.SkipDescendants = !readSibling;
+            fixture.Manager.ReadSibling = readSibling;
+            fixture.Version++;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Error", refresh.Status().State);
+            Assert.Equal("talk", fixture.Store.Read().DirtyCategory);
+            Assert.True(fixture.Store.Read().DirtyImportWasScoped);
+            Assert.Equal(originalTalk, fixture.Category("talk").Fingerprint);
+            Assert.Equal(new[] { null, talkId }, fixture.Manager.Restrictions);
+            fixture.Manager.SkipDescendants = fixture.Manager.ReadSibling = false;
+            var reads = fixture.Fetches;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Equal(reads, fixture.Fetches);
+            Assert.Equal(new[] { null, talkId, talkId }, fixture.Manager.Restrictions);
+            Assert.Null(fixture.Store.Read().DirtyCategory);
+        }
+
+        [Theory]
+        [InlineData("default")]
+        [InlineData("topology")]
+        [InlineData("unrelated dirty")]
+        public async Task DoesNotRestrictWhenTheBaselineOrOptInDoesNotPermitIt(string reason)
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: reason != "default");
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            var checkpoint = fixture.Store.Read();
+            checkpoint.NeedsImport = reason == "topology";
+            if (reason == "unrelated dirty") checkpoint.DirtyCategory = "sports";
+            fixture.Store.Write(checkpoint);
+            fixture.Version++;
+            var recovery = refresh.Start("talk");
+            if (recovery.RecoveryChoiceRequired) refresh.Start("talk", recovery.RecoveryId, false);
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Equal(new string[] { null, null }, fixture.Manager.Restrictions);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task RefreshAllKeepsTheEarlierCommitWhenLaterDiscoveryOrImportFails(bool failDuringImport)
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            var oldTalk = fixture.Category("talk").Fingerprint;
+            var oldSports = fixture.Category("sports").Fingerprint;
+            var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            async Task Fail(CancellationToken token)
+            {
+                entered.SetResult(true);
+                await release.Task.WaitAsync(token);
+                throw new InvalidDataException("A later provider page failed.");
+            }
+            if (failDuringImport)
+            {
+                var sportsId = fixture.Category("sports").RootId;
+                fixture.Manager.BeforeImport = (restriction, token) => restriction == sportsId
+                    ? Fail(token) : Task.CompletedTask;
+            }
+            else fixture.BeforeSports = Fail;
+            fixture.Version++;
+            refresh.Start();
+            try
+            {
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.NotEqual(oldTalk, fixture.Category("talk").Fingerprint);
+                Assert.Equal(oldSports, fixture.Category("sports").Fingerprint);
+                Assert.Equal(failDuringImport ? "sports" : null, fixture.Store.Read().DirtyCategory);
+                Assert.Equal(failDuringImport, fixture.Store.Read().DirtyImportWasScoped);
+                Assert.Equal(fixture.Category(failDuringImport ? "sports" : "talk").RootId,
+                    fixture.Manager.Restrictions.Last());
+            }
+            finally { release.TrySetResult(true); }
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Error", refresh.Status().State);
+            Assert.NotEqual(oldTalk, fixture.Category("talk").Fingerprint);
+            Assert.Equal(oldSports, fixture.Category("sports").Fingerprint);
+            Assert.Equal("Imported", refresh.Status().Categories.Single(category => category.Category == "talk").State);
+            Assert.Equal(failDuringImport ? "sports" : null, fixture.Store.Read().DirtyCategory);
+        }
+
+        private sealed class ExperimentalImportFixture : IDisposable
+        {
+            private readonly string path = Path.Combine(Path.GetTempPath(), $"tunein-experimental-{Guid.NewGuid():N}.xml");
+            private readonly TuneInDirectory directory;
+            private readonly TuneInChannel channel;
+            private readonly IChannelManager manager;
+            internal readonly ExperimentalChannelManager Manager;
+            internal readonly TuneInRefreshStore Store;
+            internal readonly List<string> Artwork = new List<string>();
+            internal readonly List<string> Inventory = new List<string>();
+            internal int Version = 1;
+            internal int Fetches;
+            internal Func<CancellationToken, Task> BeforeSports;
+
+            internal ExperimentalImportFixture()
+            {
+                var config = new PluginConfiguration
+                {
+                    SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true
+                };
+                directory = new TuneInDirectory(() => config, async (request, token) =>
+                {
+                    Interlocked.Increment(ref Fetches);
+                    if (BeforeSports != null && request.Parameters.GetValueOrDefault("c") == "sports")
+                        await BeforeSports(token);
+                    if (!request.Parameters.ContainsKey("id"))
+                        return XDocument.Parse("<opml><body><outline type='link' text='Subfolder' "
+                            + "URL='https://opml.radiotime.com/Browse.ashx?id=c1'/></body></opml>");
+                    return XDocument.Parse($"<opml><body><outline type='audio' guide_id='s{Version}' text='Radio'/></body></opml>");
+                });
+                channel = new TuneInChannel(directory);
+                manager = DispatchProxy.Create<IChannelManager, ExperimentalChannelManager>();
+                Manager = (ExperimentalChannelManager)manager;
+                Store = new TuneInRefreshStore(path);
+            }
+
+            internal TuneInCategorySnapshot Category(string category) =>
+                Store.Read().Categories.Single(saved => saved.Category == category);
+
+            internal TuneInRefresh Create(bool allowScoped) => new TuneInRefresh(directory, Store, () => channel,
+                (source, folder, session, strict, token) => source.GetRefreshChannelItems(folder, session, strict, token),
+                (source, staged, restriction, token) => TuneInRefreshService.ImportChannel(manager, source, staged, restriction, token),
+                null, timeoutOverride: TimeSpan.FromSeconds(10), allowScopedImport: allowScoped,
+                updateArtwork: (_, folder, token) => Artwork.Add(directory.Resolve(directory.Snapshot(), folder).Category),
+                countStations: (_, folder, token) =>
+                {
+                    Inventory.Add(directory.Resolve(directory.Snapshot(), folder).Category);
+                    return 1;
+                });
+
+            public void Dispose()
+            {
+                Store.Clear();
+                Store.ClearDiscovery();
+                Store.ClearRecovery();
+            }
+        }
+
+        public class ExperimentalChannelManager : DispatchProxy
+        {
+            internal readonly List<string> Restrictions = new List<string>();
+            internal bool EnumerateChannelRoot = true;
+            internal bool SkipDescendants;
+            internal bool ReadSibling;
+            internal Func<string, CancellationToken, Task> BeforeImport;
+
+            protected override object Invoke(MethodInfo method, object[] args)
+            {
+                if (method.Name != "RefreshChannelContent") throw new NotSupportedException(method.Name);
+                return Refresh((TuneInChannel)args[0], (int)args[1], (string)args[2], (CancellationToken)args[3]);
+            }
+
+            private async Task Refresh(TuneInChannel channel, int depth, string restriction, CancellationToken token)
+            {
+                Restrictions.Add(restriction);
+                if (BeforeImport != null) await BeforeImport(restriction, token);
+                async Task<ChannelItemResult> Read(string id) =>
+                    await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = id }, token);
+                async Task Walk(string id, int level)
+                {
+                    if (level > depth) throw new InvalidOperationException("The delegated depth did not cover the staged tree.");
+                    var listing = await Read(id);
+                    if (restriction != null && SkipDescendants) return;
+                    foreach (var child in listing.Items.Where(item => item.Type == ChannelItemType.Folder))
+                        await Walk(child.Id, level + 1);
+                }
+                if (restriction == null || EnumerateChannelRoot || ReadSibling)
+                {
+                    var roots = await Read(null);
+                    Assert.Equal(new[] { "Talk", "Sports" }, roots.Items.Select(item => item.Name));
+                    if (ReadSibling)
+                        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                            await Read(roots.Items.Single(root => root.Id != restriction).Id));
+                }
+                await Walk(restriction, restriction == null ? 1 : 2);
+            }
+        }
+
         [Fact]
         public async Task CommittedListingIsAvailableOnlyDuringRefreshAndFreshDiscoverySkipsUnchangedScope()
         {

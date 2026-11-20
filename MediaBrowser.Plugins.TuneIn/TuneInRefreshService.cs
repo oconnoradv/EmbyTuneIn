@@ -11,6 +11,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -160,6 +161,11 @@ namespace MediaBrowser.Plugins.TuneIn
             coordinator?.EnsureNoCleanup();
         }
 
+        internal static Task ImportChannel(IChannelManager manager, TuneInChannel channel,
+            TuneInStagedImport staged, string restrictTopLevelFolderId, CancellationToken token) =>
+            channel.ImportAsync(staged, () =>
+                manager.RefreshChannelContent(channel, staged.ImportRefreshLevel, restrictTopLevelFolderId, token));
+
         internal static TuneInRefresh GetShared(IHttpClient client, IApplicationHost host, IApplicationPaths paths,
             IChannelManager manager, ILogManager logManager, ILibraryManager library)
         {
@@ -181,12 +187,11 @@ namespace MediaBrowser.Plugins.TuneIn
                     () => manager.GetChannel<TuneInChannel>(),
                     (channel, folder, session, strict, token) =>
                         channel.GetRefreshChannelItems(folder, session, strict, token),
-                    (channel, staged, folder, token) =>
-                        channel.ImportAsync(staged,
-                            () => manager.RefreshChannelContent(channel, staged.ImportRefreshLevel, null, token)),
+                    (channel, staged, folder, token) => ImportChannel(manager, channel, staged, folder, token),
                     logger,
                     updateArtwork: (channel, folder, token) => channel.UpdateCategoryArtwork(folder, token),
-                    libraryCleanup: cleanup);
+                    libraryCleanup: cleanup,
+                    allowScopedImport: Environment.GetEnvironmentVariable("TUNEIN_EXPERIMENTAL_SCOPED_IMPORT") == "1");
                 return shared;
             }
         }

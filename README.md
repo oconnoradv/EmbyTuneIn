@@ -316,12 +316,29 @@ import commit acknowledgment or resume cursor. Their
 [`IChannelManager.RefreshChannelContent`](https://dev.emby.media/reference/pluginapi/MediaBrowser.Controller.Channels.IChannelManager.html)
 accepts `maxRefreshLevel` and `restrictTopLevelFolderId`: it can restrict a run
 to a top-level category, not resume at an arbitrary nested Music folder.
-Successful discovery is retained in memory for import retries, not durably
-across a server restart. Page checkpoints recover interrupted discovery, not
-completed database writes. The current recovery behavior therefore does not
-meet a requirement to preserve and skip confirmed completed import work.
+Successful discovery is retained in memory for whole-tree and single-category
+import retries, not durably across a server restart. Page checkpoints recover
+interrupted discovery, not completed database writes. TuneIn cannot skip
+individual folders based on a confirmed database write.
 Skipping served folders or returning shortened listings is not a safe remedy;
 it could omit valid siblings during Emby reconciliation.
+
+#### Experimental category-by-category imports
+
+The default is unchanged: TuneIn finishes discovery before handing Emby the
+complete staged tree. On a disposable test server only, set
+`TUNEIN_EXPERIMENTAL_SCOPED_IMPORT=1` in the Emby process environment and restart
+Emby to opt in. This path has been tested with fixtures, not a live Emby server.
+
+With an intact, matching baseline, a single-category refresh imports only that
+category. **Refresh all enabled categories** can publish one fully discovered
+category at a time without waiting for later categories. Incomplete categories
+are left unchanged during a progressive run. Each verified import is saved
+before discovery continues, so a later failure does not invalidate previously
+applied categories. First builds and topology changes use the full-tree path.
+An interrupted scoped import is not automatically retried as a full-tree
+import. After a restart, TuneIn may rediscover or replay an entire category;
+there is no within-category cursor, and a served folder is not a commit.
 
 While a staged import is stalled, the server logs the time since progress,
 the unread folder count, and whether Emby is still importing or draining after

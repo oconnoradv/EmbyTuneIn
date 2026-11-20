@@ -83,6 +83,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public DateTime StartedUtc { get; set; }
         public List<TuneInCategorySnapshot> Categories { get; set; } = new List<TuneInCategorySnapshot>();
         public string DirtyCategory { get; set; }
+        public bool DirtyImportWasScoped { get; set; }
         public int ChannelImportVersion { get; set; }
         public List<string> PendingCategories { get; set; } = new List<string>();
         public bool NeedsImport { get; set; }
@@ -240,7 +241,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     .Sum(item => 256L + 2L * ((item?.Id?.Length ?? 0) + (item?.Name?.Length ?? 0)
                     + (item?.Type?.Length ?? 0) + (item?.ContentType?.Length ?? 0)
                     + (item?.MediaType?.Length ?? 0) + (item?.ImageUrl?.Length ?? 0))))) > TuneInStagedImport.MaxEstimatedBytes
-                || (checkpoint.DirtyCategory != null && !validCategories.Contains(checkpoint.DirtyCategory)))
+                || (checkpoint.DirtyCategory != null && !validCategories.Contains(checkpoint.DirtyCategory))
+                || (checkpoint.DirtyImportWasScoped && checkpoint.DirtyCategory == null))
                 throw new InvalidDataException("Invalid TuneIn refresh state.");
 
             foreach (var category in checkpoint.Categories)

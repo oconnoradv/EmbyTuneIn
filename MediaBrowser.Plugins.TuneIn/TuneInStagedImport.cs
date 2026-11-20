@@ -24,6 +24,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly CancellationToken token;
         private readonly Action<int, int> report;
         private readonly Action validate;
+        private readonly ChannelItemResult scopedChannelRoot;
         private readonly object gate = new object();
         private Exception failure;
 
@@ -35,11 +36,13 @@ namespace MediaBrowser.Plugins.TuneIn
             .SelectMany(folder => folder.Items).Where(item => item.Type == ChannelItemType.Media)
             .Select(item => stationId(item.Id)).Where(id => id != null).Distinct(StringComparer.Ordinal).Count();
 
-        private TuneInStagedImport(CancellationToken token, Action<int, int> report, Action validate)
+        private TuneInStagedImport(CancellationToken token, Action<int, int> report, Action validate,
+            ChannelItemResult scopedChannelRoot = null)
         {
             this.token = token;
             this.report = report;
             this.validate = validate;
+            this.scopedChannelRoot = scopedChannelRoot;
         }
 
         internal static async Task<TuneInStagedImport> DiscoverAsync(TuneInChannel channel, ChannelItemInfo root,
@@ -259,11 +262,16 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal static TuneInStagedImport ForChannel(IEnumerable<ChannelItemInfo> roots,
             IEnumerable<TuneInCategorySnapshot> categories, CancellationToken token,
-            Action<int, int> report, Action validate)
+            Action<int, int> report, Action validate, string restrictTopLevelFolderId = null)
         {
-            var staged = new TuneInStagedImport(token, report, validate);
             var rootItems = roots.ToList();
-            staged.folders.Add(string.Empty, new ChannelItemResult { Items = rootItems });
+            var channelRoot = new ChannelItemResult { Items = rootItems };
+            var staged = new TuneInStagedImport(token, report, validate,
+                restrictTopLevelFolderId == null ? null : channelRoot);
+            if (restrictTopLevelFolderId == null)
+                staged.folders.Add(string.Empty, channelRoot);
+            else
+                categories = new[] { categories.Single(category => category.RootId == restrictTopLevelFolderId) };
             foreach (var category in categories)
             {
                 token.ThrowIfCancellationRequested();
@@ -275,11 +283,11 @@ namespace MediaBrowser.Plugins.TuneIn
                     staged.folders.Add(folder.Id, RestoreFolder(folder));
                 }
             }
-            staged.ImportRefreshLevel = staged.MeasureImportRefreshLevel();
+            staged.ImportRefreshLevel = staged.MeasureImportRefreshLevel(restrictTopLevelFolderId);
             return staged;
         }
 
-        private int MeasureImportRefreshLevel()
+        private int MeasureImportRefreshLevel(string restrictTopLevelFolderId)
         {
             var incoming = folders.Keys.ToDictionary(id => id, _ => 0, StringComparer.Ordinal);
             foreach (var listing in folders.Values)
@@ -294,14 +302,17 @@ namespace MediaBrowser.Plugins.TuneIn
             }
 
             // Emby counts real folder levels, including each forward pagination folder.
-            if (incoming[string.Empty] != 0)
+            var start = restrictTopLevelFolderId ?? string.Empty;
+            if (!incoming.TryGetValue(start, out var referencesToStart) || referencesToStart != 0)
                 throw new InvalidOperationException("The staged TuneIn channel contains cyclic folders.");
 
-            var levels = new Dictionary<string, int>(StringComparer.Ordinal) { [string.Empty] = 1 };
+            // Keep the channel-relative depth even when Emby starts reading at the category.
+            var startLevel = restrictTopLevelFolderId == null ? 1 : 2;
+            var levels = new Dictionary<string, int>(StringComparer.Ordinal) { [start] = startLevel };
             var pending = new Queue<string>();
-            pending.Enqueue(string.Empty);
+            pending.Enqueue(start);
             var visited = 0;
-            var deepest = 1;
+            var deepest = startLevel;
             while (pending.Count != 0)
             {
                 token.ThrowIfCancellationRequested();
@@ -344,6 +355,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     queryToken.ThrowIfCancellationRequested();
                     validate?.Invoke();
                     var key = folder ?? string.Empty;
+                    if (key.Length == 0 && scopedChannelRoot != null)
+                        return new ChannelItemResult { Items = scopedChannelRoot.Items.ToList() };
                     if (!folders.TryGetValue(key, out var result))
                         throw new InvalidOperationException("Emby requested a folder outside the staged TuneIn channel.");
                     if (served.Add(key))
