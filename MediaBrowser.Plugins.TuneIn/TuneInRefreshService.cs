@@ -57,6 +57,10 @@ namespace MediaBrowser.Plugins.TuneIn
         public string Token { get; set; }
     }
 
+    [Route("/TuneIn/Cleanup/Cancel", "POST")]
+    [Authenticated(Roles = "Admin")]
+    public sealed class CancelTuneInCleanup : IReturn<TuneInRefreshStatus> { }
+
     public sealed class TuneInRefreshService : IService, IRequiresRequest
     {
         private static readonly object SharedGate = new object();
@@ -124,6 +128,12 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             EnsureAdmin();
             return refresh.StartCleanup(request.Token);
+        }
+
+        public TuneInRefreshStatus Post(CancelTuneInCleanup request)
+        {
+            EnsureAdmin();
+            return refresh.CancelCleanup();
         }
 
         private void EnsureAdmin()

@@ -799,6 +799,30 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         });
     }
 
+    function stopCleanup(instance) {
+        var view = instance.view;
+        if (!instance.refreshVisible || !instance.maintenanceSection.open ||
+            view.querySelector('.cleanupCancel').disabled) return;
+        var epoch = instance.viewEpoch;
+        instance.cleanupAction = true;
+        instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
+        view.querySelector('.cleanupError').textContent = '';
+        refreshControls(instance, instance.refreshAvailable);
+        return ApiClient.ajax({
+            type: 'POST', dataType: 'json', url: ApiClient.getUrl('TuneIn/Cleanup/Cancel')
+        }).then(function (status) {
+            if (epoch === instance.viewEpoch) renderRefresh(instance, status);
+        }).catch(function () {
+            if (epoch === instance.viewEpoch)
+                view.querySelector('.cleanupError').textContent =
+                    'Could not confirm cleanup stopped. Check its status and try again.';
+        }).finally(function () {
+            instance.cleanupAction = false;
+            if (epoch === instance.viewEpoch) refreshControls(instance, instance.refreshAvailable);
+            if (instance.refreshVisible) pollStatus(instance, instance.viewEpoch);
+        });
+    }
+
     function refreshControls(instance, available) {
         var cannotStart = !available || !instance.config || !!instance.refreshAction || instance.saving ||
             instance.cleanupBusy || instance.cleanupAction;
@@ -823,6 +847,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         cannotClean = cannotClean || !!backupInProgress(instance);
         instance.view.querySelector('.cleanupScope').disabled = cannotClean;
         instance.view.querySelector('.cleanupPreview').disabled = cannotClean || !instance.view.querySelector('.cleanupScope').value;
+        instance.view.querySelector('.cleanupCancel').disabled = !available || !instance.cleanupBusy ||
+            !!instance.cleanupAction || !!(status && status.Cleanup && status.Cleanup.Cancelling);
         instance.view.querySelector('.cleanupConfirm').disabled = cannotClean || !instance.cleanupPreview ||
             !instance.view.querySelector('.cleanupBackupVerified').checked;
         editing(instance);
@@ -1070,6 +1096,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         view.querySelector('.refreshLogButton').addEventListener('click', function () { return retrieveRefreshLog(instance); });
         view.querySelector('.cleanupPreview').addEventListener('click', function () { return doCleanup(instance, false); });
         view.querySelector('.cleanupConfirm').addEventListener('click', function () { return doCleanup(instance, true); });
+        view.querySelector('.cleanupCancel').addEventListener('click', function () { return stopCleanup(instance); });
         view.querySelector('.cleanupScope').addEventListener('change', function () {
             clearCleanupPreview(instance);
             refreshControls(instance, instance.refreshAvailable);

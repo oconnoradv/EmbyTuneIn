@@ -287,7 +287,8 @@ Administrators can open **Maintenance → Clean Up Library Folders** below **Cat
 The Maintenance panel follows the active Emby theme; its orange cleanup warning
 appears when the panel is expanded.
 The Maintenance and Catalog Refresh headers indicate when their work is active,
-even while collapsed. Their activity dots respect reduced-motion preferences.
+even while collapsed. Their amber activity highlights alternate in color unless reduced
+motion is preferred.
 Cleanup cannot be undone. **Backup Emby** requests the normal **Emby Server Backup**
 scheduled task. It requires the [Backup & Restore plugin and Emby Premiere](https://emby.media/support/articles/Backup-Using-Plugin.html)
 and uses your existing backup settings. TuneIn requires exactly one scheduled
@@ -306,6 +307,9 @@ references to removed entries may break.
 
 Refreshes (including schedules and recovery) and settings writes cannot run
 while cleanup is active. The dashboard reports progress and partial failures.
+**Stop cleanup** requests a cooperative stop after any current removal finishes;
+already removed entries are not restored. While stopping, settings and refreshes
+remain blocked. Preview again to remove remaining entries.
 Before removal, cleanup clears recovery and discovery checkpoints. Single-category
 cleanup preserves a compatible saved category baseline and records the cleaned
 category before deleting anything, including across restart or partial failure.

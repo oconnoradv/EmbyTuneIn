@@ -55,7 +55,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
         '.settingsLockState', '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
         '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
-        '.cleanupConfirm', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.cleanupScope', '.backupStart',
+        '.cleanupConfirm', '.cleanupCancel', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.cleanupScope', '.backupStart',
         '.backupStatus', '.cleanupBackupVerified', '#tuneInReportHint']) elements[name] = new Element();
     for (const [section, summary, open] of [
         ['.globalSection', '.globalSummary', true],
@@ -193,9 +193,13 @@ test('all dashboard actions use native Emby buttons without plugin color overrid
 
 test('main settings, refresh, and maintenance share one width container', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    assert.match(html, /<div class="auto-center">\s*<form>[\s\S]*?<\/form>\s*<details class="tuneInSection tuneInNeutralPanel tuneInRefresh"/);
+    assert.match(html, /<div class="auto-center tuneInPanelLayout">\s*<form>[\s\S]*?<\/form>\s*<details class="tuneInSection tuneInNeutralPanel tuneInRefresh"/);
     assert.match(html, /<\/details>\s*<details class="tuneInSection tuneInNeutralPanel">\s*<summary class="maintenanceSummary">/);
-    assert.match(html, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.tuneInActivity::before\s*\{\s*animation:\s*none/);
+    assert.match(html, /\.tuneInPanelLayout\s*\{\s*max-width:\s*80ch/);
+    assert.match(html, /\.tuneInActivity\s*\{[^}]*animation:\s*tuneInActivityPulse/);
+    assert.match(html, /\.tuneInActivity\s*\{[^}]*background-color:\s*#fff0c2/);
+    assert.match(html, /@keyframes tuneInActivityPulse\s*\{\s*50%\s*\{\s*background-color:\s*#ffcb71/);
+    assert.match(html, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.tuneInActivity\s*\{\s*animation:\s*none/);
 });
 
 test('first activation opens and loads Language and Location even when native click defaults are cancelled', async () => {
@@ -947,6 +951,87 @@ test('maintenance previews before confirming and blocks settings and refresh unt
     assert.equal(app.elements['.maintenanceIndicator'].hidden, true);
     assert.equal(app.elements['.globalFields'].disabled, false);
     assert.equal(app.elements['.configurationFields'].disabled, false);
+});
+
+test('maintenance stop requests cancellation and keeps controls locked until it drains', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    const running = { State: 'NeverRun', SettingsLocked: false, Categories: [],
+        Cleanup: { State: 'Running', Removed: 3, Total: 9, Failed: 0 } };
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve(running);
+    await visit;
+    await settle();
+    await open(app.elements['.maintenanceSection']);
+    assert.equal(app.elements['.cleanupCancel'].disabled, false);
+    const stop = app.elements['.cleanupCancel'].handlers.click();
+    assert.equal(app.cleanup[0].options.url.route, 'TuneIn/Cleanup/Cancel');
+    assert.equal(app.elements['.cleanupCancel'].disabled, true);
+    app.elements['.cleanupCancel'].handlers.click();
+    assert.equal(app.cleanup.length, 1);
+    app.cleanup[0].resolve({ ...running, Cleanup: { ...running.Cleanup, Cancelling: true,
+        Message: 'Stopping cleanup; the current removal must finish.' } });
+    await stop;
+    assert.equal(app.elements['.cleanupCancel'].disabled, true);
+    assert.equal(app.elements['.maintenanceIndicator'].hidden, false);
+    assert.equal(app.elements['.settingsLocked'].disabled, true);
+    assert.match(app.elements['.cleanupStatus'].textContent, /Stopping cleanup/);
+    app.refresh.at(-1).resolve({ ...running, Cleanup: { State: 'Stopped', Removed: 4, Total: 9,
+        Failed: 0, Message: 'Cleanup stopped. Removed entries cannot be restored by stopping.' } });
+    await settle();
+    assert.equal(app.elements['.maintenanceIndicator'].hidden, true);
+    assert.equal(app.elements['.cleanupCancel'].disabled, true);
+    assert.equal(app.elements['.settingsLocked'].disabled, false);
+    assert.match(app.elements['.cleanupStatus'].textContent, /4 of 9.*Cleanup stopped/);
+});
+
+test('maintenance stop failure is reported and may be retried', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve({ State: 'NeverRun', SettingsLocked: false, Categories: [],
+        Cleanup: { State: 'Running', Removed: 0, Total: 3 } });
+    await visit;
+    await settle();
+    await open(app.elements['.maintenanceSection']);
+    const stop = app.elements['.cleanupCancel'].handlers.click();
+    app.cleanup[0].reject(new Error('offline'));
+    await stop;
+    assert.match(app.elements['.cleanupError'].textContent, /Could not confirm cleanup stopped/);
+    assert.equal(app.elements['.cleanupCancel'].disabled, false);
+    const retry = app.elements['.cleanupCancel'].handlers.click();
+    assert.equal(app.cleanup.length, 2);
+    app.cleanup[1].resolve({ State: 'NeverRun', SettingsLocked: false, Categories: [],
+        Cleanup: { State: 'Running', Cancelling: true, Removed: 0, Total: 3 } });
+    await retry;
+    assert.equal(app.elements['.cleanupCancel'].disabled, true);
+    assert.equal(app.elements['.cleanupError'].textContent, '');
+});
+
+test('a stale cleanup status poll cannot overwrite a stop response', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    const running = { State: 'NeverRun', SettingsLocked: false, Categories: [],
+        Cleanup: { State: 'Running', Removed: 0, Total: 3 } };
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve(running);
+    await visit;
+    await settle();
+    await open(app.elements['.maintenanceSection']);
+    [...app.timers.values()].find(timer => timer.delay === 1500).handler();
+    assert.equal(app.refresh.length, 2);
+    const stop = app.elements['.cleanupCancel'].handlers.click();
+    app.cleanup[0].resolve({ ...running, Cleanup: { ...running.Cleanup, Cancelling: true,
+        Message: 'Stopping cleanup' } });
+    await stop;
+    app.refresh[1].resolve(running);
+    await settle();
+    assert.match(app.elements['.cleanupStatus'].textContent, /Stopping cleanup/);
+    assert.equal(app.elements['.cleanupCancel'].disabled, true);
+    assert.equal(app.refresh.length, 3);
+    app.refresh[2].resolve({ ...running, Cleanup: { State: 'Stopped', Removed: 1, Total: 3 } });
+    await settle();
+    assert.equal(app.elements['.maintenanceIndicator'].hidden, true);
 });
 
 test('refresh locks settings immediately and shows activity even when the section is collapsed', async () => {

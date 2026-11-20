@@ -482,9 +482,24 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
+        internal TuneInRefreshStatus CancelCleanup()
+        {
+            lock (gate)
+            {
+                if (Cleaning && !cleanup.Cancelling)
+                {
+                    cleanup.Cancelling = true;
+                    cleanupCancellation.Cancel();
+                    cleanup.Message = "Stopping cleanup; the current removal must finish.";
+                }
+                return Status();
+            }
+        }
+
         private async Task RunCleanupAsync(TuneInLibraryCleanup.Plan plan, CancellationToken token)
         {
             var stopped = false;
+            var cancelled = false;
             var baselinePreserved = false;
             try
             {
@@ -521,6 +536,10 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
                 }, token).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                cancelled = true;
+            }
             catch (Exception error)
             {
                 stopped = true;
@@ -530,8 +549,13 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 lock (gate)
                 {
-                    cleanup.State = stopped ? "Failed" : cleanup.Failed > 0 ? "Partial" : "Completed";
+                    cleanup.Cancelling = false;
+                    cleanup.State = stopped ? "Failed" : cancelled ? "Stopped" : cleanup.Failed > 0 ? "Partial" : "Completed";
+                    var recoveryMessage = plan.Category == null || !baselinePreserved
+                        ? "Run Refresh all enabled categories to rebuild the catalog."
+                        : "Other category snapshots were retained. A refresh can recreate enabled categories.";
                     cleanup.Message = stopped ? "Cleanup stopped before completing. Review the server log and preview again if needed."
+                        : cancelled ? "Cleanup stopped. Removed entries cannot be restored by stopping. Preview again to remove remaining entries. " + recoveryMessage
                         : plan.Category == null ? "Run Refresh all enabled categories to rebuild the catalog."
                         : baselinePreserved ? "Other category snapshots were retained. A refresh can recreate enabled categories."
                         : "No compatible baseline was retained. Run Refresh all enabled categories to rebuild the catalog.";

@@ -161,8 +161,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var service = new TuneInRefreshService(refresh);
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new PreviewTuneInCleanup()));
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new StartTuneInCleanup()));
+                Assert.Throws<UnauthorizedAccessException>(() => service.Post(new CancelTuneInCleanup()));
                 Assert.Equal("Admin", typeof(PreviewTuneInCleanup).GetCustomAttribute<AuthenticatedAttribute>().Roles);
                 Assert.Equal("Admin", typeof(StartTuneInCleanup).GetCustomAttribute<AuthenticatedAttribute>().Roles);
+                Assert.Equal("Admin", typeof(CancelTuneInCleanup).GetCustomAttribute<AuthenticatedAttribute>().Roles);
                 var expiry = refresh.PreviewCleanup();
                 now = now.AddMinutes(6);
                 Assert.Throws<InvalidOperationException>(() => refresh.StartCleanup(expiry.Token));
@@ -189,6 +191,104 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 store.ClearDiscovery();
                 store.ClearRecovery();
             }
+        }
+
+        [Fact]
+        public async Task StopCleanupDrainsCurrentRemovalRetainsProgressAndKeepsScopedRecoveryMarker()
+        {
+            var fixture = new Fixture();
+            fixture.Config.EnableSports = true;
+            fixture.Add(2, 1, fixture.SignedId());
+            fixture.Add(3, 1, fixture.SignedId());
+            fixture.Add(4, 1, fixture.SignedId("sports"));
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            var path = Path.Combine(Path.GetTempPath(), "tunein-cleanup-" + Guid.NewGuid().ToString("N"));
+            var store = new TuneInRefreshStore(path);
+            var snapshot = fixture.Directory.Snapshot();
+            var now = DateTime.UtcNow;
+            store.Write(new TuneInRefreshCheckpoint { ConfigurationKey = snapshot.Key, SavedUtc = now, StartedUtc = now });
+            fixture.Library.BeforeDelete = () =>
+            {
+                entered.Set();
+                if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException();
+            };
+            using var refresh = new TuneInRefresh(fixture.Directory, store,
+                () => throw new InvalidOperationException(), (_, _, _, _, _) => throw new InvalidOperationException(),
+                (_, _, _, _) => throw new InvalidOperationException(), null, libraryCleanup: fixture.Cleanup);
+            try
+            {
+                Assert.Equal("Idle", refresh.CancelCleanup().Cleanup.State);
+                var preview = refresh.PreviewCleanup("talk");
+                Assert.Equal(2, preview.Folders);
+                refresh.StartCleanup(preview.Token);
+                Assert.True(await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(5))));
+                Assert.Contains("talk", store.Read().CleanedCategories);
+                var stopping = refresh.CancelCleanup().Cleanup;
+                Assert.Equal("Running", stopping.State);
+                Assert.True(stopping.Cancelling);
+                Assert.True(refresh.CancelCleanup().Cleanup.Cancelling);
+                Assert.Throws<InvalidOperationException>(() => refresh.Start());
+                Assert.Throws<InvalidOperationException>(() => refresh.UpdateConfiguration(() => { }));
+                Assert.Throws<InvalidOperationException>(() => refresh.PreviewCleanup());
+                release.Set();
+                Assert.True(await Task.Run(() => SpinWait.SpinUntil(
+                    () => refresh.Status().Cleanup.State != "Running", TimeSpan.FromSeconds(5))));
+                var result = refresh.Status().Cleanup;
+                Assert.Equal("Stopped", result.State);
+                Assert.False(result.Cancelling);
+                Assert.Equal(1, result.Removed);
+                Assert.Equal(0, result.Failed);
+                Assert.Equal(2, result.Total);
+                Assert.Single(fixture.Library.Removed);
+                Assert.True(fixture.Library.Items.ContainsKey(4));
+                Assert.Contains("talk", store.Read().CleanedCategories);
+                var remaining = refresh.PreviewCleanup("talk");
+                Assert.NotNull(remaining.Token);
+                Assert.Equal(1, remaining.Folders);
+            }
+            finally
+            {
+                release.Set();
+                store.Clear();
+                store.ClearDiscovery();
+                store.ClearRecovery();
+            }
+        }
+
+        [Fact]
+        public async Task CancellationPreservesFailuresAndDoesNotDeleteRemainingEntries()
+        {
+            var fixture = new Fixture();
+            fixture.Add(2, 1, fixture.SignedId());
+            fixture.Add(3, 1, fixture.SignedId());
+            var plan = fixture.Cleanup.Preview(fixture.Directory.Snapshot(), "talk");
+            using var cancellation = new CancellationTokenSource();
+            fixture.Library.BeforeDelete = () =>
+            {
+                cancellation.Cancel();
+                throw new InvalidOperationException("Removal failed");
+            };
+            var counts = (0, 0);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                fixture.Cleanup.RunAsync(plan, (removed, failed) => counts = (removed, failed), cancellation.Token));
+            Assert.Equal((0, 1), counts);
+            Assert.Empty(fixture.Library.Removed);
+        }
+
+        [Fact]
+        public async Task CleanupCancelledBeforeFirstRemovalDoesNotDeleteEntries()
+        {
+            var fixture = new Fixture();
+            fixture.Add(2, 1, fixture.SignedId());
+            var plan = fixture.Cleanup.Preview(fixture.Directory.Snapshot(), "talk");
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            var counts = (-1, -1);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                fixture.Cleanup.RunAsync(plan, (removed, failed) => counts = (removed, failed), cancellation.Token));
+            Assert.Equal((0, 0), counts);
+            Assert.Empty(fixture.Library.Removed);
         }
 
         private sealed class Fixture

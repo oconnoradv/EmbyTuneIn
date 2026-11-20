@@ -99,6 +99,9 @@
         .tuneInSection {
             margin-block: 1em;
         }
+        .tuneInPanelLayout {
+            max-width: 80ch;
+        }
         .status[data-configuration-required="true"] {
             padding: .65em .85em;
             border: 1px solid #b97820;
@@ -181,6 +184,11 @@
             align-items: center;
             gap: .4em;
             margin-inline-start: .65em;
+            padding: .15em .45em;
+            border-radius: .3em;
+            color: #302100;
+            background-color: #fff0c2;
+            animation: tuneInActivityPulse 1.5s ease-in-out infinite;
             font-size: .8em;
             font-weight: normal;
         }
@@ -192,13 +200,12 @@
             flex: none;
             border-radius: 50%;
             background: currentColor;
-            animation: tuneInActivityPulse 1.5s ease-in-out infinite;
         }
         @keyframes tuneInActivityPulse {
-            50% { opacity: .25; }
+            50% { background-color: #ffcb71; }
         }
         @media (prefers-reduced-motion: reduce) {
-            .tuneInActivity::before { animation: none; }
+            .tuneInActivity { animation: none; }
         }
         .catalogRefreshPrompt {
             margin: .75em 0;
@@ -413,7 +420,7 @@
     </style>
     <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
 
-        <div class="auto-center">
+        <div class="auto-center tuneInPanelLayout">
         <form>
             <p class="status" role="status" aria-live="polite"></p>
             <p class="status catalogRefreshPrompt" role="status" hidden></p>
@@ -558,6 +565,7 @@
                 <div class="tuneInCleanupActions">
                     <button is="emby-button" type="button" class="raised backupStart" disabled>Backup Emby</button>
                     <button is="emby-button" type="button" class="raised cleanupPreview" disabled>Preview cleanup</button>
+                    <button is="emby-button" type="button" class="raised cleanupCancel" disabled>Stop cleanup</button>
                 </div>
                 <p class="backupStatus" role="status"></p>
                 <div class="cleanupConfirmation" hidden>
