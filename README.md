@@ -248,7 +248,11 @@ the entire import and verification succeed.
 
 Cancellation, scope changes, and actual import failures stop automatic recovery.
 Host operations that ignore cancellation can delay draining; another import
-never starts while the prior import task is still running. Once all three
+never starts while the prior import task is still running. The dashboard shows
+**Import deadline reached; draining** during this wait. The Emby server log
+records when each import traversal starts and how many folders were served at
+the deadline. The dashboard elapsed time covers the whole refresh, including
+discovery, retries, and draining. Once all three
 automatic retries are exhausted, the refresh reports **TimedOut**, retains the
 repair requirement, and makes a diagnostic report available. After a failed
 import, manually refreshing the same scope replays the staged catalog without

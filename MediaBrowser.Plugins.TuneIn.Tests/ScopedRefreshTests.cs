@@ -741,6 +741,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     Assert.True(refresh.Status().Busy);
                     Assert.Equal(1, retryImports);
                     Assert.Equal("Import deadline reached; waiting for active work to stop", refresh.Status().Activity);
+                    Assert.Equal("Import deadline reached; draining", refresh.Status().Phase);
+                    Assert.Equal("Import deadline reached; draining", refresh.Status().Categories.Single(category => category.Category == "music").State);
                     var pending = store.Read();
                     Assert.Equal("music", pending.DirtyCategory);
                     Assert.Equal(savedMusic, pending.Categories.Single(category => category.Category == "music").Fingerprint);

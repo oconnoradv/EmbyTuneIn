@@ -85,6 +85,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private static readonly TimeSpan DiscoveryCheckpointMaxAge = TimeSpan.FromHours(48);
         private const int DiscoveryResumeLimit = 10;
         private const int ImportRetryLimit = 3;
+        private const string ImportDeadlineActivity = "Import deadline reached; waiting for active work to stop";
         private const int FailureReportLimit = 64 * 1024;
         private const int SkipReasonDisplayLimit = 5;
         private const int SkippedEntryReportLimit = 100;
@@ -197,6 +198,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 copy.RecoveryId = copy.RecoveryCategory == null ? null : recoveryId;
                 copy.ActiveRequest = copy.Busy ? activeRequest ?? "all" : null;
                 copy.Cancelling = copy.Busy && cancellation.IsCancellationRequested;
+                if (copy.Busy && !copy.Cancelling && copy.Activity == ImportDeadlineActivity)
+                    copy.Phase = "Import deadline reached; draining";
                 copy.ActiveRequests = activeTimings == null ? 0 : Volatile.Read(ref activeTimings.ActiveResponses);
                 if (copy.Busy && copy.Activity == null && copy.Phase == "Discovering")
                     copy.Activity = activeTimings?.DescribeWait();
@@ -870,8 +873,18 @@ namespace MediaBrowser.Plugins.TuneIn
                         {
                             using (var importDeadline = new CancellationTokenSource())
                             using (var importCancellation = CancellationTokenSource.CreateLinkedTokenSource(serverToken, importDeadline.Token))
-                            using (importDeadline.Token.Register(() => Update(() =>
-                                status.Activity = "Import deadline reached; waiting for active work to stop")))
+                            using (importDeadline.Token.Register(() =>
+                            {
+                                int served = 0, total = 0;
+                                Update(() =>
+                                {
+                                    status.Activity = ImportDeadlineActivity;
+                                    served = status.ImportFoldersServed;
+                                    total = status.ImportFoldersTotal;
+                                });
+                                logger?.Warn("TuneIn import for {0}: attempt {1} of {2} reached its deadline ({3}/{4} folders served); waiting for active work to stop before retrying or finishing.",
+                                    requestedCategory ?? "all", attempt + 1, ImportRetryLimit + 1, served, total);
+                            }))
                             {
                                 var importToken = importCancellation.Token;
                                 importDeadline.CancelAfter(timeoutOverride ?? DefaultTimeout);
@@ -922,6 +935,8 @@ namespace MediaBrowser.Plugins.TuneIn
                                         status.Phase = "Importing";
                                         status.ImportFoldersTotal = full.Count;
                                     });
+                                    logger?.Info("TuneIn import for {0}: starting Emby traversal (attempt {1} of {2}, {3} folders, refresh level {4}).",
+                                        requestedCategory ?? "all", attempt + 1, ImportRetryLimit + 1, full.Count, full.ImportRefreshLevel);
                                     importTime.Start();
                                     try { await import(channel, full, null, importToken).ConfigureAwait(false); }
                                     finally { importTime.Stop(); }
