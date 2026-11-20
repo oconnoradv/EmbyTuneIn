@@ -257,6 +257,8 @@ summary logs and cannot be reconstructed from past aggregate skip counts.
 ### Clean up the TuneIn library
 
 Administrators can open **Maintenance → Clean Up Library Folders** below **Catalog Refresh**.
+The Maintenance panel follows the active Emby theme; its orange cleanup warning
+appears when the panel is expanded.
 Cleanup cannot be undone. **Backup Emby** requests the normal **Emby Server Backup**
 scheduled task. It requires the [Backup & Restore plugin and Emby Premiere](https://emby.media/support/articles/Backup-Using-Plugin.html)
 and uses your existing backup settings. TuneIn requires exactly one scheduled

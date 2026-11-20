@@ -100,12 +100,12 @@
             border-radius: .35em;
             padding: .8em 1em;
         }
-        .tuneInGlobalPanel, .tuneInCatalogPanel {
+        .tuneInGlobalPanel, .tuneInNeutralPanel {
             background: var(--tunein-neutral-surface);
             border-radius: .35em;
             padding: 0 1em;
         }
-        .tuneInGlobalPanel:has(> .tuneInGlobal[open]), .tuneInCatalogPanel[open] { padding-block-end: 1em; }
+        .tuneInGlobalPanel:has(> .tuneInGlobal[open]), .tuneInNeutralPanel[open] { padding-block-end: 1em; }
         .tuneInGlobalPanel:has(> .tuneInGlobal[data-saved="true"]), .tuneInRefreshCategories [data-outcome="Completed"] {
             background: color-mix(in srgb, #38864c 17%, transparent);
         }
@@ -175,6 +175,9 @@
             flex-wrap: wrap;
             align-items: center;
             gap: .35em;
+        }
+        .tuneInRefreshActions {
+            justify-content: center;
         }
         .tuneInCleanupWarning {
             border-width: 2px;
@@ -423,7 +426,7 @@
                 </label>
                 <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
             </div>
-            <details class="tuneInSection tuneInCatalogPanel" open>
+            <details class="tuneInSection tuneInNeutralPanel" open>
             <summary class="browsingSummary" id="tuneInBrowsingTitle">Catalog Browsing</summary>
             <fieldset class="configurationFields" aria-labelledby="tuneInBrowsingTitle" disabled>
             <p>Choose categories and station selections for the TuneIn library.</p>
@@ -445,7 +448,7 @@
                 <button is="emby-button" type="submit" class="raised button-submit block" disabled><span>Save</span></button>
             </div>
         </form>
-        <details class="auto-center tuneInSection tuneInCatalogPanel tuneInRefresh" open>
+        <details class="auto-center tuneInSection tuneInNeutralPanel tuneInRefresh" open>
             <summary class="refreshSummary">Catalog Refresh</summary>
             <p>Checks the saved TuneIn categories and updates the Emby library when needed.</p>
                 <p class="refreshStatus" role="status">Reading refresh status...</p>
@@ -482,7 +485,7 @@
                 </form>
             </dialog>
         </details>
-        <details class="auto-center tuneInSection">
+        <details class="auto-center tuneInSection tuneInNeutralPanel">
             <summary class="maintenanceSummary">Maintenance</summary>
             <div class="tuneInCleanupWarning">
                 <h3>Clean Up Library Folders</h3>
