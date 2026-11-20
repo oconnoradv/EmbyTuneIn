@@ -43,6 +43,60 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             using (await pacer.SendAsync(() => Task.FromResult(Text("second")), 1, CancellationToken.None)) { }
         }
 
+        [Fact]
+        public async Task SharedCooldownPrioritizesTwoPlaybackStartsThenLetsCatalogueProgress()
+        {
+            long ticks = DateTime.UtcNow.Ticks;
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var starts = new List<string>();
+            var pacer = new TuneInRequestPacer(() => new DateTime(Interlocked.Read(ref ticks)), async (wait, token) =>
+            {
+                var wasBlocked = !release.Task.IsCompleted;
+                await release.Task.WaitAsync(token);
+                if (!wasBlocked) Interlocked.Add(ref ticks, wait.Ticks);
+            });
+            using (await pacer.SendAsync(() => Task.FromResult(new HttpResponseInfo
+            {
+                StatusCode = HttpStatusCode.ServiceUnavailable,
+                Headers = new Dictionary<string, string> { ["Retry-After"] = "75" }
+            }), 1, CancellationToken.None, catalogueRequest: true)) { }
+            Task<HttpResponseInfo> Queue(string name, bool catalogue = false, CancellationToken token = default) =>
+                pacer.SendAsync(() =>
+                {
+                    starts.Add(name);
+                    return Task.FromResult(Text(""));
+                }, 1, token, catalogueRequest: catalogue);
+
+            var catalog = Queue("catalogue", true);
+            var one = Queue("one");
+            using var cancel = new CancellationTokenSource();
+            var cancelled = Queue("cancelled", token: cancel.Token);
+            var two = Queue("two");
+            var three = Queue("three");
+            cancel.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Empty(starts);
+            Interlocked.Add(ref ticks, TimeSpan.FromSeconds(75).Ticks);
+            release.SetResult(true);
+            foreach (var response in await Task.WhenAll(catalog, one, two, three).WaitAsync(TimeSpan.FromSeconds(5)))
+                response.Dispose();
+            Assert.Equal(new[] { "one", "two", "catalogue", "three" }, starts);
+        }
+
+        [Fact]
+        public async Task PlaybackCanStartWithoutPreemptingInFlightCatalogue()
+        {
+            var held = new TaskCompletionSource<HttpResponseInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+            long ticks = DateTime.UtcNow.Ticks;
+            var pacer = new TuneInRequestPacer(() => new DateTime(Interlocked.Add(ref ticks, TimeSpan.TicksPerSecond)));
+            var catalog = pacer.SendAsync(() => held.Task, 1, CancellationToken.None, catalogueRequest: true);
+            using (await pacer.SendAsync(() => Task.FromResult(Text("")), 1, CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5))) { }
+            Assert.False(catalog.IsCompleted);
+            held.SetResult(Text(""));
+            using (await catalog) { }
+        }
+
         [Theory]
         [InlineData("presets")]
         [InlineData("local")]
@@ -59,7 +113,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var channel = new TuneInChannel(fixture.Directory, fixture.Client.Object, Mock.Of<ILogger>(), host.Object);
             var source = Assert.Single(await channel.GetChannelItemMediaInfo(fixture.Id, CancellationToken.None));
             Assert.StartsWith("http://127.0.0.1:8096/emby/TuneIn/Playback/", source.Path);
-            Assert.EndsWith(fixture.Id, source.Path);
+            Assert.Contains("/" + Uri.EscapeDataString(fixture.Id) + "/", source.Path);
+            Assert.Equal(32, new Uri(source.Path).Segments.Last().Length);
             Assert.StartsWith("tunein-preroll-v1-", source.Id);
             Assert.False(source.SupportsDirectPlay);
             Assert.False(source.SupportsDirectStream);
@@ -83,6 +138,151 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.All(sources, source => Assert.True(source.SupportsDirectPlay));
             Assert.Equal("aac", sources[0].Container);
             Assert.Single(fixture.Requests);
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task UnavailableOrMalformedNestedPlaylistDoesNotDiscardValidatedSibling(bool unavailable)
+        {
+            var fixture = new Fixture("https://radio.example/broken.pls\n" + Live);
+            fixture.Reply = _ => unavailable ? Text("", status: HttpStatusCode.BadGateway)
+                : Text("[playlist]\nFile1=ftp://private.example/secret");
+            var source = Assert.Single(await fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None));
+            Assert.Equal(Live, source.Path);
+            Assert.DoesNotContain("private.example", Assert.Single(fixture.Warnings));
+            Assert.Equal(2, fixture.Requests.Count);
+        }
+
+        [Fact]
+        public async Task MalformedNestedPlaylistThatAdvertisesRequiredAdDoesNotFallThrough()
+        {
+            var fixture = new Fixture("https://radio.example/broken.pls\n" + Live);
+            fixture.Reply = _ => Text("[playlist]\nFile1=" + Ad + "\nFile2=ftp://private.example/live");
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                fixture.Playback.GetSourcesAsync(fixture.Id, Host().Object, CancellationToken.None));
+            Assert.Equal(2, fixture.Requests.Count);
+        }
+
+        [Theory]
+        [InlineData("#STATUS: 400\n# secret content", "HTTP 200 with playlist status 400 and no URLs")]
+        [InlineData("# secret content", "empty playback playlist")]
+        public async Task ProviderPlaylistErrorsAreDistinctAndRedacted(string metadata, string expected)
+        {
+            var fixture = new Fixture(metadata);
+            var error = await Record.ExceptionAsync(() =>
+                fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None));
+            Assert.Contains(expected, error.Message);
+            Assert.DoesNotContain("secret", Assert.Single(fixture.Warnings));
+        }
+
+        [Theory]
+        [InlineData("queue", "queue wait")]
+        [InlineData("opening", "network opening")]
+        [InlineData("body", "playlist body read")]
+        public async Task TimeoutNamesTheStage(string stage, string expected)
+        {
+            using var openings = new SemaphoreSlim(0, 1);
+            var fixture = new Fixture("https://radio.example/list.pls");
+            fixture.Reply = _ => stage == "opening" ? throw new TimeoutException("private URL")
+                : new HttpResponseInfo { StatusCode = HttpStatusCode.OK, Content = new WaitingStream() };
+            var playback = new TuneInPlayback(fixture.Directory, fixture.Client.Object, fixture.Warnings.Add,
+                new TuneInRequestPacer(), queueTimeout: stage == "queue" ? TimeSpan.FromMilliseconds(100) : (TimeSpan?)null,
+                playlistTimeout: stage == "body" ? TimeSpan.Zero : (TimeSpan?)null,
+                externalOpenings: stage == "queue" ? openings : null);
+            var error = await Record.ExceptionAsync(() => playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None));
+            Assert.Contains(expected, error.Message);
+            Assert.All(fixture.Warnings, warning => Assert.DoesNotContain("private URL", warning));
+        }
+
+        [Fact]
+        public async Task NestedRedirectToPrivateDestinationIsNotSent()
+        {
+            var fixture = new Fixture("https://radio.example/list.m3u\n" + Live);
+            fixture.Reply = _ => new HttpResponseInfo
+            {
+                StatusCode = HttpStatusCode.Redirect, Content = Stream.Null,
+                Headers = new Dictionary<string, string> { ["Location"] = "http://127.0.0.1/secret" }
+            };
+            var source = Assert.Single(await fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None));
+            Assert.Equal(Live, source.Path);
+            Assert.Equal(2, fixture.Requests.Count);
+        }
+
+        [Fact]
+        public async Task NestedRelativeEntriesUseTheValidatedRedirectDestination()
+        {
+            var fixture = new Fixture("https://radio.example/list.m3u");
+            fixture.Reply = request => request.Url == "https://radio.example/list.m3u"
+                ? new HttpResponseInfo
+                {
+                    StatusCode = HttpStatusCode.Redirect, Content = Stream.Null,
+                    Headers = new Dictionary<string, string> { ["Location"] = "https://mirror.example/other/list.m3u" }
+                }
+                : Text("live.mp3");
+            var source = Assert.Single(await fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None));
+            Assert.Equal("https://mirror.example/other/live.mp3", source.Path);
+        }
+
+        [Fact]
+        public async Task NestedPlaylistSizeLimitIsNotBypassedBySiblingFallback()
+        {
+            var fixture = new Fixture("https://radio.example/list.m3u\n" + Live);
+            fixture.Reply = _ => Text(new string('x', 256 * 1024 + 1));
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None));
+            Assert.Contains("size limit", error.Message);
+        }
+
+        [Fact]
+        public async Task LoopbackAttemptReusesNestedPlanOnceAndExternalOpeningsIgnoreProviderCooldown()
+        {
+            var fixture = new Fixture("https://radio.example/list.pls");
+            fixture.Reply = request => request.Url.EndsWith("list.pls")
+                ? Text("[playlist]\nFile1=" + Ad + "\nFile2=" + Live)
+                : Text("audio", "audio/mpeg");
+            var now = DateTime.UtcNow;
+            var pacer = new TuneInRequestPacer(() => now, (delay, _) => Task.Delay(Timeout.InfiniteTimeSpan, _));
+            var playback = new TuneInPlayback(fixture.Directory, fixture.Client.Object, fixture.Warnings.Add, pacer);
+            var media = Assert.Single(await playback.GetSourcesAsync(fixture.Id, Host().Object, CancellationToken.None));
+            var handle = new Uri(media.Path).Segments.Last();
+            now = now.AddSeconds(3);
+            using (await pacer.SendAsync(() => Task.FromResult(new HttpResponseInfo
+            {
+                StatusCode = HttpStatusCode.TooManyRequests,
+                Headers = new Dictionary<string, string> { ["Retry-After"] = "75" }
+            }), 1, CancellationToken.None, catalogueRequest: true)) { }
+
+            var servicePlayback = new TuneInPlayback(fixture.Directory, fixture.Client.Object, fixture.Warnings.Add,
+                pacer, queueTimeout: TimeSpan.FromSeconds(1));
+            using (var source = await servicePlayback.OpenAsync(fixture.Id, Own, CancellationToken.None, handle))
+                Assert.Equal("audioaudio", Encoding.ASCII.GetString((await Bytes(source.Body)).Skip(44).ToArray()));
+            Assert.Equal(4, fixture.Requests.Count);
+            now = now.AddMinutes(2);
+            using (await servicePlayback.OpenAsync(fixture.Id, Own, CancellationToken.None, handle)) { }
+            Assert.Equal(2, fixture.Requests.Count(request => request.Url.Contains("Tune.ashx")));
+            Assert.Equal(2, fixture.Requests.Count(request => request.Url.EndsWith("list.pls")));
+        }
+
+        [Fact]
+        public void AttemptHandlesAreScopedExpiringAndBounded()
+        {
+            var now = DateTime.UtcNow;
+            var attempts = new TuneInPlaybackAttempts<object>(() => now, capacity: 1);
+            var fixture = new Fixture(Live);
+            var scope = fixture.Directory.Snapshot().Key;
+            var plan = new object();
+            var first = attempts.Add(fixture.Directory, scope, fixture.Id, plan);
+            Assert.Throws<InvalidOperationException>(() => attempts.Take(fixture.Directory, scope, "other", first));
+            Assert.Throws<InvalidOperationException>(() => attempts.Take(fixture.Directory, "other", fixture.Id, first));
+            Assert.Same(plan, attempts.Take(fixture.Directory, scope, fixture.Id, first));
+            Assert.Null(attempts.Take(fixture.Directory, scope, fixture.Id, first));
+            var evicted = attempts.Add(fixture.Directory, scope, fixture.Id, plan);
+            var expires = attempts.Add(fixture.Directory, scope, fixture.Id, plan);
+            Assert.NotEqual(evicted, expires);
+            Assert.Null(attempts.Take(fixture.Directory, scope, fixture.Id, evicted));
+            now = now.AddSeconds(30);
+            Assert.Null(attempts.Take(fixture.Directory, scope, fixture.Id, expires));
         }
 
         [Theory]
@@ -496,7 +696,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         if (response.Content is TrackedStream stream) Streams.Add(stream);
                         return Task.FromResult(response);
                     });
-                Playback = new TuneInPlayback(Directory, Client.Object, Warnings.Add);
+                var now = DateTime.UtcNow;
+                var pacer = new TuneInRequestPacer(() => now, (wait, _) =>
+                {
+                    now += wait;
+                    return Task.CompletedTask;
+                });
+                Playback = new TuneInPlayback(Directory, Client.Object, Warnings.Add, pacer);
             }
             private static CatalogSelection Selection(string id) =>
                 new CatalogSelection { Id = id, Name = id, Enabled = true };

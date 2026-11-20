@@ -923,7 +923,11 @@ namespace MediaBrowser.Plugins.TuneIn
                                         status.ImportFoldersTotal = full.Count;
                                     });
                                     importTime.Start();
-                                    try { await import(channel, full, null, importToken).ConfigureAwait(false); }
+                                    try
+                                    {
+                                        var importTask = import(channel, full, null, importToken);
+                                        await AwaitImportWithDiagnostics(importTask, importToken).ConfigureAwait(false);
+                                    }
                                     finally { importTime.Stop(); }
                                     full.Verify();
                                     importToken.ThrowIfCancellationRequested();
@@ -1156,6 +1160,34 @@ namespace MediaBrowser.Plugins.TuneIn
         private void Update(Action update)
         {
             lock (gate) if (status.State == "Running") update();
+        }
+
+        private async Task AwaitImportWithDiagnostics(Task importTask, CancellationToken token)
+        {
+            var diagnostics = new TuneInImportStallDiagnostics();
+            try
+            {
+                while (!importTask.IsCompleted)
+                {
+                    using (var tick = new CancellationTokenSource())
+                    {
+                        var delay = Task.Delay(TuneInImportStallDiagnostics.Interval, tick.Token);
+                        if (await Task.WhenAny(importTask, delay).ConfigureAwait(false) == importTask)
+                        {
+                            tick.Cancel();
+                            break;
+                        }
+                    }
+
+                    var current = Status();
+                    var message = diagnostics.TryCreate(clock(), current.LastProgressUtc,
+                        current.ImportFoldersTotal, current.ImportFoldersServed, token.IsCancellationRequested);
+                    if (message != null) logger?.Warn(message);
+                    if (diagnostics.LimitReached) break;
+                }
+            }
+            // Diagnostic polling must never let a new attempt start before this import drains.
+            finally { await importTask.ConfigureAwait(false); }
         }
 
         public void Dispose()

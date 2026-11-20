@@ -14,10 +14,12 @@ using System.Threading.Tasks;
 namespace MediaBrowser.Plugins.TuneIn
 {
     [Route("/TuneIn/Playback/{Id}", "GET")]
+    [Route("/TuneIn/Playback/{Id}/{Attempt}", "GET")]
     [Authenticated(AllowLocalOnly = true)]
     public sealed class GetTuneInPlayback
     {
         public string Id { get; set; }
+        public string Attempt { get; set; }
     }
 
     public sealed class TuneInPlaybackService : IService, IRequiresRequest
@@ -29,7 +31,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public TuneInPlaybackService(IHttpClient client, IApplicationHost host, IHttpResultFactory resultFactory,
             IFfmpegManager ffmpeg, ILogManager logManager)
-            : this(new TuneInPlayback(TuneInRequests.Directory(client, host), client,
+            : this(new TuneInPlayback(TuneInRequests.Directory(client, host), null,
                 message => logManager.GetLogger(nameof(TuneInPlaybackService)).Warn(message)),
                 resultFactory, ffmpeg, logManager.GetLogger(nameof(TuneInPlaybackService))) { }
 
@@ -53,7 +55,7 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInAudioSource source = null;
             try
             {
-                source = await playback.OpenAsync(request.Id, Decode, Request.CancellationToken).ConfigureAwait(false);
+                source = await playback.OpenAsync(request.Id, Decode, Request.CancellationToken, request.Attempt).ConfigureAwait(false);
                 Request.CancellationToken.ThrowIfCancellationRequested();
                 return resultFactory.GetResult(Request, source.Body, source.ContentType, null);
             }
@@ -61,7 +63,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 source?.Dispose();
                 if (!(error is OperationCanceledException))
-                    logger.Warn("TuneIn playback handoff could not open ({0}).", error.GetType().Name);
+                    logger.Warn("TuneIn playback handoff could not open ({0}).", TuneInPlayback.DescribeFailure(error));
                 throw;
             }
         }

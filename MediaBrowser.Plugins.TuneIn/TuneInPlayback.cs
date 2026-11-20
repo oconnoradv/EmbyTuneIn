@@ -4,9 +4,11 @@ using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.MediaInfo;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -16,22 +18,41 @@ namespace MediaBrowser.Plugins.TuneIn
 {
     internal sealed class TuneInPlayback
     {
+        private const string PreRollPath = "/multi_bump_sonic_pre_pre.mp3";
         private readonly TuneInDirectory directory;
-        private readonly IHttpClient client;
+        private readonly Func<HttpRequestOptions, Task<HttpResponseInfo>> send;
+        private readonly TuneInRequestPacer pacer;
         private readonly Action<string> warning;
+        private readonly TimeSpan queueTimeout;
+        private readonly TimeSpan openingTimeout;
+        private readonly TimeSpan playlistTimeout;
+        private readonly SemaphoreSlim externalOpenings;
+        private static readonly SemaphoreSlim SharedExternalOpenings = new SemaphoreSlim(4);
+        private static readonly TuneInPlaybackAttempts<PlaybackPlan> Attempts =
+            new TuneInPlaybackAttempts<PlaybackPlan>();
 
-        internal TuneInPlayback(TuneInDirectory directory, IHttpClient client, Action<string> warning)
+        internal TuneInPlayback(TuneInDirectory directory, IHttpClient client, Action<string> warning,
+            TuneInRequestPacer pacer = null, TimeSpan? queueTimeout = null, TimeSpan? openingTimeout = null,
+            TimeSpan? playlistTimeout = null, SemaphoreSlim externalOpenings = null)
         {
             this.directory = directory;
-            this.client = client;
+            send = client == null ? (Func<HttpRequestOptions, Task<HttpResponseInfo>>)TuneInPlaybackHttp.SendAsync
+                : options => client.SendAsync(options, "GET");
             this.warning = warning;
+            this.pacer = pacer ?? TuneInRequests.Pacer;
+            this.queueTimeout = queueTimeout ?? TimeSpan.FromSeconds(30);
+            this.openingTimeout = openingTimeout ?? TimeSpan.FromSeconds(30);
+            this.playlistTimeout = playlistTimeout ?? TimeSpan.FromSeconds(30);
+            this.externalOpenings = externalOpenings ?? SharedExternalOpenings;
         }
 
         internal async Task<IEnumerable<MediaSourceInfo>> GetSourcesAsync(string id, IServerApplicationHost host,
             CancellationToken token)
         {
             var snapshot = directory.Snapshot();
-            var plan = await ResolveAsync(snapshot, id, token).ConfigureAwait(false);
+            PlaybackPlan plan;
+            using (var scope = new PlaybackScope(directory, snapshot, token))
+                plan = await ResolveAsync(snapshot, id, scope.Token).ConfigureAwait(false);
             directory.CheckCurrent(snapshot, token);
             if (!plan.HasPreRoll)
                 return plan.Leaves.Select(DirectSource).ToArray();
@@ -39,12 +60,13 @@ namespace MediaBrowser.Plugins.TuneIn
             var local = new Uri(host.GetLocalApiUrl(IPAddress.Loopback));
             if (!IPAddress.TryParse(local.Host, out var address) || !IPAddress.IsLoopback(address))
                 throw new InvalidOperationException("TuneIn playback requires a server-loopback URL.");
+            var attempt = Attempts.Add(directory, snapshot.Key, id, plan);
             using (var hash = SHA256.Create())
                 return new[] { new MediaSourceInfo
                 {
                     Id = "tunein-preroll-v1-" + BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(id))).Replace("-", ""),
                     Name = "TuneIn",
-                    Path = local.AbsoluteUri.TrimEnd('/') + "/TuneIn/Playback/" + Uri.EscapeDataString(id),
+                    Path = local.AbsoluteUri.TrimEnd('/') + "/TuneIn/Playback/" + Uri.EscapeDataString(id) + "/" + attempt,
                     Protocol = MediaProtocol.Http,
                     IsRemote = true,
                     SupportsDirectPlay = false,
@@ -54,7 +76,7 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         internal async Task<TuneInAudioSource> OpenAsync(string id,
-            Func<TuneInAudioSource, CancellationToken, Stream> decode, CancellationToken token)
+            Func<TuneInAudioSource, CancellationToken, Stream> decode, CancellationToken token, string attempt = null)
         {
             var snapshot = directory.Snapshot();
             Validate(snapshot, id);
@@ -62,7 +84,11 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInAudioSource source = null;
             try
             {
-                var plan = await ResolveAsync(snapshot, id, scope.Token).ConfigureAwait(false);
+                scope.Check();
+                var plan = attempt == null ? null : Attempts.Take(directory, snapshot.Key, id, attempt);
+                plan = plan ?? await ResolveAsync(snapshot, id, scope.Token).ConfigureAwait(false);
+                if (attempt != null && !plan.HasPreRoll)
+                    throw new PlaybackFailure("TuneIn no longer advertises the required pre-roll for this handoff.");
                 source = await OpenPlanAsync(plan, snapshot, scope, decode, scope.Token).ConfigureAwait(false);
                 scope.Check();
                 return new TuneInAudioSource(new ScopedStream(source, scope, warning), source.ContentType);
@@ -91,15 +117,30 @@ namespace MediaBrowser.Plugins.TuneIn
             request.Parameters["partnerid"] = "uD1X52pA";
             request.Parameters["formats"] = "mp3,aac";
             if (entry.Category == "presets") request.Parameters["username"] = snapshot.Value.Username;
-            var text = await ReadPlaylistAsync(request.Url, snapshot, token).ConfigureAwait(false);
-            return await ExpandAsync(ParseUrls(text, new Uri(request.Url)), snapshot, 0,
-                new HashSet<string>(StringComparer.Ordinal), new int[1], token).ConfigureAwait(false);
+            try
+            {
+                var playlist = await ReadPlaylistAsync(request.Url, snapshot, token).ConfigureAwait(false);
+                return await ExpandAsync(ParseUrls(playlist.Text, playlist.Url, provider: true), snapshot, 0,
+                    new HashSet<string>(StringComparer.Ordinal) { playlist.Url.AbsoluteUri }, new int[1], token)
+                    .ConfigureAwait(false);
+            }
+            catch (PlaylistLimitFailure error)
+            {
+                warning?.Invoke("TuneIn playback resolution failed: " + error.Message);
+                throw new InvalidDataException(error.Message);
+            }
+            catch (Exception error) when (IsPlaybackFailure(error))
+            {
+                warning?.Invoke("TuneIn playback resolution failed: " + DescribeFailure(error));
+                throw;
+            }
         }
 
         private async Task<PlaybackPlan> ExpandAsync(List<string> urls, ConfigurationSnapshot snapshot, int depth,
             HashSet<string> ancestors, int[] requests, CancellationToken token)
         {
             var plan = new PlaybackPlan();
+            Exception failure = null;
             foreach (var url in urls)
             {
                 directory.CheckCurrent(snapshot, token);
@@ -114,33 +155,81 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (extension.Equals(".m3u", StringComparison.OrdinalIgnoreCase)
                     || extension.Equals(".pls", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (depth >= 4 || ++requests[0] > 16 || !ancestors.Add(url))
+                    if (depth >= 4 || !ancestors.Add(url))
                         throw new InvalidDataException("TuneIn playlist resolution exceeds its nesting or request limit.");
                     try
                     {
-                        var text = await ReadPlaylistAsync(url, snapshot, token).ConfigureAwait(false);
-                        // Leave existing native HLS handling intact for ordinary stations.
-                        plan.Alternatives.Add(text.Contains("#EXT-X-") ? new PlaybackPlan { Url = url }
-                            : await ExpandAsync(ParseUrls(text, new Uri(url)), snapshot, depth + 1,
-                                ancestors, requests, token).ConfigureAwait(false));
+                            ConsumeNestedRequest(requests);
+                            (string Text, Uri Url) playlist;
+                            try
+                            {
+                                playlist = await ReadPlaylistAsync(url, snapshot, token, () => ConsumeNestedRequest(requests))
+                                    .ConfigureAwait(false);
+                            }
+                            catch (Exception error) when (IsPlaybackFailure(error) && !(error is PlaylistLimitFailure))
+                            {
+                                directory.CheckCurrent(snapshot, token);
+                                failure = error;
+                                warning?.Invoke("TuneIn nested playlist could not be fetched: " + DescribeFailure(error));
+                                continue;
+                            }
+                            var redirected = playlist.Url.AbsoluteUri != url;
+                            if (redirected && !ancestors.Add(playlist.Url.AbsoluteUri))
+                                throw new InvalidDataException("TuneIn playlist resolution exceeds its nesting or request limit.");
+                            try
+                            {
+                                // Leave native HLS handling intact, but never delegate a known TuneIn pre-roll.
+                                if (playlist.Text.Contains("#EXT-X-") && !MentionsPreRoll(playlist.Text))
+                                    plan.Alternatives.Add(new PlaybackPlan { Url = playlist.Url.AbsoluteUri });
+                                else
+                                {
+                                    List<string> nested;
+                                    try { nested = ParseUrls(playlist.Text, playlist.Url); }
+                                    catch (InvalidDataException error) when (!MentionsPreRoll(playlist.Text))
+                                    {
+                                        directory.CheckCurrent(snapshot, token);
+                                        failure = error;
+                                        warning?.Invoke("TuneIn nested playlist could not be parsed: " + DescribeFailure(error));
+                                        continue;
+                                    }
+                                    try
+                                    {
+                                        plan.Alternatives.Add(await ExpandAsync(nested, snapshot, depth + 1,
+                                            ancestors, requests, token).ConfigureAwait(false));
+                                    }
+                                    catch (NoUsablePlaylist error) { failure = error.Failure; }
+                                }
+                            }
+                            finally { if (redirected) ancestors.Remove(playlist.Url.AbsoluteUri); }
                     }
                     finally { ancestors.Remove(url); }
                 }
                 else plan.Alternatives.Add(new PlaybackPlan { Url = url });
             }
             if (plan.Alternatives.Count == 0)
-                throw new InvalidDataException("TuneIn returned no live stream after its pre-roll.");
+            {
+                if (plan.PreRolls.Count != 0)
+                    throw new InvalidDataException("TuneIn returned no usable live stream after its required pre-roll.");
+                throw new NoUsablePlaylist(failure);
+            }
             return plan;
         }
 
-        private async Task<string> ReadPlaylistAsync(string url, ConfigurationSnapshot snapshot, CancellationToken token)
+        private static void ConsumeNestedRequest(int[] requests)
         {
-            using (var source = await FetchAsync(url, snapshot, token).ConfigureAwait(false))
+            if (++requests[0] > 16)
+                throw new PlaylistLimitFailure("TuneIn playlist resolution exceeds its nested request limit.");
+        }
+
+        private async Task<(string Text, Uri Url)> ReadPlaylistAsync(string url, ConfigurationSnapshot snapshot,
+            CancellationToken token, Action countRedirect = null)
+        {
+            using (var source = await FetchAsync(url, snapshot, token, countRedirect).ConfigureAwait(false))
             using (var memory = new MemoryStream())
             using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
-                timeout.CancelAfter(TimeSpan.FromSeconds(30));
-                using (timeout.Token.Register(source.Dispose))
+                timeout.CancelAfter(playlistTimeout);
+                using (timeout.Token.Register(() => DisposeQuietly(source)))
                 {
                     var buffer = new byte[8192];
                     try
@@ -150,52 +239,115 @@ namespace MediaBrowser.Plugins.TuneIn
                         {
                             directory.CheckCurrent(snapshot, timeout.Token);
                             if (memory.Length + count > 256 * 1024)
-                                throw new InvalidDataException("TuneIn playback playlist exceeds its size limit.");
+                                throw new PlaylistLimitFailure("TuneIn playback playlist exceeds its size limit.");
                             memory.Write(buffer, 0, count);
                         }
                         timeout.Token.ThrowIfCancellationRequested();
-                        return Encoding.UTF8.GetString(memory.ToArray());
+                        return (Encoding.UTF8.GetString(memory.ToArray()), source.EffectiveUrl);
                     }
-                    catch
+                    catch (Exception error) when (!(error is PlaylistLimitFailure)
+                        && (error is IOException || error is InvalidDataException || error is ObjectDisposedException
+                            || error is OperationCanceledException || error is TimeoutException || error is HttpRequestException))
                     {
-                        token.ThrowIfCancellationRequested();
-                        if (timeout.IsCancellationRequested) throw new TimeoutException("TuneIn playback playlist timed out.");
-                        throw;
+                        directory.CheckCurrent(snapshot, token);
+                        if (timeout.IsCancellationRequested || error is TimeoutException || error is OperationCanceledException)
+                            throw new PlaybackTimeout("TuneIn playback playlist body read timed out.");
+                        throw new PlaybackFailure("TuneIn playback playlist body could not be read.");
                     }
                 }
             }
         }
 
-        private async Task<TuneInAudioSource> FetchAsync(string url, ConfigurationSnapshot snapshot, CancellationToken token)
+        private async Task<TuneInAudioSource> FetchAsync(string url, ConfigurationSnapshot snapshot,
+            CancellationToken token, Action countRedirect = null)
         {
-            ValidateUrl(url);
+            var uri = ValidateUrl(url);
+            var originalApi = IsApiHost(uri);
+            var originalPreRoll = IsPreRoll(url);
+            for (var redirects = 0; ; redirects++)
+            {
+                var source = await FetchHopAsync(uri, snapshot, token).ConfigureAwait(false);
+                if (source.StatusCode == HttpStatusCode.OK) return source;
+                using (source)
+                {
+                    var status = (int)source.StatusCode;
+                    if (status != 301 && status != 302 && status != 303 && status != 307 && status != 308)
+                        throw new PlaybackFailure("TuneIn playback opening returned HTTP " + status + ".");
+                    if (redirects == 4 || string.IsNullOrEmpty(source.Location)
+                        || source.Location.Length > 4096 || !Uri.TryCreate(uri, source.Location, out var next))
+                        throw new PlaybackFailure("TuneIn playback redirect is invalid or exceeds its limit.");
+                    next = ValidateUrl(next.AbsoluteUri);
+                    if ((uri.Scheme == "https" && next.Scheme != "https")
+                        || (originalApi && (!IsApiHost(next) || !next.IsDefaultPort))
+                        || (!originalApi && IsApiHost(next))
+                        || (!originalPreRoll && IsPreRoll(next.AbsoluteUri)))
+                        throw new PlaybackFailure("TuneIn playback redirect is not permitted.");
+                    countRedirect?.Invoke();
+                    uri = next;
+                }
+            }
+        }
+
+        private async Task<TuneInAudioSource> FetchHopAsync(Uri uri, ConfigurationSnapshot snapshot, CancellationToken token)
+        {
             directory.CheckCurrent(snapshot, token);
             var operation = CancellationTokenSource.CreateLinkedTokenSource(token);
-            operation.CancelAfter(TimeSpan.FromSeconds(30 + Math.Min(30, Math.Max(1, snapshot.Value.ApiRequestIntervalSeconds))));
-            HttpResponseInfo response = null;
-            try
+            using (var queue = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
-                response = await TuneInRequests.SendAsync(client, new HttpRequestOptions
+                queue.CancelAfter(queueTimeout);
+                var started = false;
+                var externalSlot = false;
+                HttpResponseInfo response = null;
+                try
                 {
-                    Url = url, CancellationToken = operation.Token, ThrowOnErrorResponse = false
-                }, "GET", snapshot.Value.ApiRequestIntervalSeconds, bufferContent: false).ConfigureAwait(false);
-                operation.Token.ThrowIfCancellationRequested();
-                directory.CheckCurrent(snapshot, token);
-                if (response.StatusCode != HttpStatusCode.OK)
-                    throw new IOException("TuneIn playback returned HTTP " + (int)response.StatusCode + ".");
-                operation.CancelAfter(Timeout.InfiniteTimeSpan);
-                return new TuneInAudioSource(response.Content,
-                    (response.ContentType ?? "application/octet-stream").Split(';')[0].Trim().ToLowerInvariant(),
-                    new HttpOwner(response, operation));
-            }
-            catch
-            {
-                var timedOut = operation.IsCancellationRequested;
-                try { response?.Content?.Dispose(); }
-                finally { response?.Dispose(); operation.Dispose(); }
-                token.ThrowIfCancellationRequested();
-                if (timedOut) throw new TimeoutException("TuneIn playback opening timed out.");
-                throw;
+                    Task<HttpResponseInfo> Start()
+                    {
+                        queue.Token.ThrowIfCancellationRequested();
+                        started = true;
+                        queue.CancelAfter(Timeout.InfiniteTimeSpan);
+                        operation.Token.ThrowIfCancellationRequested();
+                        operation.CancelAfter(openingTimeout);
+                        return send(new HttpRequestOptions
+                        {
+                            Url = uri.AbsoluteUri, CancellationToken = operation.Token, ThrowOnErrorResponse = false,
+                            BufferContent = false
+                        });
+                    }
+                    if (IsApiHost(uri))
+                        response = await pacer.SendAsync(Start, snapshot.Value.ApiRequestIntervalSeconds, queue.Token)
+                            .ConfigureAwait(false);
+                    else
+                    {
+                        await externalOpenings.WaitAsync(queue.Token).ConfigureAwait(false);
+                        externalSlot = true;
+                        response = await Start().ConfigureAwait(false);
+                    }
+                    operation.Token.ThrowIfCancellationRequested();
+                    directory.CheckCurrent(snapshot, token);
+                    operation.CancelAfter(Timeout.InfiniteTimeSpan);
+                    if (response.Content == null && response.StatusCode == HttpStatusCode.OK)
+                        throw new PlaybackFailure("TuneIn playback response has no content.");
+                    return new TuneInAudioSource(response.Content ?? Stream.Null,
+                        (response.ContentType ?? "application/octet-stream").Split(';')[0].Trim().ToLowerInvariant(),
+                        new HttpOwner(response, operation), uri, response.StatusCode, response.Headers?
+                            .FirstOrDefault(pair => pair.Key.Equals("Location", StringComparison.OrdinalIgnoreCase)).Value);
+                }
+                catch (Exception error)
+                {
+                    var timedOut = operation.IsCancellationRequested;
+                    DisposeQuietly(response?.Content);
+                    DisposeQuietly(response);
+                    operation.Dispose();
+                    directory.CheckCurrent(snapshot, token);
+                    if (!started && queue.IsCancellationRequested) throw new PlaybackTimeout("TuneIn playback queue wait timed out.");
+                    if (timedOut || error is TimeoutException || error is OperationCanceledException)
+                        throw new PlaybackTimeout("TuneIn playback network opening timed out.");
+                    if (error is PlaybackFailure) throw;
+                    if (error is HttpRequestException || error is IOException || error is InvalidDataException || error is WebException)
+                        throw new PlaybackFailure("TuneIn playback network opening failed.");
+                    throw;
+                }
+                finally { if (externalSlot) externalOpenings.Release(); }
             }
         }
 
@@ -240,25 +392,37 @@ namespace MediaBrowser.Plugins.TuneIn
                 catch (Exception error) when (!alternative.HasPreRoll && (error is IOException || error is TimeoutException))
                 {
                     failure = error;
-                    warning("TuneIn live stream opening failed; trying another advertised alternative.");
+                    warning?.Invoke("TuneIn live stream opening failed: " + DescribeFailure(error));
                 }
             }
-            throw new IOException("No TuneIn live alternative could be opened.", failure);
+            if (failure != null) throw failure;
+            throw new PlaybackFailure("No TuneIn live alternative could be opened.");
         }
 
         internal static bool IsPreRoll(string value)
         {
             var uri = ValidateUrl(value);
             return uri.Scheme == "https" && uri.IsDefaultPort
-                && uri.Host.Equals("tunein-ondemand.cdnstream1.com", StringComparison.OrdinalIgnoreCase)
-                && uri.AbsolutePath == "/multi_bump_sonic_pre_pre.mp3";
+                && uri.IdnHost.TrimEnd('.').Equals("tunein-ondemand.cdnstream1.com", StringComparison.OrdinalIgnoreCase)
+                && uri.AbsolutePath == PreRollPath;
         }
+
+        private static bool IsApiHost(Uri uri) =>
+            uri.IdnHost.TrimEnd('.').Equals("opml.radiotime.com", StringComparison.OrdinalIgnoreCase);
+
+        // If a malformed playlist mentions the required pre-roll, do not discard it and try live.
+        private static bool MentionsPreRoll(string text) =>
+            Uri.UnescapeDataString(text).IndexOf(PreRollPath, StringComparison.OrdinalIgnoreCase) >= 0;
 
         private static Uri ValidateUrl(string value)
         {
             if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
                 || (uri.Scheme != "https" && uri.Scheme != "http")
-                || uri.UserInfo.Length != 0 || uri.Fragment.Length != 0 || value.Length > 4096)
+                || uri.UserInfo.Length != 0 || uri.Fragment.Length != 0 || value.Length > 4096
+                || uri.IsLoopback || uri.IdnHost.TrimEnd('.').Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                || uri.IdnHost.TrimEnd('.').EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)
+                || (IPAddress.TryParse(uri.IdnHost.Trim('[', ']'), out var address) && !IsPublicAddress(address))
+                || (IsApiHost(uri) && (uri.Scheme != "https" || !uri.IsDefaultPort)))
                 throw new InvalidDataException("Invalid TuneIn playback URL.");
             if (uri.AbsolutePath.IndexOf("/notcompatible.", StringComparison.OrdinalIgnoreCase) >= 0
                 || uri.AbsolutePath.IndexOf("/nostream.", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -266,7 +430,19 @@ namespace MediaBrowser.Plugins.TuneIn
             return uri;
         }
 
-        private static List<string> ParseUrls(string text, Uri parent)
+        internal static bool IsPublicAddress(IPAddress address)
+        {
+            if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+            if (IPAddress.IsLoopback(address)) return false;
+            var bytes = address.GetAddressBytes();
+            if (bytes.Length == 16)
+                return (bytes[0] & 0xe0) == 0x20 && !address.IsIPv6Teredo;
+            return bytes[0] != 0 && bytes[0] != 10 && bytes[0] != 127 && bytes[0] < 224
+                && !(bytes[0] == 169 && bytes[1] == 254) && !(bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+                && !(bytes[0] == 192 && bytes[1] == 168) && !(bytes[0] == 100 && (bytes[1] & 0xc0) == 64);
+        }
+
+        private static List<string> ParseUrls(string text, Uri parent, bool provider = false)
         {
             var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(line => line.Trim().TrimStart('\uFEFF')).Where(line => line.Length != 0).ToArray();
@@ -287,13 +463,64 @@ namespace MediaBrowser.Plugins.TuneIn
             var urls = new List<string>();
             foreach (var value in values)
             {
-                if (urls.Count == 8) throw new InvalidDataException("TuneIn playback playlist exceeds its entry limit.");
+                if (urls.Count == 8) throw new PlaylistLimitFailure("TuneIn playback playlist exceeds its entry limit.");
                 if (!Uri.TryCreate(parent, value, out var uri))
                     throw new InvalidDataException("Invalid TuneIn playback playlist entry.");
                 urls.Add(ValidateUrl(uri.AbsoluteUri).AbsoluteUri);
             }
-            if (urls.Count == 0) throw new InvalidDataException("TuneIn returned an empty playback playlist.");
+            if (urls.Count == 0)
+            {
+                if (provider)
+                    foreach (var line in lines.Where(line => line.StartsWith("#STATUS:", StringComparison.OrdinalIgnoreCase)))
+                        if (int.TryParse(line.Substring(8).Trim(), NumberStyles.None, CultureInfo.InvariantCulture,
+                            out var status) && status >= 400 && status <= 599)
+                            throw new PlaybackFailure("TuneIn returned HTTP 200 with playlist status " + status + " and no URLs.");
+                throw new InvalidDataException("TuneIn returned an empty playback playlist.");
+            }
             return urls;
+        }
+
+        private static bool IsPlaybackFailure(Exception error) => error is IOException || error is InvalidDataException
+            || error is PlaybackTimeout;
+
+        internal static string DescribeFailure(Exception error)
+        {
+            if (error is NoUsablePlaylist noPlaylist)
+                return noPlaylist.Failure == null ? noPlaylist.Message : DescribeFailure(noPlaylist.Failure);
+            if (error is PlaybackFailure || error is PlaybackTimeout || error is PlaylistLimitFailure
+                || error is InvalidDataException)
+                return error.Message;
+            return error.GetType().Name;
+        }
+
+        private static void DisposeQuietly(IDisposable value)
+        {
+            try { value?.Dispose(); }
+            catch (Exception error) when (error is IOException || error is ObjectDisposedException
+                || error is AggregateException) { }
+        }
+
+        private sealed class PlaybackFailure : IOException
+        {
+            internal PlaybackFailure(string message) : base(message) { }
+        }
+
+        private sealed class PlaylistLimitFailure : IOException
+        {
+            internal PlaylistLimitFailure(string message) : base(message) { }
+        }
+
+        private sealed class PlaybackTimeout : TimeoutException
+        {
+            internal PlaybackTimeout(string message) : base(message) { }
+        }
+
+        private sealed class NoUsablePlaylist : IOException
+        {
+            internal readonly Exception Failure;
+            internal NoUsablePlaylist(Exception failure)
+                : base(failure == null ? "TuneIn returned no usable playback alternatives." : DescribeFailure(failure))
+            { Failure = failure; }
         }
 
         private static MediaSourceInfo DirectSource(string url)
@@ -326,7 +553,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 this.response = response;
                 this.operation = operation;
-                cancellation = operation.Token.Register(response.Content.Dispose);
+                cancellation = operation.Token.Register(() => DisposeQuietly(response.Content));
             }
             public void Dispose()
             {
@@ -334,8 +561,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 finally
                 {
                     cancellation.Dispose();
-                    try { response.Content.Dispose(); }
-                    finally { try { response.Dispose(); } finally { operation.Dispose(); } }
+                    try { DisposeQuietly(response.Content); }
+                    finally { try { DisposeQuietly(response); } finally { operation.Dispose(); } }
                 }
             }
         }
@@ -362,7 +589,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (Active.Count >= 16)
                     {
                         lifetime.Dispose();
-                        throw new InvalidOperationException("TuneIn has too many active pre-roll playback requests.");
+                        throw new InvalidOperationException("TuneIn has too many active playback requests.");
                     }
                     Active.Add(this);
                 }
@@ -436,10 +663,17 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         internal Stream Body { get; }
         internal string ContentType { get; }
+        internal Uri EffectiveUrl { get; }
+        internal HttpStatusCode StatusCode { get; }
+        internal string Location { get; }
         private readonly IDisposable owner;
         private int disposed;
-        internal TuneInAudioSource(Stream body, string contentType, IDisposable owner = null)
-        { Body = body; ContentType = contentType; this.owner = owner; }
+        internal TuneInAudioSource(Stream body, string contentType, IDisposable owner = null,
+            Uri effectiveUrl = null, HttpStatusCode statusCode = HttpStatusCode.OK, string location = null)
+        {
+            Body = body; ContentType = contentType; this.owner = owner;
+            EffectiveUrl = effectiveUrl; StatusCode = statusCode; Location = location;
+        }
         public void Dispose()
         {
             if (Interlocked.Exchange(ref disposed, 1) == 0)

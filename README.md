@@ -231,7 +231,10 @@ retries, with consecutive minimum cooldowns of 30, 60, and 120 seconds. Longer
 catalog interval up to 30 seconds and temporarily returns discovery to serial
 requests. Every 20 consecutive successful responses restores overlap and
 reduces the learned interval by one second toward the configured minimum.
-Saved settings and ordinary playback intervals are unchanged.
+Playback startup has its own queue and one in-flight TuneIn API opening slot.
+It can start alongside discovery without preempting in-flight work. When
+both queues can start, at most two playback requests go ahead of a waiting
+catalog request. Both queues still share API request spacing and `Retry-After`.
 
 A discovery timeout saves additional validated pages when possible, then retries
 after active work drains. Checkpoints remain available until import preparation
@@ -256,6 +259,11 @@ discovery if it is still in memory, compatible with the saved settings, and
 less than 48 hours old from discovery start. Changing settings, cancelling,
 starting a different refresh, or restarting Emby discards that in-memory
 catalog; the next refresh then runs discovery before repairing the library.
+
+While a staged import is stalled, the server logs the time since progress,
+the unread folder count, and whether Emby is still importing or draining after
+cancellation. Warnings are limited to three per attempt, no more than one per
+minute. They do not identify individual folders or diagnose the cause of the stall.
 
 The server log records automatic retries and per-attempt timings for discovery,
 HTTP fetching, pacing, backoff, cached parsing, and import. Rate adaptation
@@ -287,17 +295,25 @@ Recognition is limited to TuneIn's HTTPS
 `tunein-ondemand.cdnstream1.com/multi_bump_sonic_pre_pre.mp3` introduction;
 arbitrary short files are not treated as advertisements. Supported nested
 M3U/PLS responses use the same rule, preserving URL case and query values.
+If an individual nested playlist cannot be fetched or parsed, the resolver
+can try a validated sibling. Resolution bounds and required introductions
+still apply.
 
 Separate-introduction playback uses the server-loopback
-`/TuneIn/Playback/{signed-item}` endpoint and Emby's configured FFmpeg. MP3/AAC
+`/TuneIn/Playback/{signed-item}/{attempt}` endpoint and Emby's configured FFmpeg.
+The older signed-item-only route still works. MP3/AAC
 inputs are decoded to 48 kHz stereo PCM behind one WAV header, allowing mixed
 codecs without ending the item. The host must allow FFmpeg child processes and
 a local audio connection; decoding adds CPU cost. FFmpeg receives audio through
 pipes, not remote URLs. Missing decoders or failed required introductions fail
 explicitly.
 
-Playback and probe requests have independent lifetimes and re-fetch provider
-information. Scope validation retains the Favorites username. Scope changes
+Each media-source lookup resolves fresh provider information. A one-use,
+unguessable handle bound to the signed item and its configuration allows the
+matching loopback open to reuse that validated plan for up to 30 seconds; the
+server retains at most 64 pending plans. Probes or opens without a reusable
+plan resolve afresh rather than sharing broadcaster or introduction URLs.
+Scope validation retains the Favorites username. Scope changes
 cancel affected handoff sessions; stopping or leaving playback releases
 responses and decoders. Failed live opening can try another advertised
 alternative. Failures after selection terminate the stream without replaying
@@ -305,14 +321,20 @@ the introduction or cycling alternatives.
 
 Each playlist is limited to 256 KiB and eight entries, with up to four nested
 levels, 16 nested requests, and 16 audio opening attempts per handoff. Up to 16
-handoff requests, including probes, can be active. Opening allows 30 seconds
-plus the configured pacing interval; playlist body reads have a 30-second
-budget. Media bodies are streamed rather than buffered in full.
+resolution or handoff requests, including probes, can be active. Queue wait,
+network opening, and playlist body reads have separate 30-second budgets
+and distinct diagnostics. A provider HTTP 200 playlist with a failure
+`#STATUS` and no URLs is reported separately from an empty playlist. Playback
+diagnostics do not include provider response text, URLs, or tokens. Media
+bodies are streamed rather than buffered in full.
 
-Requests use Emby's injected HTTP client and shared pacing. Connections,
-redirects, proxy behavior, and network destination protections remain the
-responsibility of the installed Emby client/server. Keep the host patched;
-the local handoff is not a network sandbox. Handoff supports the recognized
+Provider metadata shares the catalog pacer. Broadcaster playlists and relayed
+audio openings use a separate four-slot limit and do not inherit TuneIn API
+cooldowns. The plugin checks each redirect before following it; TuneIn API
+requests cannot redirect off their origin, and playback fetches reject
+HTTPS downgrades and nonpublic IP literals. This is not a network sandbox;
+DNS and native direct-play connections remain subject to the host's network
+policy. Handoff supports the recognized
 MP3/AAC sequence, not arbitrary ad formats, DRM, or HLS sequencing. Ordinary
 HLS destinations remain on Emby's native direct playback path.
 
