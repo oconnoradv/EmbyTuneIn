@@ -133,6 +133,9 @@ metadata; the next valid refresh supplies the complete catalog for
 reconciliation, even if discovery finds no changes. Prioritizing another
 category does not remove that repair requirement.
 
+The TuneIn control panel follows the active Emby web theme. The cleanup warning
+keeps a distinct color to identify the irreversible action.
+
 ### Schedules
 
 Choose **Off**, **Every 6 hours**, **Every 12 hours**, **Daily**, **Weekly**, or
