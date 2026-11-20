@@ -46,8 +46,6 @@
         }
         .settingsLocked:checked + .tuneInLockTrack {
             justify-content: flex-end;
-            color: var(--theme-accent-text-color, currentColor);
-            background: color-mix(in srgb, currentColor 12%, transparent);
         }
         .settingsLocked:focus-visible + .tuneInLockTrack {
             outline: 2px solid currentColor;
@@ -56,35 +54,15 @@
         .settingsLocked:disabled + .tuneInLockTrack {
             opacity: .6;
         }
-        .settingsLockAction {
+        .settingsLockCaption {
             font-weight: 600;
-            border-radius: .3em;
-            padding: .2em .45em;
         }
         .settingsLockStatus:empty {
             margin: 0;
         }
-        .settingsLockAction[data-lock-state="unlocked"] {
-            color: color-mix(in srgb, #23813e 58%, currentColor);
-            background: color-mix(in srgb, #23813e 15%, transparent);
-        }
-        .settingsLockAction[data-lock-state="locked"] {
-            color: color-mix(in srgb, #c23e46 58%, currentColor);
-            background: color-mix(in srgb, #c23e46 15%, transparent);
-        }
         @media (forced-colors: active) {
-            .tuneInLockTrack, .tuneInLockTrack::before {
+            .tuneInLockTrack::before {
                 forced-color-adjust: none;
-            }
-            .tuneInLockTrack {
-                color: CanvasText;
-                background: Canvas;
-            }
-            .settingsLocked:checked + .tuneInLockTrack {
-                color: HighlightText;
-                background: Highlight;
-                border-color: Highlight;
-                outline-color: Highlight;
             }
         }
         .tuneInApiIntervalRow {
@@ -146,7 +124,7 @@
             max-inline-size: 47vw;
             min-inline-size: 0;
         }
-        .globalSummary, .settingsLockAction {
+        .globalSummary, .settingsLockCaption {
             overflow-wrap: anywhere;
         }
         .tuneInGlobalPanel > .settingsLockStatus {
@@ -441,9 +419,10 @@
                 </fieldset>
             </details>
                 <label class="tuneInLockToggle">
-                    <input type="checkbox" role="switch" class="settingsLocked" aria-label="Settings lock" aria-describedby="tuneInLockStatus" disabled />
+                    <span class="settingsLockCaption" id="tuneInLockCaption">Settings Lock</span>
+                    <input type="checkbox" role="switch" class="settingsLocked" aria-labelledby="tuneInLockCaption" aria-describedby="tuneInLockStatus" disabled />
                     <span class="tuneInLockTrack" aria-hidden="true"></span>
-                    <span class="settingsLockAction">Settings Lock</span>
+                    <span class="settingsLockState" aria-hidden="true">Checking</span>
                 </label>
                 <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
             </div>

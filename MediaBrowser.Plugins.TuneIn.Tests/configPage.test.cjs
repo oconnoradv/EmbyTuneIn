@@ -52,7 +52,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
         '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
-        '.settingsLockAction', '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
+        '.settingsLockState', '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
         '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
         '.cleanupConfirm', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.backupStart',
         '.backupStatus', '.cleanupBackupVerified', '#tuneInReportHint']) elements[name] = new Element();
@@ -1212,9 +1212,8 @@ test('a failed lock write leaves edits blocked until the server confirms the sta
     app.refresh[0].resolve({ SettingsLocked: false });
     await visit;
     const toggle = app.elements['.settingsLocked'];
-    const action = app.elements['.settingsLockAction'];
-    assert.equal(action.textContent, 'Lock Settings');
-    assert.equal(action.attributes['data-lock-state'], 'unlocked');
+    const state = app.elements['.settingsLockState'];
+    assert.equal(state.textContent, 'Unlocked');
     toggle.checked = true;
     const locking = toggle.handlers.change();
     app.locks[0].reject(new Error('response lost'));
@@ -1226,8 +1225,7 @@ test('a failed lock write leaves edits blocked until the server confirms the sta
     assert.equal(toggle.checked, true);
     assert.equal(toggle.disabled, false);
     assert.equal(app.elements['.button-submit'].disabled, true);
-    assert.equal(action.textContent, 'Unlock Settings');
-    assert.equal(action.attributes['data-lock-state'], 'locked');
+    assert.equal(state.textContent, 'Locked');
 });
 
 for (const outcome of ['locked', 'save failed', 'lock unconfirmed']) {

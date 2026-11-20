@@ -62,9 +62,10 @@ or removed, with up to 100 selections per selector. Choices appear in a
 fixed-height scrolling panel. Temporary branch failures retry once; incomplete
 branches are marked, and saved choices are preserved.
 
-**Lock Settings**, beside the **Global TuneIn Settings** heading, prevents accidental edits and saves. The lock persists across
-browser sessions and server restarts. **Save** locks settings after a successful
-save; select **Unlock Settings** to edit again. Locking does not save pending changes or stop
+The **Settings Lock** switch, beside **Global TuneIn Settings**, prevents accidental
+edits and saves. The lock persists across browser sessions and server restarts.
+**Save** locks settings after a successful save; switch it off to edit again.
+Locking does not save pending changes or stop
 a refresh. **Station Selections** groups Music Genres, Languages, Locations,
 Local Cities and Regions, Talk Topics, Sports & Leagues, and Podcast Topics. Collapsing it keeps unsaved choices; opening it
 does not fetch from TuneIn by itself.
