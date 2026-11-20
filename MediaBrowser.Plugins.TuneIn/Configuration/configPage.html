@@ -57,6 +57,12 @@
         .settingsLockCaption {
             font-weight: 600;
         }
+        .settingsLockState[data-lock-state="locked"] {
+            color: color-mix(in srgb, #23813e 58%, currentColor);
+        }
+        .settingsLockState[data-lock-state="unlocked"] {
+            color: color-mix(in srgb, #c23e46 58%, currentColor);
+        }
         .settingsLockStatus:empty {
             margin: 0;
         }

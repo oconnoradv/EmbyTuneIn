@@ -65,6 +65,7 @@ branches are marked, and saved choices are preserved.
 The **Settings** switch, beside **Global TuneIn Settings**, prevents accidental
 edits and saves. The lock persists across browser sessions and server restarts.
 **Save** locks settings after a successful save; switch it off to edit again.
+The switch shows **Locked** in green or **Unlocked** in red.
 Locking does not save pending changes or stop
 a refresh. **Station Selections** groups Music Genres, Languages, Locations,
 Local Cities and Regions, Talk Topics, Sports & Leagues, and Podcast Topics. Collapsing it keeps unsaved choices; opening it
