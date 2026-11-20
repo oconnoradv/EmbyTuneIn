@@ -59,6 +59,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     for (const [section, summary, open] of [
         ['.globalSection', '.globalSummary', true],
         ['.categoriesSection', '.categoriesSummary', true],
+        ['.browsingSection', '.browsingSummary', true],
         ['.stationSelectionsSection', '.stationSelectionsSummary', true],
         ['.maintenanceSection', '.maintenanceSummary', false],
         ['.tuneInRefresh', '.refreshSummary', false]
@@ -731,7 +732,7 @@ test('collapsing browsing settings, including Music genres, keeps choices and do
     await visit;
     const music = app.elements['.selectors'].childNodes[2];
     assert.equal(music.childNodes[0].textContent, 'Music Genres');
-    const summaries = [app.elements['.categoriesSummary'], app.elements['.stationSelectionsSummary'],
+    const summaries = [app.elements['.browsingSummary'], app.elements['.categoriesSummary'], app.elements['.stationSelectionsSummary'],
         ...app.elements['.selectors'].childNodes.filter(section => section.open).map(section => section.childNodes[0])];
     for (const summary of summaries) {
         assert.equal(summary.parentNode.open, true);

@@ -62,7 +62,7 @@ or removed, with up to 100 selections per selector. Choices appear in a
 fixed-height scrolling panel. Temporary branch failures retry once; incomplete
 branches are marked, and saved choices are preserved.
 
-The **Settings Lock** switch, beside **Global TuneIn Settings**, prevents accidental
+The **Settings** switch, beside **Global TuneIn Settings**, prevents accidental
 edits and saves. The lock persists across browser sessions and server restarts.
 **Save** locks settings after a successful save; switch it off to edit again.
 Locking does not save pending changes or stop
@@ -187,7 +187,8 @@ apply previously fetched results without another discovery.
 
 ### Status and station counts
 
-The collapsible **Catalog Refresh** heading keeps the current state visible.
+**Catalog Browsing** and **Catalog Refresh** both start expanded and can be
+collapsed independently. The **Catalog Refresh** heading keeps the current state visible.
 Its neutral gray background follows the active Emby theme: light gray on a
 light theme and a darker surface on a dark theme. Green marks success without
 a bold outline; partial results and errors use stronger orange and red

@@ -969,7 +969,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.maintenanceSection = view.querySelector('.maintenanceSummary').parentNode;
         instance.refreshCategoryRows = new Map();
         instance.refreshSchedules = new Map();
-        ['.globalSummary', '.categoriesSummary', '.stationSelectionsSummary', '.refreshSummary', '.maintenanceSummary'].forEach(function (selector) {
+        ['.globalSummary', '.browsingSummary', '.categoriesSummary', '.stationSelectionsSummary', '.refreshSummary', '.maintenanceSummary'].forEach(function (selector) {
             bindDisclosure(view.querySelector(selector));
         });
         view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });

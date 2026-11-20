@@ -100,12 +100,12 @@
             border-radius: .35em;
             padding: .8em 1em;
         }
-        .tuneInGlobalPanel, .tuneInRefresh {
+        .tuneInGlobalPanel, .tuneInCatalogPanel {
             background: var(--tunein-neutral-surface);
             border-radius: .35em;
             padding: 0 1em;
         }
-        .tuneInGlobalPanel:has(> .tuneInGlobal[open]), .tuneInRefresh[open] { padding-block-end: 1em; }
+        .tuneInGlobalPanel:has(> .tuneInGlobal[open]), .tuneInCatalogPanel[open] { padding-block-end: 1em; }
         .tuneInGlobalPanel:has(> .tuneInGlobal[data-saved="true"]), .tuneInRefreshCategories [data-outcome="Completed"] {
             background: color-mix(in srgb, #38864c 17%, transparent);
         }
@@ -160,15 +160,12 @@
             outline: 2px solid currentColor;
             outline-offset: 2px;
         }
-        .tuneInRefreshCard, .tuneInCleanupWarning {
+        .tuneInCleanupWarning {
             border: 1px solid currentColor;
             border-radius: .35em;
             padding: .85em 1em;
         }
-        .tuneInRefreshCard {
-            border-color: var(--tunein-neutral-border);
-        }
-        .tuneInRefreshCard > .refreshStatus {
+        .tuneInRefresh > .refreshStatus {
             margin: 0;
             font-weight: 600;
             overflow-wrap: anywhere;
@@ -205,13 +202,13 @@
             font-variant-numeric: tabular-nums;
             overflow-wrap: anywhere;
         }
-        .globalFields {
+        .globalFields, .configurationFields {
             border: 0;
             margin: 0;
             min-inline-size: 0;
             padding: 0;
         }
-        .tuneInRefreshCard + .tuneInSectionBox {
+        .tuneInRefresh > .tuneInSectionBox {
             margin-block-start: 1em;
         }
         .tuneInRefresh .refreshFailureLog {
@@ -419,15 +416,16 @@
                 </fieldset>
             </details>
                 <label class="tuneInLockToggle">
-                    <span class="settingsLockCaption" id="tuneInLockCaption">Settings Lock</span>
+                    <span class="settingsLockCaption" id="tuneInLockCaption">Settings</span>
                     <input type="checkbox" role="switch" class="settingsLocked" aria-labelledby="tuneInLockCaption" aria-describedby="tuneInLockStatus" disabled />
                     <span class="tuneInLockTrack" aria-hidden="true"></span>
                     <span class="settingsLockState" aria-hidden="true">Checking</span>
                 </label>
                 <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
             </div>
-            <fieldset class="configurationFields tuneInSectionBox" disabled>
-            <legend>Catalog Browsing</legend>
+            <details class="tuneInSection tuneInCatalogPanel" open>
+            <summary class="browsingSummary" id="tuneInBrowsingTitle">Catalog Browsing</summary>
+            <fieldset class="configurationFields" aria-labelledby="tuneInBrowsingTitle" disabled>
             <p>Choose categories and station selections for the TuneIn library.</p>
             <details class="tuneInSection">
                 <summary class="categoriesSummary">TuneIn Audio Categories</summary>
@@ -441,16 +439,15 @@
                 </div>
             </details>
             </fieldset>
+            </details>
             <br />
             <div>
                 <button is="emby-button" type="submit" class="raised button-submit block" disabled><span>Save</span></button>
             </div>
         </form>
-        <details class="auto-center tuneInSection tuneInRefresh" open>
+        <details class="auto-center tuneInSection tuneInCatalogPanel tuneInRefresh" open>
             <summary class="refreshSummary">Catalog Refresh</summary>
-            <div class="tuneInSectionBox">
             <p>Checks the saved TuneIn categories and updates the Emby library when needed.</p>
-            <div class="tuneInRefreshCard">
                 <p class="refreshStatus" role="status">Reading refresh status...</p>
                 <dl class="refreshMetrics" aria-label="Current refresh metrics">
                     <div><dt>Elapsed</dt><dd class="refreshElapsed">-</dd></div>
@@ -468,7 +465,6 @@
                 <p class="refreshLogMessage" role="status"></p>
                 <p id="tuneInReportHint" class="fieldDescription" hidden>Reports (up to 64 KB) can contain private server details. Review before sharing. A new refresh or server restart clears the report.</p>
                 <pre class="refreshFailureLog" aria-label="Latest refresh diagnostic report" aria-describedby="tuneInReportHint" tabindex="0" hidden></pre>
-            </div>
             <section class="tuneInSectionBox" aria-labelledby="tuneInLibraryRefreshTitle">
                 <h3 id="tuneInLibraryRefreshTitle">TuneIn Library Refresh</h3>
                 <p class="fieldDescription">Choose a refresh interval next to a category, then select Save above. Off keeps that category manual only.</p>
@@ -476,7 +472,6 @@
                 <p class="refreshCategoryNote" role="status"></p>
                 <ul class="tuneInRefreshCategories" aria-label="Category refresh status"></ul>
             </section>
-            </div>
             <dialog class="tuneInRecoveryDialog" aria-labelledby="tuneInRecoveryTitle" aria-describedby="tuneInRecoveryText">
                 <h3 id="tuneInRecoveryTitle">Choose which refresh runs first</h3>
                 <p id="tuneInRecoveryText" class="refreshRecoveryText"></p>
