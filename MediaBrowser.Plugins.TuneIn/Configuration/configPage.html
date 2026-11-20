@@ -121,6 +121,9 @@
         .tuneInGlobalPanel:has(> .tuneInGlobal[data-saved="true"]), .tuneInRefreshCategories [data-outcome="Completed"] {
             background: color-mix(in srgb, #38864c 17%, transparent);
         }
+        .tuneInNeutralPanel[data-filtering-configured="true"] {
+            background: color-mix(in srgb, #38864c 17%, transparent);
+        }
         .tuneInGlobalPanel {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
@@ -378,39 +381,39 @@
     <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
 
         <form class="auto-center">
-            <fieldset class="loginFields" disabled>
-                <legend>Your TuneIn Login</legend>
-                <div class="tuneInLoginRow">
-                    <div class="inputContainer">
-                        <input type="text" is="emby-input" class="txtUsername" label="TuneIn User:" maxlength="128" aria-describedby="tuneInUsernameHint" />
-                        <div class="fieldDescription" id="tuneInUsernameHint">Your TuneIn username is only used for My Favorites.</div>
-                    </div>
-                    <div class="selectContainer">
-                        <select is="emby-select" class="localSource" label="Local Radio source:">
-                            <option value="">Choose a source</option>
-                            <option value="regions">Saved cities and regions</option>
-                            <option value="coordinates">Coordinates</option>
-                        </select>
-                        <div class="fieldDescription">When Local Radio is enabled, choose one source. Switching sources keeps your saved regions and coordinate text.</div>
-                    </div>
-                    <div class="inputContainer">
-                        <input type="text" is="emby-input" class="txtLatLon" label="Your LatLon:" />
-                        <div class="fieldDescription">
-                            Your LatLon can be found at <a is="emby-linkbutton" class="button-link" target="_blank" href="https://www.latlong.net">https://www.latlong.net</a>.
-                        </div>
-                    </div>
-                </div>
-            </fieldset>
             <p class="status" role="status" aria-live="polite"></p>
             <div class="tuneInSection tuneInSectionBox tuneInGlobalPanel">
             <details class="tuneInSection tuneInGlobal" open>
                 <summary class="globalSummary">Global TuneIn Settings</summary>
                 <fieldset class="globalFields" disabled aria-label="Global TuneIn Settings">
+                    <fieldset class="loginFields" disabled>
+                        <legend>Your TuneIn Login</legend>
+                        <div class="tuneInLoginRow">
+                            <div class="inputContainer">
+                                <input type="text" is="emby-input" class="txtUsername" label="TuneIn User:" maxlength="128" aria-describedby="tuneInUsernameHint" />
+                                <div class="fieldDescription" id="tuneInUsernameHint">Your TuneIn username is only used for My Favorites.</div>
+                            </div>
+                            <div class="selectContainer">
+                                <select is="emby-select" class="localSource" label="Local Radio source:">
+                                    <option value="">Choose a source</option>
+                                    <option value="regions">Saved cities and regions</option>
+                                    <option value="coordinates">Coordinates</option>
+                                </select>
+                                <div class="fieldDescription">When Local Radio is enabled, choose one source. Switching sources keeps your saved regions and coordinate text.</div>
+                            </div>
+                            <div class="inputContainer">
+                                <input type="text" is="emby-input" class="txtLatLon" label="Your LatLon:" />
+                                <div class="fieldDescription">
+                                    Your LatLon can be found at <a is="emby-linkbutton" class="button-link" target="_blank" href="https://www.latlong.net">https://www.latlong.net</a>.
+                                </div>
+                            </div>
+                        </div>
+                    </fieldset>
                     <label class="emby-checkbox-label">
-                        <input type="checkbox" is="emby-checkbox" class="configurationCompleted" />
-                        <span>Enable configuration browsing after saving</span>
+                        <input type="checkbox" is="emby-checkbox" class="configurationCompleted" checked />
+                        <span>Enable TuneIn Station Filtering</span>
                     </label>
-                    <p class="fieldDescription">Check to edit browsing settings, then select Save to enable browsing and refreshes.</p>
+                    <p class="fieldDescription">Save Global TuneIn Settings to enable station filtering and catalog refreshes.</p>
                     <label class="emby-checkbox-label">
                         <input type="checkbox" is="emby-checkbox" class="allowPartialCatalogImport" aria-describedby="tuneInPartialImportHint" />
                         <span>Import Valid Results when catalog entries are skipped</span>
@@ -439,11 +442,11 @@
                 <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
             </div>
             <details class="tuneInSection tuneInNeutralPanel" open>
-            <summary class="browsingSummary" id="tuneInBrowsingTitle">Catalog Browsing</summary>
+            <summary class="browsingSummary" id="tuneInBrowsingTitle">TuneIn Station Filtering</summary>
             <fieldset class="configurationFields" aria-labelledby="tuneInBrowsingTitle" disabled>
             <p>Choose categories and station selections for the TuneIn library.</p>
             <details class="tuneInSection">
-                <summary class="categoriesSummary">TuneIn Audio Categories</summary>
+                <summary class="categoriesSummary">Audio Categories</summary>
                 <div class="categories tuneInSectionBox"></div>
             </details>
             <details class="tuneInSection">

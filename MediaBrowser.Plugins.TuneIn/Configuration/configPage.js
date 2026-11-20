@@ -60,7 +60,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function browsingStatus(config) {
         if (configurationRequired(config))
-            return 'TuneIn filtering is not enabled. To refresh the catalog, open Global TuneIn Settings, select Enable configuration browsing after saving, then choose your desired categories and save.';
+            return 'The TuneIn catalog refresh is unavailable until Global Settings have been reviewed and saved.';
         return 'Browsing is enabled. Return to the channel root after saving.';
     }
 
@@ -303,10 +303,13 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         return instance.view.querySelector('.configurationCompleted').checked;
     }
 
-    function showSaveHistory(instance, saved) {
+    function showSaveHistory(instance, saved, filteringConfigured) {
         var view = instance.view;
         view.querySelector('.globalSummary').parentNode.setAttribute('data-saved', String(saved));
-        ['.globalSummary', '.browsingSummary', '.categoriesSummary', '.stationSelectionsSummary'].forEach(function (selector) {
+        var browsing = view.querySelector('.browsingSummary').parentNode;
+        browsing.setAttribute('data-filtering-configured', String(!!filteringConfigured));
+        browsing.open = !filteringConfigured;
+        ['.globalSummary', '.categoriesSummary', '.stationSelectionsSummary'].forEach(function (selector) {
             view.querySelector(selector).parentNode.open = !saved;
         });
         if (saved) {
@@ -946,7 +949,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         refreshControls(instance, instance.refreshAvailable);
         loading.show();
         ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
-            if (epoch === instance.viewEpoch) showSaveHistory(instance, true);
+            if (epoch === instance.viewEpoch)
+                showSaveHistory(instance, true, !configurationRequired(config));
             return writeSettingsLock(true).then(function () {
                 instance.settingsLocked = true;
                 if (epoch !== instance.viewEpoch) return;
@@ -1075,9 +1079,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             var ambiguous = !config.LocalRadioSource && config.UseCoordinates && hasRegions;
             view.querySelector('.localSource').value = config.LocalRadioSource ||
                 (ambiguous ? '' : config.UseCoordinates ? 'coordinates' : hasRegions ? 'regions' : '');
-            view.querySelector('.configurationCompleted').checked = config.SchemaVersion === 1 && !!config.ConfigurationCompleted;
+            view.querySelector('.configurationCompleted').checked = config.SchemaVersion === 1 ?
+                !!config.ConfigurationCompleted : config.SchemaVersion === 0 || config.SchemaVersion == null;
             var saved = config.SettingsSaved === true || (config.SettingsSaved == null && config.SchemaVersion === 1);
-            showSaveHistory(instance, saved);
+            showSaveHistory(instance, saved, saved && !configurationRequired(config));
             var list = view.querySelector('.categories');
             list.textContent = '';
             categories.forEach(function (spec) {

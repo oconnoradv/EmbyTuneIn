@@ -268,7 +268,7 @@ test('selector retry is bounded and does not send requests after leaving setting
 test('native view lifecycle loads labeled upstream settings on each visit', async () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /data-controller="__plugin\/tuneinjs"/);
-    assert.match(html, /<legend>Your TuneIn Login<\/legend>[\s\S]*class="txtUsername"[^>]*label="TuneIn User:"[\s\S]*class="localSource"[\s\S]*class="txtLatLon"[\s\S]*class="settingsLocked"/);
+    assert.match(html, /<fieldset class="globalFields"[\s\S]*<fieldset class="loginFields"[\s\S]*<legend>Your TuneIn Login<\/legend>[\s\S]*class="txtUsername"[^>]*label="TuneIn User:"[\s\S]*class="localSource"[\s\S]*class="txtLatLon"[\s\S]*class="configurationCompleted"[\s\S]*class="settingsLocked"/);
     assert.doesNotMatch(html, /<h2>Favorites<\/h2>/);
     assert.match(html, /class="txtLatLon"[^>]*label="Your LatLon:"/);
     const app = harness();
@@ -308,7 +308,7 @@ test('save retains unrelated configuration and converts empty fields to null', a
     assert.equal(app.writes[0].config.LatLon, null);
     assert.equal(app.writes[0].config.Other, 42);
     assert.equal(app.writes[0].config.SchemaVersion, 1);
-    assert.equal(app.writes[0].config.ConfigurationCompleted, false);
+    assert.equal(app.writes[0].config.ConfigurationCompleted, true);
     assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 1);
     assert.deepEqual(app.notices, ['saved']);
 });
@@ -397,8 +397,32 @@ test('opening settings is lazy and native checkbox captions remain visible text'
     assert.equal(saved.textContent, '<img src=x onerror=alert(1)>');
     assert.equal(saved.childNodes.length, 0);
     assert.ok(app.enhanced.some(event => event.event === 'create'));
-    assert.match(app.elements['.status'].textContent, /TuneIn filtering is not enabled\. To refresh the catalog/);
+    assert.equal(app.elements['.configurationCompleted'].checked, true);
+    assert.equal(app.elements['.status'].textContent,
+        'The TuneIn catalog refresh is unavailable until Global Settings have been reviewed and saved.');
     assert.equal(app.elements['.status'].attributes['data-configuration-required'], 'true');
+    assert.equal(app.elements['.browsingSection'].attributes['data-filtering-configured'], 'false');
+    assert.equal(app.elements['.browsingSection'].open, true);
+});
+
+test('saved filtering opt-out remains disabled', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: false });
+    await visit;
+    assert.equal(app.elements['.configurationCompleted'].checked, false);
+    assert.equal(app.elements['.browsingSection'].attributes['data-filtering-configured'], 'false');
+    assert.equal(app.elements['.browsingSection'].open, true);
+});
+
+test('enabled filtering collapses the filtering section', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    await visit;
+    assert.equal(app.elements['.status'].attributes['data-configuration-required'], 'false');
+    assert.equal(app.elements['.browsingSection'].attributes['data-filtering-configured'], 'true');
+    assert.equal(app.elements['.browsingSection'].open, false);
 });
 
 test('only explicit selector actions fetch branches and save multiple local selections', async () => {
@@ -934,7 +958,7 @@ test('category interval dropdowns restore saved values and save changes without 
 
 test('returning to saved settings opens the Control Panel with the category sections collapsed', async () => {
     const app = harness();
-    const sections = () => [app.elements['.categoriesSection'], app.elements['.localSection'],
+    const sections = () => [app.elements['.categoriesSection'], app.elements['.stationSelectionsSection'],
         ...app.elements['.selectors'].childNodes];
     const first = app.instance.onResume();
     app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: false });
@@ -955,7 +979,7 @@ test('returning to saved settings opens the Control Panel with the category sect
 test('first save history is independent of the browsing checkbox and the settings lock', async () => {
     const app = harness(false, true);
     const visit = app.instance.onResume();
-    app.reads[0].resolve({ SettingsSaved: false });
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: false, SettingsSaved: false });
     await visit;
     const global = app.elements['.globalSection'];
     const categorySections = ['.browsingSection', '.categoriesSection', '.stationSelectionsSection']
@@ -988,7 +1012,9 @@ test('first save history is independent of the browsing checkbox and the setting
     await settle();
     assert.equal(global.open, false);
     assert.equal(global.attributes['data-saved'], 'true');
-    assert.ok(categorySections.concat(categoryPickers()).every(section => !section.open));
+    assert.equal(app.elements['.browsingSection'].open, true);
+    assert.ok(categorySections.filter(section => section !== app.elements['.browsingSection'])
+        .concat(categoryPickers()).every(section => !section.open));
     assert.equal(app.writes[1].config.ConfigurationCompleted, false);
     assert.equal(app.elements['.globalFields'].disabled, true);
     app.instance.onPause();
@@ -996,7 +1022,9 @@ test('first save history is independent of the browsing checkbox and the setting
     app.reads[1].resolve({ SettingsSaved: true, SchemaVersion: 1, ConfigurationCompleted: false });
     await next;
     assert.equal(global.open, false);
-    assert.ok(categorySections.concat(categoryPickers()).every(section => !section.open));
+    assert.equal(app.elements['.browsingSection'].open, true);
+    assert.ok(categorySections.filter(section => section !== app.elements['.browsingSection'])
+        .concat(categoryPickers()).every(section => !section.open));
     assert.equal(app.elements['.configurationFields'].disabled, true);
 });
 

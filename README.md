@@ -40,7 +40,7 @@ metadata changes; a full server-data backup is needed for exact rollback.
 
 As an administrator, open **Advanced → TuneIn**, also available from
 **Plugins → TuneIn → Settings**. Unlock settings, choose the categories and
-selections to expose, enable **configuration browsing after saving**, and **Save**.
+selections to expose, keep **Enable TuneIn Station Filtering** enabled, and **Save**.
 
 | Category | Required configuration |
 | --- | --- |
@@ -75,11 +75,11 @@ Buttons use the active user's native Emby theme.
 ### Global TuneIn Settings
 
 This section opens before the first successful settings save. After a save it
-defaults to collapsed and uses a green tint. Browsing is off on a new install,
-and an orange notice explains what to enable and save before refreshing.
-Checking **Enable configuration browsing after saving** unlocks the dependent
-editors immediately when settings are unlocked, but does not enable catalog
-browsing or refresh until you save.
+defaults to collapsed and uses a green tint. **Enable TuneIn Station Filtering**
+is on by default for a new install. An orange notice explains that Global
+Settings must be reviewed and saved before refreshing. The checkbox unlocks
+dependent editors immediately when settings are unlocked; filtering and catalog
+refresh become available after you save.
 
 - **Hide the individual genre folders** hides recognized genre shortcuts in
   Local Radio, By Location, Talk, Sports and Podcasts. It keeps provider-supplied
@@ -189,8 +189,9 @@ apply previously fetched results without another discovery.
 
 ### Status and station counts
 
-**Catalog Browsing**, **TuneIn Audio Categories**, and **Station Selections**
-collapse after settings are saved and start collapsed on later visits.
+**TuneIn Station Filtering** is green and collapsed after filtering is enabled
+and saved; otherwise it stays open for configuration. **Audio Categories** and
+**Station Selections** collapse after settings are saved and start collapsed on later visits.
 **Catalog Refresh** starts expanded and can be collapsed independently; its
 heading keeps the current refresh state visible.
 Its neutral gray background follows the active Emby theme: light gray on a
