@@ -135,8 +135,8 @@ category does not remove that repair requirement.
 
 ### Schedules
 
-Choose **Off**, **Every 6 hours**, **Every 12 hours**, **Daily**, or **Weekly**
-beside a category, then **Save**. Schedules default to off and apply only to
+Choose **Off**, **Every 6 hours**, **Every 12 hours**, **Daily**, **Weekly**, or
+**Every 30 days** (720 hours) beside a category, then **Save**. Schedules default to off and apply only to
 enabled categories. Intervals begin when the plugin detects the setting or
 Emby starts; missed runs are not replayed after downtime.
 
@@ -233,10 +233,17 @@ summary logs and cannot be reconstructed from past aggregate skip counts.
 
 ### Clean up the TuneIn library
 
-Administrators can open **Maintenance → Clean Up Library Folders** and
-select **Preview cleanup**. The preview counts generated folders and station
-entries verified under the TuneIn channel. Confirm within five minutes to
-remove those entries in background batches. Unknown or unsigned entries are
+Administrators can open **Maintenance → Clean Up Library Folders** below **Catalog Refresh**.
+Cleanup cannot be undone. **Backup Emby** requests the normal **Emby Server Backup**
+scheduled task. It requires the [Backup & Restore plugin and Emby Premiere](https://emby.media/support/articles/Backup-Using-Plugin.html)
+and uses your existing backup settings. TuneIn requires exactly one scheduled
+task named **Emby Server Backup**. A request is not a completed backup: wait for
+Emby to report success, or verify another backup separately if the task is unavailable.
+
+Select **Preview cleanup** to count generated folders and station
+entries verified under the TuneIn channel. Acknowledge that you verified a
+successful backup, then confirm within five minutes to remove those entries in
+background batches. Unknown or unsigned entries are
 left alone; a folder with remaining children is not deleted. The channel root,
 settings and media files are not cleanup targets. Playlists and other
 references to removed entries may break.

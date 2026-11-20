@@ -38,7 +38,7 @@ class Element {
     descendants() { return this.childNodes.flatMap(child => [child, ...child.descendants()]); }
 }
 
-function harness(manualStatus = false, manualSave = false) {
+function harness(manualStatus = false, manualSave = false, manualBackup = false) {
     const handlers = {};
     const formHandlers = {};
     const username = new Element('input');
@@ -54,7 +54,8 @@ function harness(manualStatus = false, manualSave = false) {
         '.localSelector', '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
         '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
         '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
-        '.cleanupConfirm', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText']) elements[name] = new Element();
+        '.cleanupConfirm', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.backupStart',
+        '.backupStatus', '.cleanupBackupVerified']) elements[name] = new Element();
     for (const [section, summary, open] of [
         ['.categoriesSection', '.categoriesSummary', true],
         ['.stationSelectionsSection', '.stationSelectionsSummary', true],
@@ -83,6 +84,7 @@ function harness(manualStatus = false, manualSave = false) {
     const refresh = [];
     const locks = [];
     const cleanup = [];
+    const backup = [];
     const timers = new Map();
     let timerId = 0;
     let serverLocked = false;
@@ -117,6 +119,10 @@ function harness(manualStatus = false, manualSave = false) {
                 refresh.push({ options, ...request });
                 if (!manualStatus && options.type === 'GET') request.resolve({ SettingsLocked: serverLocked });
             } else if (options.url.route.startsWith('TuneIn/Cleanup/')) cleanup.push({ options, ...request });
+            else if (options.url.route.startsWith('TuneIn/Backup/')) {
+                backup.push({ options, ...request });
+                if (!manualBackup && options.type === 'GET') request.resolve({ State: 'Ready' });
+            }
             else selectors.push({ options, ...request });
             return request.promise;
         }
@@ -143,7 +149,7 @@ function harness(manualStatus = false, manualSave = false) {
     });
 
     return { instance: new PluginView(view), username, latLon, requestInterval, formHandlers, reads, writes, notices, errors, loader,
-        elements, selectors, enhanced, calls, handlers, refresh, locks, cleanup, timers };
+        elements, selectors, enhanced, calls, handlers, refresh, locks, cleanup, backup, timers };
 }
 
 function open(details) {
@@ -709,7 +715,7 @@ test('collapsing browsing settings, including Music genres, keeps choices and do
     app.reads[0].resolve({ EnableTalk: true, LatLon: '1,2', Music: [{ Id: 'g1', Name: 'Rock' }] });
     await visit;
     const music = app.elements['.selectors'].childNodes[2];
-    assert.equal(music.childNodes[0].textContent, 'Music genres');
+    assert.equal(music.childNodes[0].textContent, 'Music Genres');
     const summaries = [app.elements['.categoriesSummary'], app.elements['.stationSelectionsSummary'], app.elements['.localSummary'],
         ...app.elements['.selectors'].childNodes.map(section => section.childNodes[0])];
     for (const summary of summaries) {
@@ -745,6 +751,9 @@ test('maintenance previews before confirming and blocks settings and refresh unt
     assert.match(app.elements['.cleanupPreviewText'].textContent, /2 folders and 7 station entries/);
     assert.equal(app.elements['.cleanupConfirmation'].hidden, false);
     assert.equal(app.elements['.cleanupBack'].focused, true);
+    assert.equal(app.elements['.cleanupConfirm'].disabled, true);
+    app.elements['.cleanupBackupVerified'].checked = true;
+    app.elements['.cleanupBackupVerified'].handlers.change();
     const start = click('.cleanupConfirm');
     assert.equal(app.cleanup[1].options.url.route, 'TuneIn/Cleanup/Start');
     assert.equal(JSON.parse(app.cleanup[1].options.data).Token, 'preview-token');
@@ -761,6 +770,28 @@ test('maintenance previews before confirming and blocks settings and refresh unt
     await settle();
     assert.match(app.elements['.cleanupStatus'].textContent, /8 of 9.*1 entries could not be removed/);
     assert.equal(app.elements['.settingsLocked'].disabled, false);
+});
+
+test('backup uses the dedicated action and cleanup stays disabled while Emby has not finished', async () => {
+    const app = harness(false, false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    const opened = open(app.elements['.maintenanceSection']);
+    app.backup[0].resolve({ State: 'Ready' });
+    await opened;
+    const start = app.elements['.backupStart'].handlers.click();
+    assert.deepEqual(app.backup[1].options.url, { route: 'TuneIn/Backup/Start', params: undefined });
+    app.backup[1].resolve({ State: 'Running' });
+    await start;
+    assert.match(app.elements['.backupStatus'].textContent, /Wait for Emby/);
+    assert.equal(app.elements['.cleanupPreview'].disabled, true);
+    [...app.timers.values()][0].handler();
+    app.backup[2].resolve({ State: 'Completed' });
+    await settle();
+    assert.match(app.elements['.backupStatus'].textContent, /completed successfully/);
+    assert.equal(app.elements['.cleanupPreview'].disabled, false);
+    app.instance.onPause();
 });
 
 test('Catalog Refresh opens by default and can collapse and reopen with fresh status', async () => {
@@ -876,10 +907,11 @@ test('category interval dropdowns restore saved values and save changes without 
     assert.equal(sports.value, '0');
     talk.value = '0';
     talk.handlers.change();
-    sports.value = '12';
+    assert.ok(sports.childNodes.some(option => option.value === '720' && option.textContent === 'Every 30 days'));
+    sports.value = '720';
     sports.handlers.change();
     app.formHandlers.submit({ preventDefault() {} });
-    assert.equal(JSON.stringify(app.writes[0].config.RefreshSchedules), '[{"Category":"sports","IntervalHours":12}]');
+    assert.equal(JSON.stringify(app.writes[0].config.RefreshSchedules), '[{"Category":"sports","IntervalHours":720}]');
     assert.ok(app.refresh.every(request => request.options.type === 'GET'));
 });
 

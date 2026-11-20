@@ -9,7 +9,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     ];
     var selectors = [
         ['language', 'Languages', 'By Language'], ['location', 'Locations', 'By Location'],
-        ['local', 'LocalCities', 'Local Radio cities/regions'], ['music', 'Music', 'Music genres']
+        ['local', 'LocalCities', 'Local Radio cities/regions'], ['music', 'Music', 'Music Genres']
     ];
 
     function message(instance, text) {
@@ -457,7 +457,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 var schedule = document.createElement('select');
                 schedule.setAttribute('aria-label', item.Name + ' refresh interval');
                 [['0', 'Schedule: Off'], ['6', 'Every 6 hours'], ['12', 'Every 12 hours'],
-                    ['24', 'Daily'], ['168', 'Weekly']].forEach(function (choice) {
+                    ['24', 'Daily'], ['168', 'Weekly'], ['720', 'Every 30 days']].forEach(function (choice) {
                     var option = document.createElement('option');
                     option.value = choice[0];
                     option.textContent = choice[1];
@@ -509,6 +509,54 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         });
     }
 
+    function backupInProgress(instance) {
+        return instance.backupStarting || instance.backupState === 'Running' || instance.backupState === 'Busy';
+    }
+
+    function readBackup(instance, start) {
+        if (!instance.refreshVisible || !instance.maintenanceSection.open) return;
+        if (instance.backupRequest || (start && instance.view.querySelector('.backupStart').disabled)) return;
+        var epoch = instance.viewEpoch;
+        var request = {};
+        instance.backupRequest = request;
+        if (start) {
+            instance.backupStarting = true;
+            instance.view.querySelector('.backupStatus').textContent = 'Requesting Emby Server Backup...';
+            refreshControls(instance, instance.refreshAvailable);
+        }
+        return ApiClient.ajax({
+            type: start ? 'POST' : 'GET', dataType: 'json',
+            url: ApiClient.getUrl('TuneIn/Backup/' + (start ? 'Start' : 'Status'))
+        }).then(function (status) {
+            if (epoch !== instance.viewEpoch || instance.backupRequest !== request) return;
+            instance.backupState = status.State;
+            var message = {
+                Ready: 'No backup result is recorded. Run Backup Emby or verify a successful backup before cleanup.',
+                Unavailable: 'Emby Server Backup is unavailable. Configure Backup & Restore with Emby Premiere, or verify another backup before cleanup.',
+                Running: 'Backup requested. Wait for Emby to report a successful result before cleanup.',
+                Busy: 'Emby Server Backup is already active. Wait for it to finish before cleanup.',
+                Completed: 'Emby reported that its latest backup completed successfully.',
+                Failed: 'The latest Emby backup did not complete successfully. Check Scheduled Tasks before cleanup.',
+                Unconfirmed: 'Emby has not confirmed a new backup result. Check Scheduled Tasks before cleanup.'
+            }[status.State];
+            var target = instance.view.querySelector('.backupStatus');
+            if (target.textContent !== message) target.textContent = message;
+        }).catch(function () {
+            if (epoch !== instance.viewEpoch || instance.backupRequest !== request) return;
+            instance.view.querySelector('.backupStatus').textContent =
+                'Could not verify the Emby backup status. Check Scheduled Tasks before cleanup.';
+            // A failed start response does not prove that the server did not start the backup.
+            if (start) instance.backupState = 'Running';
+        }).finally(function () {
+            if (instance.backupRequest !== request) return;
+            instance.backupRequest = null;
+            instance.backupStarting = false;
+            if (epoch !== instance.viewEpoch) return;
+            refreshControls(instance, instance.refreshAvailable);
+            if (start) scheduleStatus(instance, epoch);
+        });
+    }
+
     function renderCleanup(instance, cleanup) {
         instance.cleanupBusy = !!cleanup && cleanup.State === 'Running';
         var target = instance.view.querySelector('.cleanupStatus');
@@ -524,6 +572,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     function clearCleanupPreview(instance) {
         instance.cleanupPreview = null;
         instance.view.querySelector('.cleanupConfirmation').hidden = true;
+        instance.view.querySelector('.cleanupBackupVerified').checked = false;
     }
 
     function doCleanup(instance, start) {
@@ -596,8 +645,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         });
         var cannotClean = !available || !!instance.refreshBusy || !!instance.refreshAction || !!instance.saving ||
             !!instance.lockChanging || !!instance.cleanupBusy || !!instance.cleanupAction;
+        instance.view.querySelector('.backupStart').disabled = !!instance.cleanupBusy || !!instance.cleanupAction ||
+            !!backupInProgress(instance) || !!instance.backupRequest || !instance.backupState || instance.backupState === 'Unavailable';
+        cannotClean = cannotClean || !!backupInProgress(instance);
         instance.view.querySelector('.cleanupPreview').disabled = cannotClean;
-        instance.view.querySelector('.cleanupConfirm').disabled = cannotClean || !instance.cleanupPreview;
+        instance.view.querySelector('.cleanupConfirm').disabled = cannotClean || !instance.cleanupPreview ||
+            !instance.view.querySelector('.cleanupBackupVerified').checked;
         editing(instance);
     }
 
@@ -646,12 +699,13 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (epoch !== instance.viewEpoch || !instance.refreshVisible) return;
         clearTimeout(instance.refreshTimer);
         instance.refreshTimer = setTimeout(function () { pollStatus(instance, epoch); },
-            instance.refreshBusy || instance.cleanupBusy ? 1500 : 10000);
+            instance.refreshBusy || instance.cleanupBusy || backupInProgress(instance) ? 1500 : 10000);
     }
 
     function pollStatus(instance, epoch) {
         if (epoch !== instance.viewEpoch || !instance.refreshVisible) return;
         clearTimeout(instance.refreshTimer);
+        readBackup(instance, false);
         if (instance.refreshAction || instance.lockChanging || instance.cleanupAction) return scheduleStatus(instance, epoch);
         if (instance.refreshPoll) return instance.refreshPoll;
         var generation = instance.refreshGeneration || 0;
@@ -811,6 +865,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         BaseView.apply(this, arguments);
         var instance = this;
         instance.refreshSection = view.querySelector('.tuneInRefresh');
+        instance.maintenanceSection = view.querySelector('.maintenanceSummary').parentNode;
         instance.refreshCategoryRows = new Map();
         instance.refreshSchedules = new Map();
         ['.categoriesSummary', '.stationSelectionsSummary', '.localSummary', '.refreshSummary', '.maintenanceSummary'].forEach(function (selector) {
@@ -833,13 +888,18 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         view.querySelector('.refreshLogButton').addEventListener('click', function () { return retrieveRefreshLog(instance); });
         view.querySelector('.cleanupPreview').addEventListener('click', function () { return doCleanup(instance, false); });
         view.querySelector('.cleanupConfirm').addEventListener('click', function () { return doCleanup(instance, true); });
+        view.querySelector('.cleanupBackupVerified').addEventListener('change', function () {
+            refreshControls(instance, instance.refreshAvailable);
+        });
+        view.querySelector('.backupStart').addEventListener('click', function () { return readBackup(instance, true); });
         view.querySelector('.cleanupBack').addEventListener('click', function () {
             clearCleanupPreview(instance);
             refreshControls(instance, instance.refreshAvailable);
             view.querySelector('.maintenanceSummary').focus();
         });
-        view.querySelector('.maintenanceSummary').parentNode.addEventListener('toggle', function () {
-            if (!this.open) clearCleanupPreview(instance);
+        instance.maintenanceSection.addEventListener('toggle', function () {
+            if (!instance.maintenanceSection.open) clearCleanupPreview(instance);
+            else return readBackup(instance, false);
         });
         dialog.addEventListener('close', function () {
             if (!dialog.open) instance.refreshRecovery = null;
@@ -941,6 +1001,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     View.prototype.onPause = function () {
         this.viewEpoch = (this.viewEpoch || 0) + 1;
         this.refreshVisible = false;
+        this.backupRequest = null;
+        this.backupStarting = false;
         clearCleanupPreview(this);
         this.refreshRecovery = null;
         var dialog = this.view.querySelector('.tuneInRecoveryDialog');

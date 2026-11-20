@@ -21,7 +21,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private static readonly XmlSerializer Serializer = new XmlSerializer(typeof(PluginConfiguration));
         private static readonly XmlSerializer ScopeSerializer = CreateScopeSerializer();
         private static readonly string[] CategoryKeys = { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
-        private static readonly int[] ScheduleHours = { 6, 12, 24, 168 };
+        private static readonly int[] ScheduleHours = { 6, 12, 24, 168, 720 };
         public PluginConfiguration Value { get; }
         public string Key { get; }
 

@@ -100,6 +100,32 @@
             outline: 2px solid currentColor;
             outline-offset: 2px;
         }
+        .tuneInRefreshCard, .tuneInCleanupWarning {
+            border: 1px solid currentColor;
+            border-radius: .35em;
+            padding: .85em 1em;
+        }
+        .tuneInRefreshCard {
+            border-color: color-mix(in srgb, currentColor 25%, transparent);
+        }
+        .tuneInRefreshCard > .refreshStatus {
+            margin: 0;
+            font-weight: 600;
+            overflow-wrap: anywhere;
+        }
+        .tuneInRefreshActions, .tuneInCleanupActions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: .35em;
+        }
+        .tuneInCleanupWarning {
+            border-color: #b97820;
+            background: color-mix(in srgb, #b97820 10%, transparent);
+        }
+        .tuneInCleanupWarning > h3 {
+            margin-block: 0 .45em;
+        }
         .tuneInRefresh .refreshMetrics {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
@@ -110,10 +136,12 @@
             min-width: 0;
         }
         .tuneInRefresh .refreshMetrics dt {
-            font-weight: 600;
+            font-size: .85em;
         }
         .tuneInRefresh .refreshMetrics dd {
             margin: .15em 0 0;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
             overflow-wrap: anywhere;
         }
         .tuneInRefresh .refreshDiagnostics > summary {
@@ -272,7 +300,7 @@
                 <span>Enable configured browsing after saving</span>
             </label>
             <details class="tuneInSection">
-                <summary class="categoriesSummary">Categories</summary>
+                <summary class="categoriesSummary">TuneIn Audio Categories</summary>
                 <div class="categories"></div>
             </details>
             <details class="tuneInSection">
@@ -293,42 +321,33 @@
         <details class="auto-center tuneInSection tuneInRefresh" open>
             <summary class="refreshSummary">Catalog Refresh</summary>
             <p>Checks the saved TuneIn categories and updates the Emby library when needed.</p>
-            <p class="fieldDescription">Choose a refresh interval next to a category, then select Save above. Off keeps that category manual only.</p>
-            <p class="refreshStatus" role="status">Reading refresh status...</p>
-            <dl class="refreshMetrics" aria-label="Current refresh metrics">
-                <div><dt>Elapsed</dt><dd class="refreshElapsed">-</dd></div>
-                <div><dt>Current work</dt><dd class="refreshWork">-</dd></div>
-                <div><dt>Last progress</dt><dd class="refreshLastProgress">-</dd></div>
-            </dl>
-            <details class="tuneInSection refreshDiagnostics">
-                <summary>Diagnostics</summary>
-                <p class="refreshDiagnosticsText"></p>
-            </details>
-            <details class="auto-center tuneInSection">
-                <summary class="maintenanceSummary">Maintenance</summary>
-                <h3>Clean Up Library Folders</h3>
-                <p>Remove generated folders and station entries from the TuneIn channel in Emby. This does not remove the channel, saved settings or media files.</p>
-                <p class="fieldDescription">Playlist entries and other references to removed items may break. After cleanup, use Refresh all enabled categories to rebuild the catalog.</p>
-                <button is="emby-button" type="button" class="raised cleanupPreview" disabled>Preview cleanup</button>
-                <div class="cleanupConfirmation" hidden>
-                    <p class="cleanupPreviewText" role="status"></p>
-                    <button is="emby-button" type="button" class="raised cleanupConfirm" disabled>Remove generated entries</button>
-                    <button is="emby-button" type="button" class="raised cleanupBack">Back</button>
+            <div class="tuneInRefreshCard">
+                <p class="refreshStatus" role="status">Reading refresh status...</p>
+                <dl class="refreshMetrics" aria-label="Current refresh metrics">
+                    <div><dt>Elapsed</dt><dd class="refreshElapsed">-</dd></div>
+                    <div><dt>Current work</dt><dd class="refreshWork">-</dd></div>
+                    <div><dt>Last progress</dt><dd class="refreshLastProgress">-</dd></div>
+                </dl>
+                <div class="tuneInRefreshActions">
+                    <button is="emby-button" type="button" class="raised refreshStart" disabled>Refresh all enabled categories</button>
+                    <button is="emby-button" type="button" class="raised refreshCancel" disabled>Cancel refresh</button>
                 </div>
-                <p class="cleanupStatus" role="status"></p>
-                <p class="cleanupError" role="alert"></p>
-            </details>
-            <p class="refreshError" role="alert"></p>
-            <button is="emby-button" type="button" class="raised refreshStart" disabled>Refresh all enabled categories</button>
-            <button is="emby-button" type="button" class="raised refreshCancel" disabled>Cancel refresh</button>
-            <button is="emby-button" type="button" class="raised refreshLogButton" disabled>Retrieve refresh log</button>
-            <p class="refreshQueueNote" role="status" hidden></p>
-            <p class="refreshLogMessage" role="status"></p>
-            <p class="fieldDescription">Failed refreshes and skipped entries have a retrievable report (up to 64 KB). Link details omit non-navigation parameters; exception traces may contain private server details. Review before sharing. A new refresh or server restart clears the report.</p>
-            <pre class="refreshFailureLog" aria-label="Latest refresh diagnostic report" tabindex="0" hidden></pre>
+                <p class="refreshQueueNote" role="status" hidden></p>
+                <p class="refreshError" role="alert"></p>
+            </div>
+            <h3>Category refreshes</h3>
+            <p class="fieldDescription">Choose a refresh interval next to a category, then select Save above. Off keeps that category manual only.</p>
             <p class="fieldDescription">Distinct stations at the last category refresh. Available uses saved filters; Partial is a lower bound. In Emby checks the library.</p>
             <p class="refreshCategoryNote" role="status"></p>
             <ul class="tuneInRefreshCategories" aria-label="Category refresh status"></ul>
+            <details class="tuneInSection refreshDiagnostics">
+                <summary>Diagnostics</summary>
+                <p class="refreshDiagnosticsText"></p>
+                <button is="emby-button" type="button" class="raised refreshLogButton" disabled>Retrieve refresh log</button>
+                <p class="refreshLogMessage" role="status"></p>
+                <p class="fieldDescription">Failed refreshes and skipped entries have a retrievable report (up to 64 KB). Link details omit non-navigation parameters; exception traces may contain private server details. Review before sharing. A new refresh or server restart clears the report.</p>
+                <pre class="refreshFailureLog" aria-label="Latest refresh diagnostic report" tabindex="0" hidden></pre>
+            </details>
             <dialog class="tuneInRecoveryDialog" aria-labelledby="tuneInRecoveryTitle" aria-describedby="tuneInRecoveryText">
                 <h3 id="tuneInRecoveryTitle">Choose which refresh runs first</h3>
                 <p id="tuneInRecoveryText" class="refreshRecoveryText"></p>
@@ -338,6 +357,32 @@
                     <button is="emby-button" type="submit" class="raised refreshDismiss" autofocus>Back</button>
                 </form>
             </dialog>
+        </details>
+        <details class="auto-center tuneInSection">
+            <summary class="maintenanceSummary">Maintenance</summary>
+            <div class="tuneInCleanupWarning">
+                <h3>Clean Up Library Folders</h3>
+                <p><strong>Cleanup cannot be undone.</strong> Back up Emby and wait for a successful backup before removing any entries.</p>
+                <p>Cleanup removes generated folders and station entries from the TuneIn channel, not the channel itself, settings, or media files. Playlists and other references may break. Use Refresh all enabled categories to rebuild the catalog.</p>
+                <div class="tuneInCleanupActions">
+                    <button is="emby-button" type="button" class="raised backupStart" disabled>Backup Emby</button>
+                    <button is="emby-button" type="button" class="raised cleanupPreview" disabled>Preview cleanup</button>
+                </div>
+                <p class="backupStatus" role="status"></p>
+                <div class="cleanupConfirmation" hidden>
+                    <p class="cleanupPreviewText" role="status"></p>
+                    <label class="emby-checkbox-label">
+                        <input type="checkbox" is="emby-checkbox" class="cleanupBackupVerified" />
+                        <span>I verified a successful backup.</span>
+                    </label>
+                    <div class="tuneInCleanupActions">
+                        <button is="emby-button" type="button" class="raised cleanupConfirm" disabled>Remove generated entries</button>
+                        <button is="emby-button" type="button" class="raised cleanupBack">Back</button>
+                    </div>
+                </div>
+                <p class="cleanupStatus" role="status"></p>
+                <p class="cleanupError" role="alert"></p>
+            </div>
         </details>
     </div>
 </div>
