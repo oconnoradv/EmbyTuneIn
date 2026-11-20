@@ -32,7 +32,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
     internal sealed class TuneInLibraryCleanup
     {
-        internal const int BatchSize = 2000;
+        internal const int BatchSize = 500;
         internal const int ParallelRemovals = 4;
         private readonly ILibraryManager library;
         private readonly Func<Channel> getRoot;

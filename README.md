@@ -4,16 +4,47 @@ TuneIn adds an audio channel to Emby with administrator-configured browsing,
 category refreshes, station counts, and live playback. Opening the settings
 page or channel root does not recursively crawl the TuneIn catalog.
 
-## Branch and pre-release scope
+> [!IMPORTANT]
+> **Compatibility and dependencies:** This branch targets Emby Server
+> **4.9.1.90+ stable** or a compatible **4.9.2.7+ beta**, and builds against
+> **MediaBrowser.Server.Core 4.9.1.90** and **System.Memory 4.6.3**.
+> Do not copy dependency DLLs into Emby's plugin folder. Recognized
+> separate-introduction playback also requires Emby's configured FFmpeg and
+> loopback access; ordinary direct playback does not.
+
+## Features
+
+- **Configured browsing:** Choose category scopes and saved selections, with
+  signed navigation IDs, lazy-loaded selectors, genre-folder filtering, and
+  a lockable, theme-aware Control Panel. See [Configure browsing](#configure-browsing).
+- **Resilient refreshes:** Refresh individual categories or all enabled
+  categories, manually or on a schedule. Malformed trusted links can produce
+  explicitly partial results with compatible saved branches retained; unsafe
+  links and unrecovered failures still stop the affected work. See
+  [Partial results](#partial-results).
+- **Large catalogs and recovery:** Bounded parallel discovery, shared request
+  pacing, checkpoints, compatible short-lived page reuse, scoped imports, and
+  bounded retries help manage large refreshes. Import verification and
+  reconciliation protect against treating interrupted imports as complete.
+  See [Request limits and recovery](#request-limits-and-recovery).
+- **Status and diagnostics:** The dashboard reports category outcomes, filtered
+  and in-Emby station counts, progress, and bounded administrator diagnostic
+  reports. See [Status and station counts](#status-and-station-counts).
+- **Library maintenance:** Preview and clean one category or all categories
+  with backup acknowledgement, protected media files, and a cooperative stop
+  control. See [Clean up the TuneIn library](#clean-up-the-tunein-library).
+- **Playback:** Direct playback and supported separate-introduction handoff
+  include bounded resolution and stalled-read handling. See [Playback](#playback).
+
+## Branch and release scope
 
 This branch combines configured browsing, partial refreshes, the Control Panel,
-playback improvements, and safe library maintenance. Discovery and import
-attempts have separate 60-minute deadlines and bounded retries. Restarting
-Emby alone never starts a refresh.
+playback improvements, and library maintenance. Discovery and import attempts
+have separate 60-minute deadlines and bounded retries. Restarting Emby alone
+never starts a refresh.
 
 ## Requirements and installation
 
-Use Emby Server **4.9.1.90+ stable** or a compatible **4.9.2.7+ beta**.
 The plugin assembly version is **1.2.8.0**. Release downloads include
 `build-info.json` to identify the source commit and `SHA256SUMS.txt` to verify
 the files.
@@ -21,6 +52,9 @@ the files.
 Download the [music refresh resilience RC1](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.1).
 If you downloaded an earlier RC1, download the replacement assets: the release
 tag and assembly version are unchanged, but the source commit and checksums differ.
+The branch includes a later cleanup status update interval of 500 attempts;
+the currently published RC1 reports every 2,000 attempts instead. Check
+`build-info.json` when comparing a download with the branch.
 
 1. Stop Emby and back up the existing plugin DLL, TuneIn configuration,
    `TuneIn.refresh.xml` (including `.discovery` and `.recovery` sidecars), and
@@ -291,13 +325,14 @@ generated folders and station entries verified under the TuneIn channel.
 Category cleanup includes only matching authenticated category folders and their
 verified descendants, including folders from earlier settings. Acknowledge that you verified a
 successful backup, then confirm within five minutes to remove those entries in
-background groups of up to 2,000 individually verified removals, reporting
-progress after each group. Up to four sibling entries can be removed concurrently;
-children are still removed before their parents. Unknown or unsigned entries are
-left alone; a folder with remaining children is not deleted. The channel root,
-settings and media files are not cleanup targets. Playlists and other
-references to removed entries may break. Concurrent deletion behavior and
-speed have not been verified on a live Emby server.
+background groups of up to 500 individually verified removal attempts, reporting
+progress after each group, including failures. Up to four sibling entries can
+be removed concurrently; children are still removed before their parents.
+Unknown or unsigned entries are left alone; a folder with remaining children
+is not deleted. The channel root, settings and media files are not cleanup
+targets. Playlists and other references to removed entries may break.
+Concurrent deletion behavior and speed have not been verified on a live Emby
+server.
 
 Refreshes (including schedules and recovery) and settings writes cannot run
 while cleanup is active. The dashboard reports progress and partial failures.

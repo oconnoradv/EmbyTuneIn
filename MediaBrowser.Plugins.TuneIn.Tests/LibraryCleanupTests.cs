@@ -75,19 +75,23 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task ReportsAfterTwoThousandRemovalsAndTheRemainingGroup()
+        public async Task ReportsAfterFiveHundredAttemptsAndTheRemainingGroup()
         {
             var fixture = new Fixture();
             var id = fixture.SignedId();
-            for (var index = 0; index < 2001; index++)
+            for (var index = 0; index < 1001; index++)
                 fixture.Add(index + 2, 1, id);
             var plan = fixture.Cleanup.Preview(fixture.Directory.Snapshot());
             var reports = new List<(int Removed, int Failed)>();
+            fixture.Library.BeforeDeleteItem = item =>
+            {
+                if (item.InternalId == 1002) throw new InvalidOperationException("Synthetic failure");
+            };
 
             await fixture.Cleanup.RunAsync(plan, (removed, failed) => reports.Add((removed, failed)), CancellationToken.None);
 
-            Assert.Equal(new[] { (2000, 0), (2001, 0) }, reports);
-            Assert.Equal(2001, fixture.Library.Removed.Count);
+            Assert.Equal(new[] { (499, 1), (999, 1), (1000, 1) }, reports);
+            Assert.Equal(1000, fixture.Library.Removed.Count);
         }
 
         [Fact]
