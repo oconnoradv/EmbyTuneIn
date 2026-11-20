@@ -1,5 +1,11 @@
 ﻿<div is="emby-scroller" class="view flex flex-direction-column scrollFrameY flex-grow" data-horizontal="false" data-forcescrollbar="true" data-centerfocus="true" data-bindheader="true" data-controller="__plugin/tuneinjs" data-title="TuneIn">
     <style>
+        [data-controller="__plugin/tuneinjs"] {
+            --tunein-neutral-surface: color-mix(in srgb, currentColor 7%,
+                hsl(var(--card-background-hue, 0) var(--card-background-saturation, 0%)
+                    var(--card-background-lightness, 50%) / var(--card-background-alpha, 0)));
+            --tunein-neutral-border: color-mix(in srgb, currentColor 17%, transparent);
+        }
         .tuneInLoginRow {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
@@ -96,23 +102,28 @@
         .tuneInSectionBox {
             min-inline-size: 0;
             border: 1px solid currentColor;
-            border-color: color-mix(in srgb, currentColor 28%, transparent);
+            border-color: var(--tunein-neutral-border);
             border-radius: .35em;
             padding: .8em 1em;
         }
-        .tuneInGlobal {
-            background: color-mix(in srgb, currentColor 8%, transparent);
+        .tuneInGlobal, .tuneInRefresh {
+            background: var(--tunein-neutral-surface);
+            border-radius: .35em;
             padding: 0 1em;
         }
-        .tuneInGlobal[open] { padding-block-end: 1em; }
+        .tuneInGlobal[open], .tuneInRefresh[open] { padding-block-end: 1em; }
         .tuneInGlobal[data-saved="true"], .tuneInRefreshCategories [data-outcome="Completed"] {
             background: color-mix(in srgb, #38864c 17%, transparent);
         }
         .tuneInRefreshCategories [data-outcome="Partial"] {
             background: color-mix(in srgb, #bc6b19 17%, transparent);
+            outline: 2px solid #bc6b19;
+            outline-offset: -2px;
         }
         .tuneInRefreshCategories [data-outcome="Error"] {
             background: color-mix(in srgb, #bf4141 17%, transparent);
+            outline: 2px solid #bf4141;
+            outline-offset: -2px;
         }
         .tuneInRefreshCategories li {
             padding: .35em .55em;
@@ -135,7 +146,7 @@
             padding: .85em 1em;
         }
         .tuneInRefreshCard {
-            border-color: color-mix(in srgb, currentColor 25%, transparent);
+            border-color: var(--tunein-neutral-border);
         }
         .tuneInRefreshCard > .refreshStatus {
             margin: 0;
@@ -149,6 +160,7 @@
             gap: .35em;
         }
         .tuneInCleanupWarning {
+            border-width: 2px;
             border-color: #b97820;
             background: color-mix(in srgb, #b97820 10%, transparent);
         }
@@ -187,7 +199,7 @@
             max-height: 20rem;
             overflow: auto;
             padding: .75em;
-            border: 1px solid currentColor;
+            border: 1px solid var(--tunein-neutral-border);
             white-space: pre-wrap;
             overflow-wrap: anywhere;
         }
@@ -235,7 +247,7 @@
                 grid-template-columns: minmax(0, 1fr) auto auto;
                 align-items: baseline;
                 gap: .35em .6em;
-                border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+                border: 1px solid var(--tunein-neutral-border);
                 border-radius: .4em;
                 padding: .6em;
             }
@@ -289,7 +301,7 @@
             overflow-y: auto;
             overscroll-behavior-y: contain;
             padding: .5em;
-            border: 1px solid currentColor;
+            border: 1px solid var(--tunein-neutral-border);
         }
         .tuneInSelectors .tuneInSelectorResults {
             list-style: none;

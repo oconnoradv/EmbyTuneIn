@@ -187,6 +187,10 @@ apply previously fetched results without another discovery.
 ### Status and station counts
 
 The collapsible **Catalog Refresh** heading keeps the current state visible.
+Its neutral gray background follows the active Emby theme: light gray on a
+light theme and a darker surface on a dark theme. Green marks success without
+a bold outline; partial results and errors use stronger orange and red
+outlines alongside their status text.
 Live metrics show elapsed time, last progress, category progress, and catalog
 pages against the safety limit. During import, progress switches to folders
 served out of the known total. Discovery does not estimate a percentage or ETA
