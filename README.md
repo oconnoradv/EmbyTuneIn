@@ -11,6 +11,11 @@ The plugin assembly version is **1.2.8.0**. Release downloads include
 `build-info.json` to identify the source commit and `SHA256SUMS.txt` to verify
 the files.
 
+The [maintenance RC1 prerelease](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-maintenance-browsing-refresh-rc.1)
+was rebuilt with the playback-start and staged-import reliability changes.
+If you downloaded RC1 before this update, download the new assets: the release
+tag and assembly version are unchanged, but the source commit and checksums differ.
+
 1. Stop Emby and back up the existing plugin DLL, TuneIn configuration,
    `TuneIn.refresh.xml`, and `tunein-fork-settings-lock.xml` if present.
    A full server-data backup also preserves library metadata for rollback.
