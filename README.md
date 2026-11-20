@@ -187,8 +187,10 @@ apply previously fetched results without another discovery.
 
 ### Status and station counts
 
-**Catalog Browsing** and **Catalog Refresh** both start expanded and can be
-collapsed independently. The **Catalog Refresh** heading keeps the current state visible.
+**Catalog Browsing**, **TuneIn Audio Categories**, and **Station Selections**
+collapse after settings are saved and start collapsed on later visits.
+**Catalog Refresh** starts expanded and can be collapsed independently; its
+heading keeps the current refresh state visible.
 Its neutral gray background follows the active Emby theme: light gray on a
 light theme and a darker surface on a dark theme. Green marks success without
 a bold outline; partial results and errors use stronger orange and red

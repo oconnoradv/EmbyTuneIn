@@ -957,6 +957,11 @@ test('first save history is independent of the browsing checkbox and the setting
     app.reads[0].resolve({ SettingsSaved: false });
     await visit;
     const global = app.elements['.globalSection'];
+    const categorySections = ['.browsingSection', '.categoriesSection', '.stationSelectionsSection']
+        .map(name => app.elements[name]);
+    const categoryPickers = () => app.elements['.selectors'].childNodes;
+    assert.ok(categorySections.every(section => section.open));
+    assert.ok(categoryPickers().some(section => section.open));
     assert.equal(global.open, true);
     assert.equal(global.attributes['data-saved'], 'false');
     assert.equal(app.elements['.configurationCompleted'].checked, false);
@@ -982,6 +987,7 @@ test('first save history is independent of the browsing checkbox and the setting
     await settle();
     assert.equal(global.open, false);
     assert.equal(global.attributes['data-saved'], 'true');
+    assert.ok(categorySections.concat(categoryPickers()).every(section => !section.open));
     assert.equal(app.writes[1].config.ConfigurationCompleted, false);
     assert.equal(app.elements['.globalFields'].disabled, true);
     app.instance.onPause();
@@ -989,6 +995,7 @@ test('first save history is independent of the browsing checkbox and the setting
     app.reads[1].resolve({ SettingsSaved: true, SchemaVersion: 1, ConfigurationCompleted: false });
     await next;
     assert.equal(global.open, false);
+    assert.ok(categorySections.concat(categoryPickers()).every(section => !section.open));
     assert.equal(app.elements['.configurationFields'].disabled, true);
 });
 

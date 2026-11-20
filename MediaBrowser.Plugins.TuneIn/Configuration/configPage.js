@@ -298,9 +298,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     }
 
     function showSaveHistory(instance, saved) {
-        var section = instance.view.querySelector('.globalSummary').parentNode;
-        section.setAttribute('data-saved', String(saved));
-        section.open = !saved;
+        var view = instance.view;
+        view.querySelector('.globalSummary').parentNode.setAttribute('data-saved', String(saved));
+        ['.globalSummary', '.browsingSummary', '.categoriesSummary', '.stationSelectionsSummary'].forEach(function (selector) {
+            view.querySelector(selector).parentNode.open = !saved;
+        });
+        if (saved) {
+            view.querySelector('.selectors').childNodes.forEach(function (section) { section.open = false; });
+        }
     }
 
     function editing(instance) {
@@ -1063,10 +1068,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.localSource').value = config.LocalRadioSource ||
                 (ambiguous ? '' : config.UseCoordinates ? 'coordinates' : hasRegions ? 'regions' : '');
             view.querySelector('.configurationCompleted').checked = config.SchemaVersion === 1 && !!config.ConfigurationCompleted;
-            showSaveHistory(instance, config.SettingsSaved === true || (config.SettingsSaved == null && config.SchemaVersion === 1));
-            var openByDefault = config.SchemaVersion !== 1;
-            view.querySelector('.categoriesSummary').parentNode.open = openByDefault;
-            view.querySelector('.stationSelectionsSummary').parentNode.open = openByDefault;
+            var saved = config.SettingsSaved === true || (config.SettingsSaved == null && config.SchemaVersion === 1);
+            showSaveHistory(instance, saved);
             var list = view.querySelector('.categories');
             list.textContent = '';
             categories.forEach(function (spec) {
@@ -1079,7 +1082,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             var pickerList = view.querySelector('.selectors');
             pickerList.textContent = '';
             selectors.forEach(function (spec) {
-                pickerList.appendChild(createSelector(instance, spec, openByDefault));
+                pickerList.appendChild(createSelector(instance, spec, !saved));
             });
             $(view).trigger('create');
             message(instance, browsingStatus(config) + (ambiguous && config.EnableLocalRadio ?
