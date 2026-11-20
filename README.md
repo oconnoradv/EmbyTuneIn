@@ -75,7 +75,8 @@ Buttons use the active user's native Emby theme.
 ### Global TuneIn Settings
 
 This section opens before the first successful settings save. After a save it
-defaults to collapsed and uses a green tint. Browsing is off on a new install.
+defaults to collapsed and uses a green tint. Browsing is off on a new install,
+and an orange notice explains what to enable and save before refreshing.
 Checking **Enable configuration browsing after saving** unlocks the dependent
 editors immediately when settings are unlocked, but does not enable catalog
 browsing or refresh until you save.

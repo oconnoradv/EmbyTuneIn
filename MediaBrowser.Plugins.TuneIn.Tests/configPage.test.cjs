@@ -397,7 +397,8 @@ test('opening settings is lazy and native checkbox captions remain visible text'
     assert.equal(saved.textContent, '<img src=x onerror=alert(1)>');
     assert.equal(saved.childNodes.length, 0);
     assert.ok(app.enhanced.some(event => event.event === 'create'));
-    assert.match(app.elements['.status'].textContent, /Browsing is disabled/);
+    assert.match(app.elements['.status'].textContent, /TuneIn filtering is not enabled\. To refresh the catalog/);
+    assert.equal(app.elements['.status'].attributes['data-configuration-required'], 'true');
 });
 
 test('only explicit selector actions fetch branches and save multiple local selections', async () => {

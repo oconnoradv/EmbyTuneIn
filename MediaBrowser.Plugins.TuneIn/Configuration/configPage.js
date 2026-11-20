@@ -16,8 +16,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         ['local', 'LocalCities', 'Local Cities and Regions']
     ];
 
-    function message(instance, text) {
-        instance.view.querySelector('.status').textContent = text;
+    function message(instance, text, configurationRequired) {
+        var status = instance.view.querySelector('.status');
+        status.textContent = text;
+        status.setAttribute('data-configuration-required', String(!!configurationRequired));
     }
 
     function button(text, action) {
@@ -52,9 +54,13 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         return { label: label, input: input };
     }
 
+    function configurationRequired(config) {
+        return config.SchemaVersion !== 1 || !config.ConfigurationCompleted;
+    }
+
     function browsingStatus(config) {
-        if (config.SchemaVersion !== 1 || !config.ConfigurationCompleted)
-            return 'Browsing is disabled. Open Global TuneIn Settings, enable configuration browsing, then choose categories and save.';
+        if (configurationRequired(config))
+            return 'TuneIn filtering is not enabled. To refresh the catalog, open Global TuneIn Settings, select Enable configuration browsing after saving, then choose your desired categories and save.';
         return 'Browsing is enabled. Return to the channel root after saving.';
     }
 
@@ -945,7 +951,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 instance.settingsLocked = true;
                 if (epoch !== instance.viewEpoch) return;
                 Dashboard.processPluginConfigurationUpdateResult(result);
-                message(instance, 'Configuration saved and locked. ' + browsingStatus(config) + ' No catalog crawl was started.');
+                message(instance, 'Configuration saved and locked. ' + browsingStatus(config) + ' No catalog crawl was started.',
+                    configurationRequired(config));
             }, function (error) {
                 instance.settingsLocked = undefined;
                 console.error('Unable to lock TuneIn settings after saving.', error);
@@ -1087,7 +1094,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             });
             $(view).trigger('create');
             message(instance, browsingStatus(config) + (ambiguous && config.EnableLocalRadio ?
-                ' Local Radio is disabled until you choose one source and save.' : ''));
+                ' Local Radio is disabled until you choose one source and save.' : ''), configurationRequired(config));
         }).catch(function (error) {
             if (epoch !== instance.viewEpoch) return;
             instance.config = null;
