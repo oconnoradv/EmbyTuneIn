@@ -40,7 +40,7 @@ metadata changes; a full server-data backup is needed for exact rollback.
 
 As an administrator, open **Advanced → TuneIn**, also available from
 **Plugins → TuneIn → Settings**. Unlock settings, choose the categories and
-selections to expose, enable **configured browsing after saving**, and **Save**.
+selections to expose, enable **configuration browsing after saving**, and **Save**.
 
 | Category | Required configuration |
 | --- | --- |
@@ -65,12 +65,18 @@ branches are marked, and saved choices are preserved.
 **Lock settings** prevents accidental edits and saves. The lock persists across
 browser sessions and server restarts. **Save** locks settings after a successful
 save; unlock them to edit again. Locking does not save pending changes or stop
-a refresh. **Station Selections** groups the Music, By Language, By Location
-and Local Cities selectors. Collapsing it keeps unsaved choices; opening it
+a refresh. **Station Selections** groups Music Genres, Languages, Locations,
+Local Cities, Talk Topics, Sports & Leagues, and Podcast Topics. Collapsing it keeps unsaved choices; opening it
 does not fetch from TuneIn by itself.
 Buttons use the active user's native Emby theme.
 
-### Browsing options
+### Global TuneIn Settings
+
+This section opens before the first successful settings save. After a save it
+defaults to collapsed and uses a green tint. Browsing is off on a new install.
+Checking **Enable configuration browsing after saving** unlocks the dependent
+editors immediately when settings are unlocked, but does not enable catalog
+browsing or refresh until you save.
 
 - **Hide the individual genre folders** hides recognized genre shortcuts in
   Local Radio, By Location, Talk, Sports and Podcasts. It keeps provider-supplied
@@ -87,6 +93,12 @@ Buttons use the active user's native Emby theme.
 Both checkboxes default to checked when the settings are absent. Explicitly
 saved unchecked choices remain unchanged. Changing these options does not
 change existing navigation IDs.
+
+Talk, Sports, and Podcasts default to **All**. Choose **Selected only** in the
+corresponding selector, then open **Browse** in the category header to load
+options from TuneIn. Saved choices stay below the browser controls.
+Only selected branches still offered by the provider are included. Empty or
+stale selections do not fall back to **All**.
 
 Browsing and playback enforce the saved category and selection scopes,
 including nested Music, Talk, and Sports items under By Language. Navigation

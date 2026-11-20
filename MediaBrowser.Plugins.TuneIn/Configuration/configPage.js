@@ -9,7 +9,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     ];
     var selectors = [
         ['language', 'Languages', 'By Language'], ['location', 'Locations', 'By Location'],
-        ['local', 'LocalCities', 'Local Radio cities/regions'], ['music', 'Music', 'Music Genres']
+        ['local', 'LocalCities', 'Local Radio cities/regions'], ['music', 'Music', 'Music Genres'],
+        ['talk', 'TalkIds', 'Talk Topics', 'TalkMode'],
+        ['sports', 'SportsIds', 'Sports & Leagues', 'SportsMode'],
+        ['podcast', 'PodcastIds', 'Podcast Topics', 'PodcastsMode']
     ];
 
     function message(instance, text) {
@@ -50,7 +53,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function browsingStatus(config) {
         if (config.SchemaVersion !== 1 || !config.ConfigurationCompleted)
-            return 'Browsing is disabled. Check "Enable configured browsing after saving", enable categories and save.';
+            return 'Browsing is disabled. Open Global TuneIn Settings, enable configuration browsing, then choose categories and save.';
         return 'Browsing is enabled. Return to the channel root after saving.';
     }
 
@@ -61,12 +64,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             var row = document.createElement('div');
             var control = checkbox(item.Path || item.Name || item.Id, item.Enabled !== false,
                 function () {
-                    if (epoch === instance.viewEpoch && !editingBlocked(instance)) item.Enabled = control.input.checked;
+                    if (epoch === instance.viewEpoch && browsingSelected(instance) && !editingBlocked(instance)) item.Enabled = control.input.checked;
                     else control.input.checked = item.Enabled !== false;
                 });
             row.appendChild(control.label);
             row.appendChild(button('Remove', function () {
-                if (epoch !== instance.viewEpoch || editingBlocked(instance)) return;
+                if (epoch !== instance.viewEpoch || !browsingSelected(instance) || editingBlocked(instance)) return;
                 instance.config[spec[1]] = instance.config[spec[1]].filter(function (entry) { return entry !== item; });
                 selected(instance, spec, container);
             }));
@@ -91,19 +94,84 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var heading = document.createElement(collapsible ? 'summary' : 'h3');
         heading.textContent = spec[2];
         section.appendChild(heading);
+        section.className = 'tuneInSection tuneInSelectorCategory';
+        heading.className = 'tuneInSectionLabel';
         if (collapsible) {
-            section.className = 'tuneInSection';
-            heading.className = 'tuneInSectionLabel';
-            section.open = openByDefault;
+            section.open = openByDefault && !spec[3];
             bindDisclosure(heading);
         }
+        var picker = document.createElement('div');
+        picker.className = 'tuneInSectionBox tuneInSelectorPicker';
+        var topicNames = new Map();
+        if (spec[3]) {
+            var mode = document.createElement('select');
+            mode.setAttribute('is', 'emby-select');
+            mode.setAttribute('aria-label', spec[2] + ' coverage');
+            mode.className = 'tuneInSelectorMode';
+            [['all', 'All'], ['selected', 'Selected only']].forEach(function (choice) {
+                var option = document.createElement('option');
+                option.value = choice[0];
+                option.textContent = choice[1];
+                mode.appendChild(option);
+            });
+            mode.value = instance.config[spec[3]] === 'selected' ? 'selected' : 'all';
+            var hint = document.createElement('p');
+            hint.className = 'fieldDescription';
+            hint.textContent = 'Choose at least one topic offered by TuneIn. If a saved choice is no longer available, review your selections before refreshing.';
+            section.appendChild(mode);
+            picker.appendChild(hint);
+            mode.addEventListener('change', function () {
+                if (epoch !== instance.viewEpoch || !browsingSelected(instance) || editingBlocked(instance)) {
+                    mode.value = instance.config[spec[3]] || 'all';
+                    return;
+                }
+                instance.config[spec[3]] = mode.value;
+                picker.hidden = mode.value !== 'selected';
+            });
+            picker.hidden = mode.value !== 'selected';
+        }
+        section.appendChild(picker);
         var saved = document.createElement('div');
-        section.appendChild(saved);
-        selected(instance, spec, saved);
+        saved.className = 'tuneInSelectorSaved';
+        function renderSaved() {
+            if (!spec[3]) {
+                selected(instance, spec, saved);
+                return;
+            }
+            saved.textContent = '';
+            (instance.config[spec[1]] || []).forEach(function (id) {
+                var row = document.createElement('div');
+                var caption = document.createElement('span');
+                caption.textContent = topicNames.get(id) || id;
+                row.appendChild(caption);
+                var remove = button('Remove', function () {
+                    if (epoch !== instance.viewEpoch || !browsingSelected(instance) || editingBlocked(instance)) return;
+                    instance.config[spec[1]] = instance.config[spec[1]].filter(function (choice) { return choice !== id; });
+                    renderSaved();
+                });
+                remove.setAttribute('aria-label', 'Remove ' + caption.textContent);
+                row.appendChild(remove);
+                saved.appendChild(row);
+            });
+            $(saved).trigger('create');
+        }
         var requests = new Map();
         function add(item, feedback) {
-            if (epoch !== instance.viewEpoch || editingBlocked(instance)) return;
+            if (epoch !== instance.viewEpoch || !browsingSelected(instance) || editingBlocked(instance)) return;
             var list = instance.config[spec[1]] || [];
+            if (spec[3]) {
+                if (instance.config[spec[3]] !== 'selected') return;
+                if (!list.includes(item.Id)) {
+                    if (list.length >= 100) {
+                        feedback.textContent = 'Remove a saved choice before adding another (limit: 100).';
+                        return;
+                    }
+                    instance.config[spec[1]] = list.concat(item.Id);
+                }
+                renderSaved();
+                feedback.textContent = 'Selected: ' + (item.Path || item.Name || item.Id);
+                return;
+            }
             var existing = list.find(function (entry) { return entry.Id === item.Id; });
             if (existing) existing.Enabled = true;
             else {
@@ -114,7 +182,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 list.push({ Id: item.Id, Name: item.Name, Path: item.Path, AncestorIds: item.AncestorIds, Enabled: true });
                 instance.config[spec[1]] = list;
             }
-            selected(instance, spec, saved);
+            renderSaved();
             feedback.textContent = 'Selected: ' + item.Path;
         }
 
@@ -141,7 +209,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             var loaded = false;
             var pending;
             function load() {
-                if (epoch !== instance.viewEpoch || loaded) return;
+                if (epoch !== instance.viewEpoch || !browsingSelected(instance) || picker.hidden || loaded) return;
                 if (pending) return pending;
                 status.textContent = 'Loading choices...';
                 results.textContent = '';
@@ -154,10 +222,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 if (!requests.has(parent)) requests.set(parent, fetchChoices().catch(function (error) {
                     var code = selectorStatus(error);
                     if ([0, 408, 500, 502, 503, 504].indexOf(code) === -1 ||
-                        epoch !== instance.viewEpoch || !details.open) throw error;
+                        epoch !== instance.viewEpoch || !browsingSelected(instance) || picker.hidden || !details.open) throw error;
                     status.textContent = 'Still loading choices. Trying again...';
                     return new Promise(function (resolve) { setTimeout(resolve, 1000); }).then(function () {
-                        if (epoch !== instance.viewEpoch || !details.open) throw error;
+                        if (epoch !== instance.viewEpoch || !browsingSelected(instance) || picker.hidden || !details.open) throw error;
                         return fetchChoices();
                     });
                 }).then(function (data) {
@@ -172,6 +240,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                         var row = document.createElement('li');
                         row.className = 'tuneInSelectorRow';
                         var name = item.Name || item.Id;
+                        if (spec[3]) topicNames.set(item.Id, name);
                         if (item.CanExpand) row.appendChild(branch(item.Id, name));
                         else {
                             var label = document.createElement('span');
@@ -186,6 +255,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                         }
                         results.appendChild(row);
                     });
+                    if (spec[3]) renderSaved();
                     $(content).trigger('create');
                 }).catch(function (error) {
                     requests.delete(parent);
@@ -203,7 +273,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             }
             summary.addEventListener('click', function (event) {
                 event.preventDefault();
-                if (epoch !== instance.viewEpoch || instance.saving || instance.refreshBusy) return;
+                if (epoch !== instance.viewEpoch || !browsingSelected(instance) || picker.hidden || instance.saving || instance.refreshBusy) return;
                 details.open = !details.open;
                 if (details.open) return load();
             });
@@ -212,7 +282,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             });
             return details;
         }
-        section.appendChild(branch('', 'Browse ' + spec[2]));
+        var root = branch('', 'Browse ' + spec[2]);
+        root.className = 'tuneInSelectorRoot';
+        picker.appendChild(root);
+        picker.appendChild(saved);
+        renderSaved();
         return section;
     }
 
@@ -221,12 +295,27 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             instance.refreshBusy || instance.cleanupBusy || instance.cleanupAction;
     }
 
+    function browsingSelected(instance) {
+        return instance.view.querySelector('.configurationCompleted').checked;
+    }
+
+    function showSaveHistory(instance, saved) {
+        var section = instance.view.querySelector('.globalSummary').parentNode;
+        section.setAttribute('data-saved', String(saved));
+        section.open = !saved;
+    }
+
     function editing(instance) {
         var disabled = !!editingBlocked(instance);
-        instance.view.querySelector('.loginFields').disabled = disabled;
-        instance.view.querySelector('.configurationFields').disabled = disabled;
+        var catalogDisabled = disabled || !browsingSelected(instance);
+        instance.view.querySelector('.loginFields').disabled = catalogDisabled;
+        instance.view.querySelector('.configurationFields').disabled = catalogDisabled;
+        instance.view.querySelector('.globalFields').disabled = disabled;
+        instance.view.querySelector('.hideRegionalGenres').disabled = catalogDisabled;
+        instance.view.querySelector('.allowPartialCatalogImport').disabled = catalogDisabled;
+        instance.view.querySelector('.apiRequestIntervalSeconds').disabled = catalogDisabled;
         instance.view.querySelector('.button-submit').disabled = disabled;
-        instance.refreshCategoryRows.forEach(function (row) { row.schedule.disabled = disabled; });
+        instance.refreshCategoryRows.forEach(function (row) { row.schedule.disabled = catalogDisabled; });
         var toggle = instance.view.querySelector('.settingsLocked');
         toggle.disabled = typeof instance.settingsLocked !== 'boolean' || !!instance.lockChanging || !!instance.saving ||
             !!instance.cleanupBusy || !!instance.cleanupAction;
@@ -386,12 +475,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             description += '. ' + status.SkippedBrowseLinks + ' malformed catalog links skipped';
             if (status.State === 'Partial' && status.PartialImportAllowed === false
                 && status.Phase === 'Discovery incomplete; existing library left unchanged')
-                description += '. To apply valid results, enable "Import valid results when catalog entries are skipped" in Catalog browsing, save, then refresh again';
+                description += '. To apply valid results, enable "Import Valid Results when catalog entries are skipped" in Global TuneIn Settings, save, then refresh again';
             diagnostics.push('Skipped malformed TuneIn catalog links: ' + status.SkippedBrowseLinks
                 + (status.SkippedBrowseLinkDetails ? ' (' + status.SkippedBrowseLinkDetails + ')' : ''));
         }
-        instance.view.querySelector('.refreshDiagnosticsText').textContent =
-            diagnostics.length ? diagnostics.join('; ') : 'No additional diagnostics available.';
+        var diagnosticText = instance.view.querySelector('.refreshDiagnosticsText');
+        diagnosticText.textContent = diagnostics.join('; ');
+        diagnosticText.hidden = !diagnostics.length;
+        instance.view.querySelector('#tuneInReportHint').hidden = !hasRefreshReport(status) || status.Busy;
         if (status.LastHttpStatus) {
             var label = httpStatusLabels[status.LastHttpStatus] || 'Unexpected response';
             description += '. TuneIn returned HTTP ' + status.LastHttpStatus + ' (' + label + ')';
@@ -455,6 +546,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                         countValues[metric[0]] = value;
                     });
                 var schedule = document.createElement('select');
+                schedule.setAttribute('is', 'emby-select');
                 schedule.setAttribute('aria-label', item.Name + ' refresh interval');
                 [['0', 'Schedule: Off'], ['6', 'Every 6 hours'], ['12', 'Every 12 hours'],
                     ['24', 'Daily'], ['168', 'Weekly'], ['720', 'Every 30 days']].forEach(function (choice) {
@@ -465,7 +557,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 });
                 schedule.value = String(instance.refreshSchedules.get(item.Category) || 0);
                 schedule.addEventListener('change', function () {
-                    if (!editingBlocked(instance)) instance.refreshSchedules.set(item.Category, Number(schedule.value));
+                    if (!editingBlocked(instance) && browsingSelected(instance))
+                        instance.refreshSchedules.set(item.Category, Number(schedule.value));
                 });
                 row.appendChild(caption);
                 actions.appendChild(counts);
@@ -473,12 +566,18 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 actions.appendChild(schedule);
                 row.appendChild(actions);
                 list.appendChild(row);
-                rows.set(item.Category, { caption: caption, control: control, schedule: schedule, counts: countValues });
+                rows.set(item.Category, { row: row, caption: caption, control: control, schedule: schedule, counts: countValues });
             });
             $(list).trigger('create');
         }
         categories.forEach(function (item) {
-            var text = item.Name + ': ' + ((status.QueuedRequests || []).includes(item.Category) ? 'Queued' : item.State);
+            var state = (status.QueuedRequests || []).includes(item.Category) ? 'Queued' : item.State;
+            var row = rows.get(item.Category);
+            var outcome = /^(Imported|Unchanged|Completed)$/.test(state) ? 'Completed'
+                : /^(Partial|Incomplete)\b/.test(state) ? 'Partial'
+                : /^(Failed|Error|Timed out|TimedOut)$/.test(state) ? 'Error' : '';
+            row.row.setAttribute('data-outcome', outcome);
+            var text = item.Name + ': ' + state;
             if (!status.Busy && item.Category === status.DirtyCategory) text += ' (reconciliation needed)';
             var caption = rows.get(item.Category).caption;
             if (caption.textContent !== text) caption.textContent = text;
@@ -791,7 +890,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var instance = this;
         var epoch = instance.viewEpoch;
         if (editingBlocked(instance)) return false;
-        var config = instance.config;
+        var config = Object.assign({}, instance.config);
         var coordinates = instance.view.querySelector('.txtLatLon').value.trim();
         var requestInterval = String(instance.view.querySelector('.apiRequestIntervalSeconds').value || '').trim();
         if (!/^[0-9]+$/.test(requestInterval) || Number(requestInterval) < 1 || Number(requestInterval) > 30) {
@@ -799,23 +898,24 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             return false;
         }
         var localEnabled = instance.view.querySelector('[data-category="EnableLocalRadio"]').checked;
+        var browsing = browsingSelected(instance);
         var source = instance.view.querySelector('.localSource').value;
         var useCoordinates = localEnabled && source === 'coordinates';
-        if (localEnabled && source !== 'coordinates' && (source !== 'regions' || !(config.LocalCities || []).some(function (item) {
+        if (browsing && localEnabled && source !== 'coordinates' && (source !== 'regions' || !(config.LocalCities || []).some(function (item) {
             return item && item.Enabled !== false && /^r[1-9][0-9]{0,9}$/.test(item.Id);
         }))) {
             message(instance, 'Choose coordinates or enable at least one saved city or region for Local Radio.');
             return false;
         }
         var parts = coordinates.split(',');
-        if (useCoordinates && (parts.length !== 2 || parts.some(function (part) {
+        if (browsing && useCoordinates && (parts.length !== 2 || parts.some(function (part) {
             return !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(part.trim()) || !isFinite(Number(part));
         }) || Math.abs(Number(parts[0])) > 90 || Math.abs(Number(parts[1])) > 180)) {
             message(instance, 'Enter finite latitude (-90..90), longitude (-180..180), separated by a comma.');
             return false;
         }
         config.SchemaVersion = 1;
-        config.ConfigurationCompleted = instance.view.querySelector('.configurationCompleted').checked;
+        config.ConfigurationCompleted = browsing;
         config.Username = instance.view.querySelector('.txtUsername').value.trim() || null;
         config.LatLon = coordinates || null;
         config.ApiRequestIntervalSeconds = Number(requestInterval);
@@ -834,6 +934,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         refreshControls(instance, instance.refreshAvailable);
         loading.show();
         ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+            if (epoch === instance.viewEpoch) showSaveHistory(instance, true);
             return writeSettingsLock(true).then(function () {
                 instance.settingsLocked = true;
                 if (epoch !== instance.viewEpoch) return;
@@ -868,10 +969,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.maintenanceSection = view.querySelector('.maintenanceSummary').parentNode;
         instance.refreshCategoryRows = new Map();
         instance.refreshSchedules = new Map();
-        ['.categoriesSummary', '.stationSelectionsSummary', '.localSummary', '.refreshSummary', '.maintenanceSummary'].forEach(function (selector) {
+        ['.globalSummary', '.categoriesSummary', '.stationSelectionsSummary', '.localSummary', '.refreshSummary', '.maintenanceSummary'].forEach(function (selector) {
             bindDisclosure(view.querySelector(selector));
         });
         view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });
+        view.querySelector('.configurationCompleted').addEventListener('change', function () { editing(instance); });
         var dialog = view.querySelector('.tuneInRecoveryDialog');
         instance.refreshSection.addEventListener('toggle', function () {
             if (!instance.refreshSection.open && dialog.open) dialog.close();
@@ -961,6 +1063,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.localSource').value = config.LocalRadioSource ||
                 (ambiguous ? '' : config.UseCoordinates ? 'coordinates' : hasRegions ? 'regions' : '');
             view.querySelector('.configurationCompleted').checked = config.SchemaVersion === 1 && !!config.ConfigurationCompleted;
+            showSaveHistory(instance, config.SettingsSaved === true || (config.SettingsSaved == null && config.SchemaVersion === 1));
             var openByDefault = config.SchemaVersion !== 1;
             view.querySelector('.categoriesSummary').parentNode.open = openByDefault;
             view.querySelector('.stationSelectionsSummary').parentNode.open = openByDefault;

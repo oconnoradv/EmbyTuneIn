@@ -57,7 +57,14 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInRefreshService.UpdateConfiguration(() => SettingsLock.SaveConfiguration(() =>
             {
                 value.NavigationSecret = Configuration.NavigationSecret;
-                base.UpdateConfiguration(value);
+                var previousSaved = value.SettingsSaved;
+                value.SettingsSaved = true;
+                try { base.UpdateConfiguration(value); }
+                catch
+                {
+                    value.SettingsSaved = previousSaved;
+                    throw;
+                }
                 TuneInPlayback.CancelChangedScopes();
             }));
         }

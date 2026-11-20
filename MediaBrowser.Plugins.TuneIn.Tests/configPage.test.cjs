@@ -48,15 +48,16 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon,
         '.apiRequestIntervalSeconds': requestInterval };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.categories', '.selectors',
-        '.loginFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
+        '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
         '.localSelector', '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
         '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
         '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
         '.cleanupConfirm', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.backupStart',
-        '.backupStatus', '.cleanupBackupVerified']) elements[name] = new Element();
+        '.backupStatus', '.cleanupBackupVerified', '#tuneInReportHint']) elements[name] = new Element();
     for (const [section, summary, open] of [
+        ['.globalSection', '.globalSummary', true],
         ['.categoriesSection', '.categoriesSummary', true],
         ['.stationSelectionsSection', '.stationSelectionsSummary', true],
         ['.localSection', '.localSummary', true],
@@ -157,6 +158,12 @@ function open(details) {
     return details.handlers.toggle();
 }
 
+function enableBrowsing(app) {
+    const control = app.elements['.configurationCompleted'];
+    control.checked = true;
+    control.handlers.change();
+}
+
 test('all dashboard actions use native Emby buttons without plugin color overrides', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     const buttons = [...html.matchAll(/<button\b([^>]*)>/g)].map(match => match[1]);
@@ -175,9 +182,10 @@ test('first activation opens and loads Language and Location even when native cl
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     await visit;
+    enableBrowsing(app);
     for (const index of [0, 1]) {
         const section = app.elements['.selectors'].childNodes[index];
-        const root = section.childNodes.find(node => node.tagName === 'details');
+        const root = section.descendants().find(node => node.tagName === 'details');
         const summary = root.childNodes[0];
         let prevented = false;
         const loading = summary.handlers.click({ preventDefault() { prevented = true; } });
@@ -213,7 +221,8 @@ test('an open selector retries a transient first failure once without a second c
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     await visit;
-    const root = app.elements['.selectors'].childNodes[1].childNodes.find(node => node.tagName === 'details');
+    enableBrowsing(app);
+    const root = app.elements['.selectors'].childNodes[1].descendants().find(node => node.tagName === 'details');
     const loading = open(root);
     app.selectors[0].reject({ status: 503 });
     await settle();
@@ -238,7 +247,8 @@ test('selector retry is bounded and does not send requests after leaving setting
         const visit = app.instance.onResume();
         app.reads[0].resolve({});
         await visit;
-        const root = app.elements['.selectors'].childNodes[0].childNodes.find(node => node.tagName === 'details');
+        enableBrowsing(app);
+        const root = app.elements['.selectors'].childNodes[0].descendants().find(node => node.tagName === 'details');
         const loading = open(root);
         app.selectors[0].reject({ response: { status: 502 } });
         await settle();
@@ -395,8 +405,9 @@ test('only explicit selector actions fetch branches and save multiple local sele
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     await visit;
+    enableBrowsing(app);
     const section = app.elements['.localSelector'].childNodes[0];
-    const root = section.childNodes.find(node => node.tagName === 'details');
+    const root = section.descendants().find(node => node.tagName === 'details');
     const loading = open(root);
     assert.equal(open(root), loading);
     assert.equal(app.selectors.length, 1);
@@ -450,6 +461,7 @@ test('invalid optional coordinates block save only when enabled', async () => {
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     await visit;
+    enableBrowsing(app);
     const local = app.instance.view.querySelector('[data-category="EnableLocalRadio"]');
     local.checked = true;
     app.elements['.localSource'].value = 'coordinates';
@@ -471,7 +483,8 @@ test('stale selector results do not overwrite a later visit', async () => {
     const first = app.instance.onResume();
     app.reads[0].resolve({});
     await first;
-    const root = app.elements['.selectors'].childNodes[0].childNodes.find(node => node.tagName === 'details');
+    enableBrowsing(app);
+    const root = app.elements['.selectors'].childNodes[0].descendants().find(node => node.tagName === 'details');
     const loading = open(root);
     app.instance.onPause();
     const second = app.instance.onResume();
@@ -489,8 +502,9 @@ test('a language branch retries independently, caches on reopening, and offers o
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     await visit;
+    enableBrowsing(app);
     const section = app.elements['.selectors'].childNodes[0];
-    const root = section.childNodes.find(node => node.tagName === 'details');
+    const root = section.descendants().find(node => node.tagName === 'details');
     const first = open(root);
     app.selectors[0].resolve({ Items: [{ Id: 'l122', Name: 'Arabic', Path: 'Arabic', CanExpand: true, CanSelect: true }] });
     await first;
@@ -717,7 +731,7 @@ test('collapsing browsing settings, including Music genres, keeps choices and do
     const music = app.elements['.selectors'].childNodes[2];
     assert.equal(music.childNodes[0].textContent, 'Music Genres');
     const summaries = [app.elements['.categoriesSummary'], app.elements['.stationSelectionsSummary'], app.elements['.localSummary'],
-        ...app.elements['.selectors'].childNodes.map(section => section.childNodes[0])];
+        ...app.elements['.selectors'].childNodes.slice(0, 3).map(section => section.childNodes[0])];
     for (const summary of summaries) {
         assert.equal(summary.parentNode.open, true);
         summary.handlers.click({ preventDefault() {} });
@@ -896,7 +910,7 @@ test('category interval dropdowns restore saved values and save changes without 
     const app = harness(true);
     app.elements['.tuneInRefresh'].open = true;
     const visit = app.instance.onResume();
-    app.reads[0].resolve({ RefreshSchedules: [{ Category: 'talk', IntervalHours: 24 }] });
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, RefreshSchedules: [{ Category: 'talk', IntervalHours: 24 }] });
     app.refresh[0].resolve({ SettingsLocked: false, Categories: [
         { Category: 'talk', Name: 'Talk' }, { Category: 'sports', Name: 'Sports' }] });
     await visit;
@@ -935,6 +949,103 @@ test('returning to saved settings opens the Control Panel with the category sect
     assert.equal(app.selectors.length, 0);
 });
 
+test('first save history is independent of the browsing checkbox and the settings lock', async () => {
+    const app = harness(false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SettingsSaved: false });
+    await visit;
+    const global = app.elements['.globalSection'];
+    assert.equal(global.open, true);
+    assert.equal(global.attributes['data-saved'], 'false');
+    assert.equal(app.elements['.configurationCompleted'].checked, false);
+    assert.equal(app.elements['.configurationFields'].disabled, true);
+    assert.equal(app.elements['.hideRegionalGenres'].disabled, true);
+    assert.equal(app.requestInterval.disabled, true);
+    await open(app.elements['.selectors'].childNodes[0].descendants().find(node => node.tagName === 'details'));
+    assert.equal(app.selectors.length, 0);
+    enableBrowsing(app);
+    assert.equal(app.elements['.configurationFields'].disabled, false);
+    assert.equal(app.elements['.hideRegionalGenres'].disabled, false);
+    assert.equal(app.requestInterval.disabled, false);
+    assert.equal(app.elements['.refreshStart'].disabled, true);
+    app.formHandlers.submit({ preventDefault() {} });
+    app.writes[0].reject(new Error('save failed'));
+    await settle();
+    assert.equal(global.open, true);
+    assert.equal(global.attributes['data-saved'], 'false');
+    app.elements['.configurationCompleted'].checked = false;
+    app.elements['.configurationCompleted'].handlers.change();
+    app.formHandlers.submit({ preventDefault() {} });
+    app.writes[1].resolve('saved');
+    await settle();
+    assert.equal(global.open, false);
+    assert.equal(global.attributes['data-saved'], 'true');
+    assert.equal(app.writes[1].config.ConfigurationCompleted, false);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    app.instance.onPause();
+    const next = app.instance.onResume();
+    app.reads[1].resolve({ SettingsSaved: true, SchemaVersion: 1, ConfigurationCompleted: false });
+    await next;
+    assert.equal(global.open, false);
+    assert.equal(app.elements['.configurationFields'].disabled, true);
+});
+
+test('topic filters load lazily and save independent modes and selected IDs', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    enableBrowsing(app);
+    for (const [i, category, label, id] of [
+        [3, 'talk', 'Talk Topics', 'c1'], [4, 'sports', 'Sports & Leagues', 'c2'],
+        [5, 'podcast', 'Podcast Topics', 'c3']
+    ]) {
+        const [heading, mode, picker] = app.elements['.selectors'].childNodes[i].childNodes;
+        assert.equal(heading.textContent, label);
+        assert.equal(mode.value, 'all');
+        const root = picker.childNodes.find(node => node.tagName === 'details');
+        const savedChoices = picker.childNodes.find(node => node.className === 'tuneInSelectorSaved');
+        assert.ok(savedChoices && picker.childNodes.indexOf(root) < picker.childNodes.indexOf(savedChoices));
+        await open(root);
+        assert.equal(app.selectors.length, i - 3);
+        mode.value = 'selected';
+        mode.handlers.change();
+        const pending = open(root);
+        assert.equal(app.selectors.at(-1).options.url.params.Category, category);
+        app.selectors.at(-1).resolve({ Items: [{ Id: id, Name: 'Provider choice', CanSelect: true }] });
+        await pending;
+        root.descendants().find(node => node.textContent === 'Add').handlers.click();
+        assert.match(savedChoices.textContent, /Provider choice/);
+    }
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    const saved = app.writes[0].config;
+    for (const [mode, ids, id] of [
+        ['TalkMode', 'TalkIds', 'c1'], ['SportsMode', 'SportsIds', 'c2'], ['PodcastsMode', 'PodcastIds', 'c3']
+    ]) {
+        assert.equal(saved[mode], 'selected');
+        assert.deepEqual(Array.from(saved[ids]), [id]);
+    }
+});
+
+test('category outcomes keep their status text as well as color, and queued rows are neutral', async () => {
+    const app = harness(true);
+    app.elements['.tuneInRefresh'].open = true;
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve({ SettingsLocked: false, QueuedRequests: ['music'], Categories: [
+        { Category: 'talk', Name: 'Talk', State: 'Imported' },
+        { Category: 'sports', Name: 'Sports', State: 'Partial (applied)' },
+        { Category: 'podcast', Name: 'Podcasts', State: 'Failed' },
+        { Category: 'music', Name: 'Music', State: 'Imported' }
+    ] });
+    await visit;
+    const rows = app.elements['.tuneInRefreshCategories'].childNodes;
+    assert.deepEqual(rows.map(row => row.attributes['data-outcome']), ['Completed', 'Partial', 'Error', '']);
+    assert.deepEqual(rows.map(row => row.childNodes[0].textContent),
+        ['Talk: Imported', 'Sports: Partial (applied)', 'Podcasts: Failed', 'Music: Queued']);
+});
+
 test('settings lock protects pending edits and saves without blocking catalog refresh', async () => {
     const app = harness(true);
     app.elements['.tuneInRefresh'].open = true;
@@ -942,7 +1053,7 @@ test('settings lock protects pending edits and saves without blocking catalog re
     const save = app.elements['.button-submit'];
     const visit = app.instance.onResume();
     const categories = [{ Category: 'talk', Name: 'Talk', State: 'Imported' }];
-    app.reads[0].resolve({ Languages: [{ Id: 'l1', Name: 'English', Enabled: true }] });
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, Languages: [{ Id: 'l1', Name: 'English', Enabled: true }] });
     await visit;
     assert.equal(toggle.disabled, true);
     assert.equal(save.disabled, true);
@@ -1053,7 +1164,7 @@ test('partial discovery reports skipped links without implying an import', async
     assert.match(text, /Partial - Discovery incomplete; existing library left unchanged/);
     assert.match(app.elements['.refreshWork'].textContent, /1 \/ 2 categories checked/);
     assert.match(text, /7 malformed catalog links skipped/);
-    assert.match(text, /enable "Import valid results when catalog entries are skipped" in Catalog browsing, save, then refresh again/);
+    assert.match(text, /enable "Import Valid Results when catalog entries are skipped" in Global TuneIn Settings, save, then refresh again/);
     assert.match(text, /TuneIn returned HTTP 429 \(Too Many Requests\)/);
     assert.match(app.elements['.refreshDiagnosticsText'].textContent,
         /Skipped malformed TuneIn catalog links: 7 \(4 x Music: Invalid catalog fragment; 3 x Music: Invalid catalog link parameter: filter\)/);

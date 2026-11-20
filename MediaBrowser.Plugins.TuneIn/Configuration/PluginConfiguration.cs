@@ -22,6 +22,12 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public List<CategoryRefreshSchedule> RefreshSchedules { get; set; } = new List<CategoryRefreshSchedule>();
         public int SchemaVersion { get; set; }
         public bool ConfigurationCompleted { get; set; }
+        private bool? settingsSaved;
+        public bool SettingsSaved
+        {
+            get => settingsSaved ?? (SchemaVersion == 1);
+            set => settingsSaved = value;
+        }
         public bool EnableLocalRadio { get; set; }
         public bool EnableMusic { get; set; }
         public bool EnableLanguage { get; set; }
@@ -36,6 +42,12 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public List<CatalogSelection> Locations { get; set; } = new List<CatalogSelection>();
         public List<CatalogSelection> Music { get; set; } = new List<CatalogSelection>();
         public List<CatalogSelection> LocalCities { get; set; } = new List<CatalogSelection>();
+        public string TalkMode { get; set; } = "all";
+        public List<string> TalkIds { get; set; } = new List<string>();
+        public string SportsMode { get; set; } = "all";
+        public List<string> SportsIds { get; set; } = new List<string>();
+        public string PodcastsMode { get; set; } = "all";
+        public List<string> PodcastIds { get; set; } = new List<string>();
 
         private static string CreateSecret()
         {

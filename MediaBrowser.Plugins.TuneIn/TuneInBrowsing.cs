@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -40,6 +42,19 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (entry.StationId != null) throw new InvalidOperationException("TuneIn item is not a folder.");
                 if (entry.Request != null)
                     items = await BrowseAsync(snapshot, entry, token, session).ConfigureAwait(false);
+                else if (snapshot.UsesSelectedTopics(entry.Category))
+                {
+                    var topics = await SelectedTopicsAsync(snapshot, entry.Category, token, session).ConfigureAwait(false);
+                    foreach (var id in snapshot.TopicIds(entry.Category))
+                    {
+                        var topic = topics[id];
+                        items.Add(Folder(snapshot, new NavigationEntry
+                        {
+                            Category = entry.Category, SelectionId = id, Name = topic.Name, Request = topic.TopicRequest,
+                            TopicBranchKey = TopicBranchKey(topic.TopicRequest)
+                        }));
+                    }
+                }
                 else if (entry.Category == "music" || entry.Category == "language" || entry.Category == "location")
                 {
                     foreach (var starting in StartingEntries(snapshot, entry.Category))
@@ -69,6 +84,25 @@ namespace MediaBrowser.Plugins.TuneIn
             ImageUrl = image(CategoryName(entry.Category))
         };
 
+        private async Task<Dictionary<string, SelectorItem>> SelectedTopicsAsync(ConfigurationSnapshot snapshot, string category,
+            CancellationToken token, TuneInCatalogueSession session)
+        {
+            var ids = snapshot.TopicIds(category).ToList();
+            if (ids.Count == 0)
+                throw new InvalidOperationException("Choose at least one TuneIn topic or switch the category to All.");
+            var root = await directory.ReadTopicRootAsync(snapshot, category, token, session).ConfigureAwait(false);
+            var topics = root.Items.ToDictionary(item => item.Id, StringComparer.Ordinal);
+            if (ids.Any(id => !topics.ContainsKey(id)))
+                throw new InvalidOperationException("A selected TuneIn topic is no longer available in this category. Reload its selector and review the saved choices.");
+            return topics;
+        }
+
+        private static string TopicBranchKey(DirectoryRequest request)
+        {
+            using (var hash = SHA256.Create())
+                return Convert.ToBase64String(hash.ComputeHash(Encoding.UTF8.GetBytes(request.Url)));
+        }
+
         private async Task<List<ChannelItemInfo>> BrowseAsync(ConfigurationSnapshot snapshot, NavigationEntry entry,
             CancellationToken token, TuneInCatalogueSession session)
         {
@@ -88,6 +122,13 @@ namespace MediaBrowser.Plugins.TuneIn
                 var languages = await directory.SelectAsync("language", null, false, token, session).ConfigureAwait(false);
                 if (!languages.Items.Any(i => i.Id == entry.SelectionId))
                     throw new InvalidOperationException("Selected TuneIn language is unavailable; load the language selector again.");
+            }
+            Dictionary<string, SelectorItem> topics = null;
+            if (snapshot.UsesSelectedTopics(entry.Category))
+            {
+                topics = await SelectedTopicsAsync(snapshot, entry.Category, token, session).ConfigureAwait(false);
+                if (entry.TopicBranchKey != TopicBranchKey(topics[entry.SelectionId].TopicRequest))
+                    throw new InvalidOperationException("The selected TuneIn topic changed. Return to the category root.");
             }
             var request = CatalogueRequest(snapshot, entry);
             var document = await directory.FetchAsync(snapshot, request, token, session).ConfigureAwait(false);
@@ -117,7 +158,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         {
                             Category = entry.Category, SelectionId = entry.SelectionId,
                             ContentCategory = entry.Category == "language" ? LanguageGroup(entry, entry.Request) : null,
-                            MusicSelectionId = entry.MusicSelectionId, StationId = station, Name = name
+                            MusicSelectionId = entry.MusicSelectionId, TopicBranchKey = entry.TopicBranchKey,
+                            StationId = station, Name = name
                         }),
                         Name = name, Type = ChannelItemType.Media,
                         ContentType = station[0] == 's' ? ChannelMediaContentType.Song : ChannelMediaContentType.Podcast,
@@ -132,6 +174,15 @@ namespace MediaBrowser.Plugins.TuneIn
                         allowSkippingTune: entry.Category == "music" || snapshot.Value.AllowPartialCatalogImport);
                     if (link == null || link.Method != "Browse.ashx") continue;
                     var next = ScopedRequest(snapshot, entry, link);
+                    if (topics != null)
+                    {
+                        var topicId = next.Parameters.GetValueOrDefault("id");
+                        if (next.Parameters.ContainsKey("c") || topicId == null
+                            || topicId != entry.SelectionId && topics.ContainsKey(topicId)
+                            || topicId == entry.SelectionId && entry.Category == "podcast"
+                                && next.Parameters.GetValueOrDefault("filter") != "p:topic")
+                            continue;
+                    }
                     var contentCategory = entry.Category == "language" ? LanguageGroup(entry, next) : null;
                     if (contentCategory != null && contentCategory != "language" && !snapshot.Enabled(contentCategory)) continue;
                     if (entry.ContentCategory != null && entry.ContentCategory != "language" && contentCategory != entry.ContentCategory) continue;
@@ -162,7 +213,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     items.Add(Folder(snapshot, new NavigationEntry
                     {
                         Category = entry.Category, SelectionId = entry.SelectionId, ContentCategory = contentCategory,
-                        MusicSelectionId = entry.MusicSelectionId, Request = next, Name = name
+                        MusicSelectionId = entry.MusicSelectionId, TopicBranchKey = entry.TopicBranchKey,
+                        Request = next, Name = name
                     }));
                 }
             }
@@ -183,7 +235,7 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             if (parent.Request == null || child.Request == null || parent.Category != child.Category
                 || parent.SelectionId != child.SelectionId || parent.ContentCategory != child.ContentCategory
-                || parent.MusicSelectionId != child.MusicSelectionId)
+                || parent.MusicSelectionId != child.MusicSelectionId || parent.TopicBranchKey != child.TopicBranchKey)
                 return false;
             var current = CatalogueRequest(snapshot, parent);
             var next = CatalogueRequest(snapshot, child);
@@ -296,6 +348,8 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static List<NavigationEntry> StartingEntries(ConfigurationSnapshot snapshot, string category)
         {
             if (!snapshot.Enabled(category)) throw new InvalidOperationException("Configure and enable this TuneIn group first.");
+            if (snapshot.UsesSelectedTopics(category))
+                throw new InvalidOperationException("Selected TuneIn topics require provider validation.");
             var entries = new List<NavigationEntry>();
             if (category == "local" && snapshot.LocalSource == "coordinates")
             {
@@ -322,7 +376,7 @@ namespace MediaBrowser.Plugins.TuneIn
             return entries;
         }
 
-        private static IEnumerable<XElement> ContentRows(XElement parent)
+        internal static IEnumerable<XElement> ContentRows(XElement parent)
         {
             foreach (var row in parent.Elements("outline"))
             {
