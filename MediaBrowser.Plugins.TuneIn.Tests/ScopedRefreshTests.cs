@@ -1135,31 +1135,22 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData(true, false)]
         [InlineData(false, false)]
         [InlineData(false, true)]
-        public async Task RefreshSupportsFiveThousandPagesAndRejectsAnAdditionalPage(bool musicOnly, bool exceedsLimit)
+        public async Task RefreshSupportsMoreThanFiveThousandPages(bool musicOnly, bool aboveOldLimit)
         {
             var config = new PluginConfiguration
             {
                 SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true, EnableTalk = !musicOnly
             };
             config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
-            var folderCount = 5000 - (musicOnly ? 1 : 2) + (exceedsLimit ? 1 : 0);
+            var folderCount = 5000 - (musicOnly ? 1 : 2) + (aboveOldLimit ? 1 : 0);
             var now = DateTime.UtcNow;
             var fetches = 0;
             var leaf = "<outline type='audio' guide_id='s1' text='Radio'/><!--" + new string('x', 1800) + "-->";
             var path = Path.Combine(Path.GetTempPath(), $"tunein-page-limit-{Guid.NewGuid():N}.xml");
             var store = new TuneInRefreshStore(path);
-            string key = null;
             var directory = new TuneInDirectory(() => config, (request, _) =>
             {
                 fetches++;
-                if (fetches == 4999) now = now.AddMinutes(21);
-                if (fetches == 5000)
-                {
-                    var saved = store.ReadDiscovery(key, musicOnly ? "music" : null, now, TimeSpan.FromHours(48));
-                    Assert.NotNull(saved);
-                    Assert.Equal(4999, saved.Pages.Count);
-                    Assert.True(saved.Pages.Sum(page => (long)page.Bytes.Length) > 8 * 1024 * 1024);
-                }
                 var rows = request.Parameters.TryGetValue("id", out var id) && id == "g2698"
                     ? string.Concat(Enumerable.Range(1, folderCount).Select(n =>
                         $"<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c{n}'/>"))
@@ -1167,7 +1158,6 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 return Task.FromResult(XDocument.Parse($"<opml><body>{rows}</body></opml>"));
             });
             var channel = new TuneInChannel(directory);
-            key = directory.Snapshot().DiscoveryKey;
             var imports = 0;
             try
             {
@@ -1181,19 +1171,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     }, null, clock: () => now);
                 refresh.Start(musicOnly ? "music" : null);
                 await WaitUntilIdle(refresh, TimeSpan.FromSeconds(60));
-                Assert.True(fetches == 5000, $"Expected 5000 fetches, got {fetches}. " +
+                Assert.True(fetches == 5000 + (aboveOldLimit ? 1 : 0), $"Unexpected fetch count {fetches}. " +
                     (refresh.Status().State == "Error" ? refresh.GetFailureLog().Text : refresh.Status().State));
-                Assert.Equal(exceedsLimit ? "Error" : "Completed", refresh.Status().State);
-                Assert.Equal(exceedsLimit ? 0 : 1, imports);
-                if (exceedsLimit)
-                {
-                    Assert.Contains("5000-page catalog limit", refresh.GetFailureLog().Text);
-                    Assert.False(File.Exists(path));
-                }
-                else
-                {
-                    Assert.Equal(folderCount + 2, store.Read().Categories.Single(category => category.Category == "music").Folders.Count);
-                }
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(1, imports);
+                Assert.Equal(folderCount + 2, store.Read().Categories.Single(category => category.Category == "music").Folders.Count);
             }
             finally
             {
@@ -1907,6 +1889,152 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public async Task DiscoveryCheckpointsAfterThreeThousandStationRowsWithoutWaitingFiveMinutes()
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var now = DateTime.UtcNow;
+            var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var directory = new TuneInDirectory(() => config, async (request, token) =>
+            {
+                if (request.Parameters.ContainsKey("id"))
+                {
+                    entered.TrySetResult(true);
+                    await release.Task.WaitAsync(token);
+                    return XDocument.Parse("<opml><body/></opml>");
+                }
+                var stations = string.Concat(Enumerable.Range(1, 3000)
+                    .Select(n => $"<outline type='audio' guide_id='s{n}' text='Radio {n}'/>"));
+                return XDocument.Parse("<opml><body>" + stations
+                    + "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c1'/></body></opml>");
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-station-checkpoint-{Guid.NewGuid():N}.xml");
+            var store = new TuneInRefreshStore(path);
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) => { ReadStagedTree(staged, token); return Task.CompletedTask; },
+                    null, clock: () => now, countStations: (_, __, ___) => 0);
+                refresh.Start("talk");
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(now, refresh.Status().DiscoveryCheckpointUtc);
+                Assert.NotNull(store.ReadDiscovery(directory.Snapshot().DiscoveryKey, "talk", now, TimeSpan.FromHours(48)));
+                release.TrySetResult(true);
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+            }
+            finally
+            {
+                release.TrySetResult(true);
+                store.Clear();
+                store.ClearDiscovery();
+                store.ClearRecovery();
+            }
+        }
+
+        [Fact]
+        public async Task DiscoveryStartsFourIndependentSiblingFolders()
+        {
+            var directory = new TuneInDirectory(() => new PluginConfiguration(), (_, __) => throw new InvalidOperationException());
+            var channel = new TuneInChannel(directory);
+            var session = new TuneInCatalogueSession(null, TimeSpan.FromMinutes(1), () => DateTime.UtcNow);
+            var started = 0;
+            var allStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var root = new ChannelItemInfo { Id = "root" };
+            var discovery = TuneInStagedImport.DiscoverAsync(channel, root, session, CancellationToken.None,
+                async (id, _, __, token) =>
+                {
+                    if (id == "root")
+                        return new ChannelItemResult
+                        {
+                            Items = Enumerable.Range(1, 4).Select(n => new ChannelItemInfo
+                            { Id = "child" + n, Type = ChannelItemType.Folder }).ToList()
+                        };
+                    if (Interlocked.Increment(ref started) == 4) allStarted.TrySetResult(true);
+                    await release.Task.WaitAsync(token);
+                    return new ChannelItemResult { Items = new List<ChannelItemInfo>() };
+                }, null, null, (_, __) => false);
+            try { await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
+            finally { release.TrySetResult(true); }
+            var result = await discovery.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(5, result.Count);
+        }
+
+        [Fact]
+        public async Task RecentSuccessfulCategoryPagesAreReusedOnlyAcrossCategoriesAndExpire()
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true
+            };
+            var now = DateTime.UtcNow;
+            var fetches = 0;
+            var incomplete = false;
+            var request = new DirectoryRequest();
+            request.Parameters["id"] = "c1";
+            var directory = new TuneInDirectory(() => config, (_, __) => throw new InvalidOperationException());
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-recent-pages-{Guid.NewGuid():N}.xml");
+            var store = new TuneInRefreshStore(path);
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
+                    async (_, __, session, ___, token) =>
+                    {
+                        await session.FetchAsync(request, () =>
+                        {
+                            fetches++;
+                            return Task.FromResult(XDocument.Parse("<opml><body/></opml>"));
+                        }, token);
+                        if (incomplete)
+                            Assert.True(session.TrySkipCatalogLink("talk", "invalid catalog link", request,
+                                "https://opml.radiotime.com/Browse.ashx?filter=invalid"));
+                        return new ChannelItemResult { Items = new List<ChannelItemInfo>() };
+                    },
+                    (_, staged, __, token) => { ReadStagedTree(staged, token); return Task.CompletedTask; },
+                    null, clock: () => now, countStations: (_, __, ___) => 0);
+                refresh.Start();
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(1, fetches);
+                refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal(2, fetches);
+                refresh.Start("sports");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(2, fetches);
+                Assert.Equal(1, refresh.Status().CacheHits);
+                refresh.Start("sports");
+                await WaitUntilIdle(refresh);
+                Assert.Equal(3, fetches);
+                now = now.AddMinutes(10);
+                refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal(4, fetches);
+                incomplete = true;
+                refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Partial", refresh.Status().State);
+                Assert.Equal(5, fetches);
+                incomplete = false;
+                refresh.Start("sports");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(6, fetches);
+            }
+            finally
+            {
+                store.Clear();
+                store.ClearDiscovery();
+                store.ClearRecovery();
+            }
+        }
+
+        [Fact]
         public async Task ParallelRequestsKeepGlobalSpacingAndDrainAfterRateLimit()
         {
             var now = new DateTime(2026, 11, 18, 8, 0, 0, DateTimeKind.Utc);
@@ -1919,27 +2047,36 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var timings = new TuneInRefreshTimings();
             var first = new TaskCompletionSource<HttpResponseInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
             var second = new TaskCompletionSource<HttpResponseInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var thirdStarted = new TaskCompletionSource<DateTime>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var third = new TaskCompletionSource<HttpResponseInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var fourth = new TaskCompletionSource<HttpResponseInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var fifthStarted = new TaskCompletionSource<DateTime>(TaskCreationOptions.RunContinuationsAsynchronously);
             var one = pacer.SendAsync(() => first.Task, 3, CancellationToken.None, true, timings);
             var two = pacer.SendAsync(() => second.Task, 3, CancellationToken.None, true, timings);
             Assert.Equal(start.AddSeconds(3), now);
-            var three = pacer.SendAsync(() =>
+            var three = pacer.SendAsync(() => third.Task, 3, CancellationToken.None, true, timings);
+            var four = pacer.SendAsync(() => fourth.Task, 3, CancellationToken.None, true, timings);
+            Assert.Equal(start.AddSeconds(9), now);
+            var five = pacer.SendAsync(() =>
             {
-                thirdStarted.SetResult(now);
+                fifthStarted.SetResult(now);
                 return Task.FromResult(new HttpResponseInfo { StatusCode = HttpStatusCode.OK });
             }, 3, CancellationToken.None, true, timings);
-            Assert.False(thirdStarted.Task.IsCompleted);
+            Assert.False(fifthStarted.Task.IsCompleted);
             second.SetResult(new HttpResponseInfo
             {
                 StatusCode = (HttpStatusCode)429,
                 Headers = new Dictionary<string, string> { ["Retry-After"] = "75" }
             });
             using var limited = await two;
-            Assert.False(thirdStarted.Task.IsCompleted);
+            Assert.False(fifthStarted.Task.IsCompleted);
             first.SetResult(new HttpResponseInfo { StatusCode = HttpStatusCode.OK });
             using var initial = await one;
-            Assert.Equal(start.AddSeconds(78), await thirdStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
-            using var recovered = await three;
+            third.SetResult(new HttpResponseInfo { StatusCode = HttpStatusCode.OK });
+            fourth.SetResult(new HttpResponseInfo { StatusCode = HttpStatusCode.OK });
+            using var thirdResponse = await three;
+            using var fourthResponse = await four;
+            Assert.Equal(start.AddSeconds(84), await fifthStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+            using var recovered = await five;
         }
 
         [Fact]
@@ -2019,13 +2156,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 requests.Add(id ?? "talk");
                 if (id == null)
                 {
-                    now = initial.AddMinutes(19);
+                    now = initial.AddMinutes(4);
                     return XDocument.Parse("<opml><body><outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c1'/></body></opml>");
                 }
                 if (id == "c1")
                 {
                     Assert.False(File.Exists(path + ".discovery"));
-                    now = initial.AddMinutes(periodic ? 20 : 19);
+                    now = initial.AddMinutes(periodic ? 5 : 4);
                     return XDocument.Parse("<opml><body><outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c2'/></body></opml>");
                 }
                 if (++childAttempts == 1)
@@ -2052,7 +2189,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 {
                     refresh.Start("talk");
                     await blocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                    Assert.Equal(periodic ? initial.AddMinutes(20) : (DateTime?)null, refresh.Status().DiscoveryCheckpointUtc);
+                    Assert.Equal(periodic ? initial.AddMinutes(5) : (DateTime?)null, refresh.Status().DiscoveryCheckpointUtc);
                     var key = directory.Snapshot().DiscoveryKey;
                     Assert.Equal(periodic, store.ReadDiscovery(key, "talk", now, TimeSpan.FromHours(48)) != null);
                     Assert.Null(store.ReadDiscovery(key, null, now, TimeSpan.FromHours(48)));

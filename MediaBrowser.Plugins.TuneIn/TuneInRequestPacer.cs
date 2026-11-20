@@ -40,6 +40,7 @@ namespace MediaBrowser.Plugins.TuneIn
     internal sealed class TuneInRequestPacer
     {
         private const int SuccessesBeforeRecovery = 20;
+        internal const int MaxParallelCatalogue = 4;
         private readonly object gate = new object();
         private readonly LinkedList<bool> catalogue = new LinkedList<bool>();
         private readonly LinkedList<bool> playback = new LinkedList<bool>();
@@ -94,7 +95,7 @@ namespace MediaBrowser.Plugins.TuneIn
                                 Math.Max(intervalSeconds, catalogueRequest ? catalogueIntervalSeconds : 0))));
                         var now = clock();
                         var catalogReady = catalogue.First != null && (activeCatalogue == 0
-                            || (activeCatalogue == 1 && parallelCatalogueActive && !serialCatalogue && catalogue.First.Value));
+                            || (activeCatalogue < MaxParallelCatalogue && parallelCatalogueActive && !serialCatalogue && catalogue.First.Value));
                         var playbackReady = playback.First != null && !activePlayback;
                         var next = playbackReady && (!catalogReady || playbackBurst < PlaybackBurst)
                             ? playback.First : catalogReady ? catalogue.First : null;

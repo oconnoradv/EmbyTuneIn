@@ -92,9 +92,9 @@ namespace MediaBrowser.Plugins.TuneIn
 
     internal sealed class TuneInRefreshStore
     {
-        private const int MaxStateBytes = 120 * 1024 * 1024;
+        private const int MaxStateBytes = 1024 * 1024 * 1024;
         // Checkpoint XML base64-encodes the raw catalog pages.
-        private const int MaxDiscoveryStateBytes = 64 * 1024 * 1024;
+        private const int MaxDiscoveryStateBytes = 900 * 1024 * 1024;
         private readonly string path;
         private static readonly XmlSerializer Serializer = new XmlSerializer(typeof(TuneInRefreshCheckpoint));
         private static readonly XmlSerializer DiscoverySerializer = new XmlSerializer(typeof(TuneInDiscoveryCheckpoint));
@@ -274,10 +274,12 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         internal const int MaxPages = 128;
         internal const int MaxBytes = 8 * 1024 * 1024;
-        internal const int MaxRefreshPages = 5000;
-        internal const int MaxRefreshBytes = 40 * 1024 * 1024;
+        internal const int MaxRefreshPages = 60000;
+        internal const int MaxRefreshBytes = 640 * 1024 * 1024;
         private readonly object gate = new object();
         private readonly Dictionary<string, TuneInCachedPage> pages = new Dictionary<string, TuneInCachedPage>();
+        private readonly Dictionary<string, TuneInCachedPage> recentPages;
+        private readonly HashSet<string> fetchedPages = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> liveOnlyPages = new HashSet<string>(StringComparer.Ordinal);
         private readonly Dictionary<string, TaskCompletionSource<bool>> pending = new Dictionary<string, TaskCompletionSource<bool>>();
         private readonly AsyncLocal<FolderRead> currentFolder = new AsyncLocal<FolderRead>();
@@ -316,7 +318,7 @@ namespace MediaBrowser.Plugins.TuneIn
             Action<bool> requested = null, Action completed = null, Action<int> received = null,
             bool strictBudget = true, bool retryRateLimit = false, Action<string, string, string> skippedBrowseLink = null,
             int maxPages = MaxPages, TuneInRefreshTimings timings = null, int maxBytes = MaxBytes,
-            Action rateLimitRetry = null)
+            Action rateLimitRetry = null, IEnumerable<TuneInCachedPage> recentPages = null)
         {
             this.clock = clock ?? (() => DateTime.UtcNow);
             this.lifetime = lifetime;
@@ -328,6 +330,8 @@ namespace MediaBrowser.Plugins.TuneIn
             this.strictBudget = strictBudget;
             this.maxPages = maxPages;
             this.maxBytes = maxBytes;
+            this.recentPages = (recentPages ?? Enumerable.Empty<TuneInCachedPage>())
+                .ToDictionary(page => page.Key, StringComparer.Ordinal);
             Timings = timings;
             rateLimitRetriesRemaining = retryRateLimit ? 3 : 0;
             foreach (var page in cached ?? Enumerable.Empty<TuneInCachedPage>())
@@ -372,6 +376,12 @@ namespace MediaBrowser.Plugins.TuneIn
         internal List<TuneInCachedPage> SnapshotPages()
         {
             lock (gate) return pages.Values.Where(page => !liveOnlyPages.Contains(page.Key)).ToList();
+        }
+
+        internal List<TuneInCachedPage> SnapshotFetchedPages()
+        {
+            lock (gate) return pages.Values.Where(page => fetchedPages.Contains(page.Key)
+                && !liveOnlyPages.Contains(page.Key)).ToList();
         }
 
         private bool Fresh(TuneInCachedPage page) =>
@@ -425,6 +435,17 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             TuneInCachedPage cached;
             lock (gate) pages.TryGetValue(key, out cached);
+            if (cached == null && recentPages.TryGetValue(key, out var recent)
+                && recent.SavedUtc <= clock() && clock() - recent.SavedUtc < TimeSpan.FromMinutes(10))
+            {
+                cached = new TuneInCachedPage { Key = recent.Key, Bytes = recent.Bytes, SavedUtc = clock() };
+                lock (gate)
+                {
+                    if (pages.Count >= maxPages || cachedBytes + cached.Bytes.Length > maxBytes)
+                        throw new InvalidDataException("TuneIn refresh exceeds its catalog cache limit.");
+                    CachePage(cached);
+                }
+            }
             if (cached != null && Fresh(cached))
             {
                 requested?.Invoke(true);
@@ -479,6 +500,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (otherBytes + bytes.Length > maxBytes)
                     throw new InvalidDataException($"TuneIn refresh exceeds its {maxBytes / (1024 * 1024)} MiB catalog cache limit.");
                 CachePage(new TuneInCachedPage { Key = key, Bytes = bytes, SavedUtc = clock() });
+                fetchedPages.Add(key);
             }
             completed?.Invoke();
             return validated;

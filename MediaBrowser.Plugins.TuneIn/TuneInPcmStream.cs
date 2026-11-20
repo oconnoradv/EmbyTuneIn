@@ -11,8 +11,34 @@ namespace MediaBrowser.Plugins.TuneIn
 {
     internal abstract class RadioReadStream : Stream
     {
-        public override int Read(byte[] buffer, int offset, int count) =>
-            ReadAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
+        protected virtual TimeSpan SynchronousReadTimeout => TimeSpan.FromSeconds(60);
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (buffer == null) throw new ArgumentNullException(nameof(buffer));
+            if (offset < 0 || count < 0 || offset > buffer.Length - count)
+                throw new ArgumentOutOfRangeException();
+            var readBuffer = new byte[Math.Min(count, 64 * 1024)];
+            using (var timeout = new CancellationTokenSource())
+            using (var timerCancellation = new CancellationTokenSource())
+            {
+                var read = ReadAsync(readBuffer, 0, readBuffer.Length, timeout.Token);
+                var timer = Task.Delay(SynchronousReadTimeout, timerCancellation.Token);
+                if (Task.WhenAny(read, timer).GetAwaiter().GetResult() != read)
+                {
+                    read.ContinueWith(task => { var ignored = task.Exception; },
+                        CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted |
+                        TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                    try { timeout.Cancel(); }
+                    finally { Dispose(); }
+                    throw new IOException("TuneIn audio read timed out.");
+                }
+                timerCancellation.Cancel();
+                var size = read.GetAwaiter().GetResult();
+                Buffer.BlockCopy(readBuffer, 0, buffer, offset, size);
+                return size;
+            }
+        }
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => false;

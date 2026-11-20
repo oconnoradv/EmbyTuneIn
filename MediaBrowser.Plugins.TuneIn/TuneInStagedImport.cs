@@ -14,9 +14,9 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         // A category root can be generated locally without fetching a page.
         internal const int MaxFolders = TuneInCatalogueSession.MaxRefreshPages + 1;
-        internal const int MaxItems = 50000;
+        internal const int MaxItems = 1000000;
         private const int MaxFolderDepth = 8;
-        internal const long MaxEstimatedBytes = 60 * 1024 * 1024;
+        internal const long MaxEstimatedBytes = 1024L * 1024 * 1024;
         private readonly Dictionary<string, ChannelItemResult> folders = new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal);
         private readonly HashSet<string> incompleteFolders = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> incompleteStationListings = new HashSet<string>(StringComparer.Ordinal);
@@ -48,7 +48,7 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static async Task<TuneInStagedImport> DiscoverAsync(TuneInChannel channel, ChannelItemInfo root,
             TuneInCatalogueSession session, CancellationToken token,
             Func<string, TuneInCatalogueSession, bool, CancellationToken, Task<ChannelItemResult>> getItems,
-            Action<int, int> report, Action validate, Func<string, string, bool> isForwardPage, Action checkpoint = null)
+            Action<int, int> report, Action validate, Func<string, string, bool> isForwardPage, Action<int> checkpoint = null)
         {
             if (channel == null || root == null || session == null || getItems == null)
                 throw new ArgumentNullException("A complete TuneIn discovery context is required.");
@@ -58,6 +58,7 @@ namespace MediaBrowser.Plugins.TuneIn
             pending.Enqueue(new KeyValuePair<string, int>(root.Id, 0));
             long estimatedBytes = 0;
             var itemCount = 0;
+            var stationCount = 0;
 
             using (var batch = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
@@ -78,8 +79,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     token.ThrowIfCancellationRequested();
                     validate?.Invoke();
-                    var entries = new List<KeyValuePair<string, int>>(2);
-                    while (pending.Count != 0 && entries.Count < Math.Min(2, MaxFolders - staged.folders.Count))
+                    var entries = new List<KeyValuePair<string, int>>(TuneInRequestPacer.MaxParallelCatalogue);
+                    while (pending.Count != 0 && entries.Count < Math.Min(TuneInRequestPacer.MaxParallelCatalogue, MaxFolders - staged.folders.Count))
                     {
                         var entry = pending.Dequeue();
                         if (visited.Add(entry.Key)) entries.Add(entry);
@@ -99,31 +100,18 @@ namespace MediaBrowser.Plugins.TuneIn
                         if (skips.SkippedLink) staged.incompleteFolders.Add(entry.Key);
                         if (skips.SkippedStation) staged.incompleteStationListings.Add(entry.Key);
                         CheckListingBudget(entry.Key, result, ref estimatedBytes, ref itemCount);
+                        stationCount += result.Items.Count(item => item.Type == ChannelItemType.Media);
                         foreach (var item in result.Items)
                             if (item.Type == ChannelItemType.Folder)
                                 pending.Enqueue(new KeyValuePair<string, int>(item.Id,
                                     ChildDepth(entry.Value, entry.Key, item.Id, isForwardPage)));
                         staged.folders.Add(entry.Key, new ChannelItemResult { Items = result.Items.ToList() });
-                        checkpoint?.Invoke();
+                        checkpoint?.Invoke(stationCount);
                     }
 
-                    var first = Read(entries[0].Key);
-                    if (entries.Count == 1 || first.IsCompleted)
-                    {
-                        var (result, skips) = await first.ConfigureAwait(false);
-                        Accept(entries[0], result, skips);
-                        if (entries.Count == 2)
-                        {
-                            var (second, secondSkips) = await Read(entries[1].Key).ConfigureAwait(false);
-                            Accept(entries[1], second, secondSkips);
-                        }
-                    }
-                    else
-                    {
-                        var results = await Task.WhenAll(first, Read(entries[1].Key)).ConfigureAwait(false);
-                        for (var i = 0; i < entries.Count; i++)
-                            Accept(entries[i], results[i].Result, results[i].Skips);
-                    }
+                    var results = await Task.WhenAll(entries.Select(entry => Read(entry.Key))).ConfigureAwait(false);
+                    for (var i = 0; i < entries.Count; i++)
+                        Accept(entries[i], results[i].Result, results[i].Skips);
                 }
             }
             return staged;

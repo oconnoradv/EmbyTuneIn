@@ -30,6 +30,18 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         private const string Live = "https://radio.example/Live.AAC?Signature=AbC";
 
         [Fact]
+        public async Task SynchronousStalledReadTimesOutAndDoesNotExposeAnAbandonedReadBuffer()
+        {
+            using var stream = new StalledSyncStream();
+            var buffer = new byte[] { 1, 2, 3 };
+            var read = Task.Run(() => Assert.Throws<IOException>(() => stream.Read(buffer, 0, buffer.Length)));
+            Assert.Contains("timed out", (await read.WaitAsync(TimeSpan.FromSeconds(5))).Message);
+            Assert.True(stream.Disposed);
+            stream.Finish();
+            Assert.Equal(new byte[] { 1, 2, 3 }, buffer);
+        }
+
+        [Fact]
         public async Task SharedPacerDoesNotScheduleNegativeDelayWhenClockCrossesDeadline()
         {
             var start = DateTime.UtcNow;
@@ -746,12 +758,28 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Reading.TrySetResult(true);
                 return finished.Task;
             }
+
             protected override void Dispose(bool disposing)
             {
                 Disposed = true;
                 finished.TrySetCanceled();
                 base.Dispose(disposing);
             }
+        }
+
+        private sealed class StalledSyncStream : RadioReadStream
+        {
+            private readonly TaskCompletionSource<int> finished = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            private byte[] target;
+            internal bool Disposed;
+            protected override TimeSpan SynchronousReadTimeout => TimeSpan.FromMilliseconds(50);
+            public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken token)
+            {
+                target = buffer;
+                return finished.Task;
+            }
+            internal void Finish() { target[0] = 9; finished.SetResult(1); }
+            protected override void Dispose(bool disposing) { Disposed = true; base.Dispose(disposing); }
         }
     }
 }

@@ -6,15 +6,10 @@ page or channel root does not recursively crawl the TuneIn catalog.
 
 ## Branch and pre-release scope
 
-This branch combines the filtering and Control Panel changes with playback,
-import-stall diagnostics, and interrupted-refresh recovery. Discovery and import
-attempts retain 60-minute deadlines and bounded timeout retries. Restarting Emby
-alone never starts a refresh.
-
-The original `v1.2.8-music-refresh-resilience-rc.1` assets were built from an
-earlier commit and lacked the updated Control Panel. The RC1 assets were
-replaced with the combined build; check `build-info.json` and `SHA256SUMS.txt`
-to identify and verify your download.
+This branch combines configured browsing, partial refreshes, the Control Panel,
+playback improvements, and safe library maintenance. Discovery and import
+attempts have separate 60-minute deadlines and bounded retries. Restarting
+Emby alone never starts a refresh.
 
 ## Requirements and installation
 
@@ -23,14 +18,8 @@ The plugin assembly version is **1.2.8.0**. Release downloads include
 `build-info.json` to identify the source commit and `SHA256SUMS.txt` to verify
 the files.
 
-The [maintenance RC1 prerelease](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-maintenance-browsing-refresh-rc.1)
-was rebuilt with 48-hour discovery/import deadlines and interruption-only
-automatic recovery. Timeouts and manual cancellation do not trigger recovery
-retries. The playback-start improvements remain included. Compatible catalog
-updates use top-level category-scoped imports; see
-[Category-scoped and progressive imports](#category-scoped-and-progressive-imports)
-for eligibility and recovery limits.
-If you downloaded RC1 before this update, download the new assets: the release
+Download the [music refresh resilience RC1](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.1).
+If you downloaded an earlier RC1, download the replacement assets: the release
 tag and assembly version are unchanged, but the source commit and checksums differ.
 
 1. Stop Emby and back up the existing plugin DLL, TuneIn configuration,
@@ -140,10 +129,12 @@ not the server-side run.
 Before the first refresh, the Control Panel highlights a reminder. It stays
 dismissed after an administrator starts a refresh, including across restarts.
 
-Discovery finishes before any import begins. When changes require an import,
-the plugin supplies Emby with the **complete staged channel tree**, including
-saved sibling categories. A single-category refresh fetches only that category.
-Unchanged catalogs skip import unless reconciliation is needed.
+Discovery completes for a category before it is imported; eligible partial
+results are handled as described below. An initial or full-tree import supplies
+Emby with the **complete staged channel tree**, including saved siblings. With
+a compatible baseline, a refresh can import one complete category at a time.
+A single-category refresh fetches only that category. Unchanged catalogs skip
+import unless reconciliation is needed.
 
 The import asks Emby to traverse the depth of the staged tree, including
 forward pagination folders. The separate discovery limit on nested folders
@@ -225,7 +216,7 @@ pages against the safety limit. During import, progress switches to folders
 served out of the known total. Discovery does not estimate a percentage or ETA
 from the page cap. A served folder indicates that Emby requested its listing;
 it does not confirm that Emby committed it to its database. Repeated requests
-do not increase the unique folder count, but do update the last-progress time.
+do not increase the unique folder count or update the last-progress time.
 
 Import progress advances only on the first request for each staged folder.
 Repeated requests still return the complete listing but do not reset the last
@@ -300,14 +291,17 @@ generated folders and station entries verified under the TuneIn channel.
 Category cleanup includes only matching authenticated category folders and their
 verified descendants, including folders from earlier settings. Acknowledge that you verified a
 successful backup, then confirm within five minutes to remove those entries in
-background batches. Unknown or unsigned entries are
+background groups of up to 2,000 individually verified removals, reporting
+progress after each group. Up to four sibling entries can be removed concurrently;
+children are still removed before their parents. Unknown or unsigned entries are
 left alone; a folder with remaining children is not deleted. The channel root,
 settings and media files are not cleanup targets. Playlists and other
-references to removed entries may break.
+references to removed entries may break. Concurrent deletion behavior and
+speed have not been verified on a live Emby server.
 
 Refreshes (including schedules and recovery) and settings writes cannot run
 while cleanup is active. The dashboard reports progress and partial failures.
-**Stop cleanup** requests a cooperative stop after any current removal finishes;
+**Stop cleanup** requests a cooperative stop after current removals finish;
 already removed entries are not restored. While stopping, settings and refreshes
 remain blocked. Preview again to remove remaining entries.
 Before removal, cleanup clears recovery and discovery checkpoints. Single-category
@@ -329,16 +323,17 @@ category in settings if it should stay absent.
 | --- | --- |
 | Discovery attempt | Up to 60 minutes, independent of import time |
 | Import attempt | A fresh 60 minutes for staging, importing and verification/finalization |
-| Catalog cache | Up to 5,000 pages and 40 MiB per refresh |
+| Catalog cache | Up to 60,000 pages and 640 MiB per refresh |
+| Discovered category | Up to 1,000,000 items and 1 GiB estimated data |
 | Catalog HTTP response | 90 seconds including body reads, excluding pacing and provider cooldowns |
-| Discovery checkpoint | At the first completed folder after each 20-minute interval, and on discovery interruption or timeout when possible |
+| Discovery checkpoint | At a completed folder after five minutes or 3,000 additional station rows when new pages are available, and on interruption or timeout when possible |
 | Automatic refresh retries | Up to 3 for interrupted work within an active refresh, shared across discovery and import |
 | Timeout retries | Up to 10 discovery retries and 3 import retries after draining |
 | Manual Cancel | Drains active work and stops; never triggers an automatic recovery retry |
 | Checkpoint resume window | 48 hours from discovery start, with matching settings and requested category scope |
 | Folder depth | Eight levels; forward pagination does not consume depth but still consumes page and folder budgets |
 
-Discovery can overlap two independent requests without reducing shared spacing
+Discovery can overlap up to four independent requests without reducing shared spacing
 between request starts. HTTP 429 responses have a run-wide budget of three
 retries, with consecutive minimum cooldowns of 30, 60, and 120 seconds. Longer
 `Retry-After` delays take precedence. Rate limiting doubles the effective
@@ -350,8 +345,17 @@ It can start alongside discovery without preempting in-flight work. When
 both queues can start, at most two playback requests go ahead of a waiting
 catalog request. Both queues still share API request spacing and `Retry-After`.
 
+Successful individual category refreshes retain up to 128 pages / 8 MiB for
+ten minutes for a subsequent different category with matching settings. The
+same category, refresh-all, recovery, and cleanup do not reuse that cache, and
+partial or failed refreshes discard it. Live scope
+validation is never replayed from it. The provider may change during that ten-minute window.
+Large refresh limits can require substantial memory and disk: discovery
+checkpoints can reach 900 MiB and saved catalog state can reach 1 GiB.
+
 A discovery timeout saves additional validated pages when possible and retries
-up to ten times. An import deadline cancels and drains its attempt before up to
+up to ten times. Large discoveries can still require a manual resume within the
+48-hour checkpoint window after those retries are exhausted. An import deadline cancels and drains its attempt before up to
 three retries. The separate 90-second catalog HTTP response timeout also counts
 as a discovery timeout. Once retries are exhausted, the refresh reports **TimedOut**.
 Checkpoints remain available for a manual refresh until import preparation
@@ -488,6 +492,9 @@ and distinct diagnostics. A provider HTTP 200 playlist with a failure
 `#STATUS` and no URLs is reported separately from an empty playlist. Playback
 diagnostics do not include provider response text, URLs, or tokens. Media
 bodies are streamed rather than buffered in full.
+Synchronous handoff reads time out after 60 seconds without audio and close
+the stream; cancellation and stream disposal depend on the underlying host
+and transport cooperating.
 
 Provider metadata shares the catalog pacer. Broadcaster playlists and relayed
 audio openings use a separate four-slot limit and do not inherit TuneIn API
@@ -495,7 +502,11 @@ cooldowns. The plugin checks each redirect before following it; TuneIn API
 requests cannot redirect off their origin, and playback fetches reject
 HTTPS downgrades and nonpublic IP literals. This is not a network sandbox;
 DNS and native direct-play connections remain subject to the host's network
-policy. Handoff supports the recognized
+policy. **Deferred security work:** validate and pin public resolved addresses
+for server-side playback connections and redirects to reduce DNS-based
+server-side request forgery risk, while preserving TLS hostname verification.
+Until then, use network egress controls to restrict access to internal services.
+Handoff supports the recognized
 MP3/AAC sequence, not arbitrary ad formats, DRM, or HLS sequencing. Ordinary
 HLS destinations remain on Emby's native direct playback path.
 
@@ -516,6 +527,9 @@ establish live dashboard, import, authentication, or playback behavior.
 - Verify schedules with the panel closed and confirm these actions do not
   create or trigger Emby Scheduled Tasks. Interrupt an import on the test
   server and check that a subsequent refresh reconciles the complete tree.
+- Preview and clean one category, then test stopping a cleanup with work in
+  progress; verify protected items and files remain and remaining entries can
+  be cleaned after a new preview.
 - Test ordinary and supported separate-introduction playback, stopping and
   changing stations, and disabling a relevant scope during playback.
 

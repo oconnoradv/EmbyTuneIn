@@ -84,7 +84,7 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         private const int ChannelImportVersion = 2;
         internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromHours(1);
-        private static readonly TimeSpan DiscoveryCheckpointInterval = TimeSpan.FromMinutes(20);
+        private static readonly TimeSpan DiscoveryCheckpointInterval = TimeSpan.FromMinutes(5);
         private static readonly TimeSpan DiscoveryCheckpointMaxAge = TimeSpan.FromHours(48);
         private const int DiscoveryResumeLimit = 10;
         private const int ImportRetryLimit = 3;
@@ -111,6 +111,10 @@ namespace MediaBrowser.Plugins.TuneIn
         private ConfigurationSnapshot statusConfiguration;
         private TuneInRefreshTimings activeTimings;
         private TuneInRefreshFailureLog failureLog;
+        private string recentPagesKey;
+        private string recentPagesCategory;
+        private readonly Dictionary<string, TuneInCachedPage> recentPages =
+            new Dictionary<string, TuneInCachedPage>(StringComparer.Ordinal);
         private PendingImport pendingImport;
         private TuneInRefreshRecovery activeRecovery;
         private readonly Dictionary<string, (int IntervalHours, DateTime DueUtc)> scheduled =
@@ -490,7 +494,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     cleanup.Cancelling = true;
                     cleanupCancellation.Cancel();
-                    cleanup.Message = "Stopping cleanup; the current removal must finish.";
+                    cleanup.Message = "Stopping cleanup; current removals must finish.";
                 }
                 return Status();
             }
@@ -503,6 +507,7 @@ namespace MediaBrowser.Plugins.TuneIn
             var baselinePreserved = false;
             try
             {
+                lock (gate) { recentPages.Clear(); recentPagesKey = null; recentPagesCategory = null; }
                 store.ClearRecovery();
                 store.ClearDiscovery();
                 var snapshot = directory.Snapshot();
@@ -858,13 +863,13 @@ namespace MediaBrowser.Plugins.TuneIn
             DateTime discoveryStarted = default, nextCheckpoint = default;
             var savedPageCount = 0;
 
-            void SaveDiscovery(CancellationToken token, bool force = false)
+            bool SaveDiscovery(CancellationToken token, bool force = false)
             {
                 var savedAt = clock();
                 if (session == null || (!force && savedAt < nextCheckpoint)
-                    || savedAt < discoveryStarted || savedAt - discoveryStarted >= DiscoveryCheckpointMaxAge) return;
+                    || savedAt < discoveryStarted || savedAt - discoveryStarted >= DiscoveryCheckpointMaxAge) return false;
                 var pages = session.SnapshotPages();
-                if (pages.Count <= savedPageCount) return;
+                if (pages.Count <= savedPageCount) return false;
                 directory.CheckCurrent(snapshot, token);
                 store.WriteDiscovery(new TuneInDiscoveryCheckpoint
                 {
@@ -874,6 +879,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 savedPageCount = pages.Count;
                 nextCheckpoint = savedAt + DiscoveryCheckpointInterval;
                 Update(() => status.DiscoveryCheckpointUtc = savedAt);
+                return true;
             }
 
             using (var timeout = new CancellationTokenSource())
@@ -979,6 +985,14 @@ namespace MediaBrowser.Plugins.TuneIn
                     else
                     {
                         var savedDiscovery = LoadDiscovery(snapshot.DiscoveryKey, requestedCategory, now);
+                        List<TuneInCachedPage> reusablePages;
+                        lock (gate)
+                            reusablePages = savedDiscovery == null && requestedCategory != null
+                                && checkpoint.CleanedCategories.Count == 0 && dirtyAtStart == null
+                                && !needsRebuild && !checkpoint.NeedsImport && activeRecovery.Retries == 0
+                                && recentPagesCategory != null && recentPagesCategory != requestedCategory
+                                && recentPagesKey == snapshot.DiscoveryKey
+                                ? recentPages.Values.ToList() : null;
                         discoveryStarted = savedDiscovery?.StartedUtc ?? now;
                         nextCheckpoint = now + DiscoveryCheckpointInterval;
                         savedPageCount = savedDiscovery?.Pages.Count ?? 0;
@@ -1019,7 +1033,7 @@ namespace MediaBrowser.Plugins.TuneIn
                                 else skippedEntriesOmitted++;
                             }), maxPages: TuneInCatalogueSession.MaxRefreshPages,
                             maxBytes: TuneInCatalogueSession.MaxRefreshBytes, timings: timings,
-                            rateLimitRetry: () => Update(() => status.RateLimitRetries++));
+                            rateLimitRetry: () => Update(() => status.RateLimitRetries++), recentPages: reusablePages);
                         Update(() =>
                         {
                             activeTimings = timings;
@@ -1053,14 +1067,16 @@ namespace MediaBrowser.Plugins.TuneIn
                             });
 
                             var root = roots[Array.IndexOf(enabled, category)];
+                            var checkpointStations = 0;
                             var staged = await TuneInStagedImport.DiscoverAsync(channel, root, session, linked.Token,
                                 (folder, catalogue, strict, token) => getItems(channel, folder, catalogue, strict, token),
                                 null,
                                 () => directory.CheckCurrent(snapshot, linked.Token), IsForwardPage,
-                                () =>
+                                stations =>
                                 {
                                     Update(() => status.LastProgressUtc = clock());
-                                    SaveDiscovery(linked.Token);
+                                    if (SaveDiscovery(linked.Token, stations - checkpointStations >= 3000))
+                                        checkpointStations = stations;
                                 }).ConfigureAwait(false);
                             directory.CheckCurrent(snapshot, linked.Token);
                             lock (gate)
@@ -1372,6 +1388,33 @@ namespace MediaBrowser.Plugins.TuneIn
                             : (categories.Length == 0 ? "No enabled categories" : "Completed");
                         if (partial.Count != 0) status.Category = requestedCategory ?? partial.OrderBy(category => category, StringComparer.Ordinal).First();
                         status.Progress = 100;
+                        if (partial.Count == 0 && session != null && requestedCategory != null)
+                        {
+                            if (recentPagesKey != snapshot.DiscoveryKey || recentPagesCategory != requestedCategory)
+                                recentPages.Clear();
+                            recentPagesKey = snapshot.DiscoveryKey;
+                            recentPagesCategory = requestedCategory;
+                            foreach (var page in session.SnapshotFetchedPages())
+                                recentPages[page.Key] = page;
+                            var bytes = 0L;
+                            var keep = new HashSet<string>(StringComparer.Ordinal);
+                            foreach (var page in recentPages.Values.OrderByDescending(page => page.SavedUtc))
+                                if (page.SavedUtc <= clock() && clock() - page.SavedUtc < TimeSpan.FromMinutes(10)
+                                    && keep.Count < TuneInCatalogueSession.MaxPages
+                                    && bytes + page.Bytes.Length <= TuneInCatalogueSession.MaxBytes)
+                                {
+                                    keep.Add(page.Key);
+                                    bytes += page.Bytes.Length;
+                                }
+                            foreach (var key in recentPages.Keys.Where(key => !keep.Contains(key)).ToArray())
+                                recentPages.Remove(key);
+                        }
+                        else
+                        {
+                            recentPages.Clear();
+                            recentPagesKey = null;
+                            recentPagesCategory = null;
+                        }
                     }
                 }
                 catch (Exception error)
@@ -1455,6 +1498,12 @@ namespace MediaBrowser.Plugins.TuneIn
                             status.SkippedBrowseLinks, status.SkippedBrowseLinkDetails);
                     lock (gate)
                     {
+                        if (status.State != "Completed")
+                        {
+                            recentPages.Clear();
+                            recentPagesKey = null;
+                            recentPagesCategory = null;
+                        }
                         if (serverToken.IsCancellationRequested || status.State == "Cancelled") pendingImport = null;
                         status.FinishedUtc = clock();
                         if (status.State == "Running")

@@ -32,7 +32,8 @@ namespace MediaBrowser.Plugins.TuneIn
 
     internal sealed class TuneInLibraryCleanup
     {
-        internal const int BatchSize = 50;
+        internal const int BatchSize = 2000;
+        internal const int ParallelRemovals = 4;
         private readonly ILibraryManager library;
         private readonly Func<Channel> getRoot;
         private readonly ILogger logger;
@@ -134,45 +135,67 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             var removed = 0;
             var failed = 0;
+            var reportedRemoved = -1;
+            var reportedFailed = -1;
             var targets = plan.Targets.ToDictionary(item => item.Id);
-            var options = new DeleteOptions { DeleteFileLocation = false, DeleteFromExternalProvider = false };
+            void Report()
+            {
+                if (reportedRemoved == removed && reportedFailed == failed) return;
+                progress(removed, failed);
+                reportedRemoved = removed;
+                reportedFailed = failed;
+            }
+            void Remove(Target target)
+            {
+                token.ThrowIfCancellationRequested();
+                try
+                {
+                    var current = library.GetItemById(target.Id);
+                    if (!target.Matches(current) || !StillUnderRoot(plan.Root, target, targets) ||
+                        (current is Folder && library.GetItemList(new InternalItemsQuery
+                        {
+                            ParentIds = new[] { current.InternalId }, Limit = 1
+                        }, token).Length != 0))
+                        throw new InvalidOperationException("Item changed or contains entries not removed by cleanup.");
+                    token.ThrowIfCancellationRequested();
+                    library.DeleteItem(current, new DeleteOptions
+                    {
+                        DeleteFileLocation = false, DeleteFromExternalProvider = false
+                    });
+                    if (library.GetItemById(current.InternalId) != null)
+                        throw new InvalidOperationException("Emby still reports the library entry after deletion.");
+                    Interlocked.Increment(ref removed);
+                }
+                catch (Exception error) when (!(error is OperationCanceledException))
+                {
+                    Interlocked.Increment(ref failed);
+                    logger?.Error("TuneIn cleanup could not remove library item {0} ({1}).", target.Id, error.GetType().Name);
+                }
+            }
             try
             {
                 for (var start = 0; start < plan.Targets.Length; start += BatchSize)
                 {
-                    if (getRoot()?.InternalId != plan.Root)
-                        throw new InvalidOperationException("The TuneIn channel root changed after preview.");
                     var end = Math.Min(start + BatchSize, plan.Targets.Length);
-                    for (var index = start; index < end; index++)
+                    for (var index = start; index < end;)
                     {
                         token.ThrowIfCancellationRequested();
-                        var target = plan.Targets[index];
-                        try
+                        if (getRoot()?.InternalId != plan.Root)
+                            throw new InvalidOperationException("The TuneIn channel root changed after preview.");
+                        var parent = plan.Targets[index].ParentId;
+                        var tasks = new List<Task>(ParallelRemovals);
+                        while (index < end && tasks.Count < ParallelRemovals && plan.Targets[index].ParentId == parent)
                         {
-                            var current = library.GetItemById(target.Id);
-                            if (!target.Matches(current) || !StillUnderRoot(plan.Root, target, targets) ||
-                                (current is Folder && library.GetItemList(new InternalItemsQuery
-                                {
-                                    ParentIds = new[] { current.InternalId }, Limit = 1
-                                }, token).Length != 0))
-                                throw new InvalidOperationException("Item changed or contains entries not removed by cleanup.");
-                            token.ThrowIfCancellationRequested();
-                            library.DeleteItem(current, options);
-                            if (library.GetItemById(current.InternalId) != null)
-                                throw new InvalidOperationException("Emby still reports the library entry after deletion.");
-                            removed++;
+                            var target = plan.Targets[index++];
+                            tasks.Add(Task.Run(() => Remove(target)));
                         }
-                        catch (Exception error) when (!(error is OperationCanceledException))
-                        {
-                            failed++;
-                            logger?.Error("TuneIn cleanup could not remove library item {0} ({1}).", target.Id, error.GetType().Name);
-                        }
+                        await Task.WhenAll(tasks).ConfigureAwait(false);
                     }
-                    progress(removed, failed);
+                    Report();
                     if (end < plan.Targets.Length) await Task.Yield();
                 }
             }
-            finally { progress(removed, failed); }
+            finally { Report(); }
         }
 
         private bool StillUnderRoot(long root, Target item, Dictionary<long, Target> targets)

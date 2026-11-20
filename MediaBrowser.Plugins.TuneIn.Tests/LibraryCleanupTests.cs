@@ -17,6 +17,98 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
     public class LibraryCleanupTests
     {
         [Fact]
+        public async Task FailedSiblingKeepsItsParentEvenWhenOtherSiblingIsRemoved()
+        {
+            var fixture = new Fixture();
+            var id = fixture.SignedId();
+            fixture.Add(2, 1, id);
+            fixture.Add(3, 2, id);
+            fixture.Add(4, 2, id);
+            var plan = fixture.Cleanup.Preview(fixture.Directory.Snapshot());
+            fixture.Library.BeforeDeleteItem = item =>
+            {
+                if (item.InternalId == 3) throw new InvalidOperationException("Synthetic failure");
+            };
+            var counts = (0, 0);
+
+            await fixture.Cleanup.RunAsync(plan, (removed, failed) => counts = (removed, failed), CancellationToken.None);
+
+            Assert.Equal((1, 2), counts);
+            Assert.Equal(new long[] { 4 }, fixture.Library.Removed);
+            Assert.True(fixture.Library.Items.ContainsKey(2));
+            Assert.True(fixture.Library.Items.ContainsKey(3));
+        }
+
+        [Fact]
+        public async Task SiblingRemovalsOverlapAndParentWaitsForChildren()
+        {
+            var fixture = new Fixture();
+            var id = fixture.SignedId();
+            fixture.Add(2, 1, id);
+            for (var index = 3; index < 7; index++) fixture.Add(index, 2, id);
+            var plan = fixture.Cleanup.Preview(fixture.Directory.Snapshot());
+            using var release = new ManualResetEventSlim();
+            var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var started = 0;
+            var parentStarted = 0;
+            fixture.Library.BeforeDeleteItem = item =>
+            {
+                if (item.ParentId != 2)
+                {
+                    Interlocked.Exchange(ref parentStarted, 1);
+                    return;
+                }
+                if (Interlocked.Increment(ref started) == 4) entered.TrySetResult(true);
+                if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException();
+            };
+            var cleanup = fixture.Cleanup.RunAsync(plan, (_, _) => { }, CancellationToken.None);
+            try
+            {
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Equal(0, Volatile.Read(ref parentStarted));
+            }
+            finally { release.Set(); }
+            await cleanup;
+            Assert.Equal(1, parentStarted);
+            Assert.Equal(5, fixture.Library.Removed.Count);
+            Assert.Equal(2, fixture.Library.Removed.Last());
+        }
+
+        [Fact]
+        public async Task ReportsAfterTwoThousandRemovalsAndTheRemainingGroup()
+        {
+            var fixture = new Fixture();
+            var id = fixture.SignedId();
+            for (var index = 0; index < 2001; index++)
+                fixture.Add(index + 2, 1, id);
+            var plan = fixture.Cleanup.Preview(fixture.Directory.Snapshot());
+            var reports = new List<(int Removed, int Failed)>();
+
+            await fixture.Cleanup.RunAsync(plan, (removed, failed) => reports.Add((removed, failed)), CancellationToken.None);
+
+            Assert.Equal(new[] { (2000, 0), (2001, 0) }, reports);
+            Assert.Equal(2001, fixture.Library.Removed.Count);
+        }
+
+        [Fact]
+        public async Task ChangedRootStopsBeforeTheNextRemovalWithinAGroup()
+        {
+            var fixture = new Fixture();
+            var id = fixture.SignedId();
+            fixture.Add(2, 1, id);
+            fixture.Add(3, 2, id);
+            var plan = fixture.Cleanup.Preview(fixture.Directory.Snapshot());
+            fixture.Library.BeforeDelete = () => fixture.Library.Items[1].InternalId = 99;
+            var reports = new List<(int Removed, int Failed)>();
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                fixture.Cleanup.RunAsync(plan, (removed, failed) => reports.Add((removed, failed)), CancellationToken.None));
+
+            Assert.Equal(new[] { (1, 0) }, reports);
+            Assert.Single(fixture.Library.Removed);
+        }
+
+        [Fact]
         public async Task DeletesOnlyPreviewedGeneratedDescendantsAndProtectsFoldersWithUnverifiedChildren()
         {
             var fixture = new Fixture();
@@ -198,9 +290,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         {
             var fixture = new Fixture();
             fixture.Config.EnableSports = true;
-            fixture.Add(2, 1, fixture.SignedId());
-            fixture.Add(3, 1, fixture.SignedId());
-            fixture.Add(4, 1, fixture.SignedId("sports"));
+            for (var index = 2; index < 8; index++)
+                fixture.Add(index, 1, fixture.SignedId());
+            fixture.Add(8, 1, fixture.SignedId("sports"));
             using var entered = new ManualResetEventSlim();
             using var release = new ManualResetEventSlim();
             var path = Path.Combine(Path.GetTempPath(), "tunein-cleanup-" + Guid.NewGuid().ToString("N"));
@@ -220,7 +312,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             {
                 Assert.Equal("Idle", refresh.CancelCleanup().Cleanup.State);
                 var preview = refresh.PreviewCleanup("talk");
-                Assert.Equal(2, preview.Folders);
+                Assert.Equal(6, preview.Folders);
                 refresh.StartCleanup(preview.Token);
                 Assert.True(await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(5))));
                 Assert.Contains("talk", store.Read().CleanedCategories);
@@ -237,15 +329,15 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var result = refresh.Status().Cleanup;
                 Assert.Equal("Stopped", result.State);
                 Assert.False(result.Cancelling);
-                Assert.Equal(1, result.Removed);
+                Assert.InRange(result.Removed, 1, TuneInLibraryCleanup.ParallelRemovals);
                 Assert.Equal(0, result.Failed);
-                Assert.Equal(2, result.Total);
-                Assert.Single(fixture.Library.Removed);
-                Assert.True(fixture.Library.Items.ContainsKey(4));
+                Assert.Equal(6, result.Total);
+                Assert.Equal(result.Removed, fixture.Library.Removed.Count);
+                Assert.True(fixture.Library.Items.ContainsKey(8));
                 Assert.Contains("talk", store.Read().CleanedCategories);
                 var remaining = refresh.PreviewCleanup("talk");
                 Assert.NotNull(remaining.Token);
-                Assert.Equal(1, remaining.Folders);
+                Assert.Equal(6 - result.Removed, remaining.Folders);
             }
             finally
             {
@@ -261,7 +353,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         {
             var fixture = new Fixture();
             fixture.Add(2, 1, fixture.SignedId());
-            fixture.Add(3, 1, fixture.SignedId());
+            fixture.Add(3, 2, fixture.SignedId());
             var plan = fixture.Cleanup.Preview(fixture.Directory.Snapshot(), "talk");
             using var cancellation = new CancellationTokenSource();
             fixture.Library.BeforeDelete = () =>
@@ -319,28 +411,35 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 
         public class LibraryProxy : DispatchProxy
         {
+            private readonly object gate = new object();
             internal readonly Dictionary<long, BaseItem> Items = new Dictionary<long, BaseItem>();
             internal readonly List<long> Removed = new List<long>();
             internal Action BeforeDelete;
+            internal Action<BaseItem> BeforeDeleteItem;
 
             protected override object Invoke(MethodInfo method, object[] args)
             {
                 switch (method.Name)
                 {
                     case nameof(ILibraryManager.GetItemById):
-                        return Items.TryGetValue((long)args[0], out var item) ? item : null;
+                        lock (gate) return Items.TryGetValue((long)args[0], out var item) ? item : null;
                     case nameof(ILibraryManager.GetItemList):
                         var query = (InternalItemsQuery)args[0];
-                        return Items.Values.Where(entry => query.Recursive || query.ParentIds.Contains(entry.ParentId))
-                            .Take(query.Limit.GetValueOrDefault(int.MaxValue)).ToArray();
+                        lock (gate)
+                            return Items.Values.Where(entry => query.Recursive || query.ParentIds.Contains(entry.ParentId))
+                                .Take(query.Limit.GetValueOrDefault(int.MaxValue)).ToArray();
                     case nameof(ILibraryManager.DeleteItem):
                         var options = Assert.IsType<DeleteOptions>(args[1]);
                         Assert.False(options.DeleteFileLocation);
                         Assert.False(options.DeleteFromExternalProvider);
+                        BeforeDeleteItem?.Invoke((BaseItem)args[0]);
                         BeforeDelete?.Invoke();
                         var id = ((BaseItem)args[0]).InternalId;
-                        Removed.Add(id);
-                        Items.Remove(id);
+                        lock (gate)
+                        {
+                            Removed.Add(id);
+                            Items.Remove(id);
+                        }
                         return null;
                     default: throw new NotSupportedException(method.Name);
                 }

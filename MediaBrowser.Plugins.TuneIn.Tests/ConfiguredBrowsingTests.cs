@@ -29,6 +29,53 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         private static PluginConfiguration Ready() => new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true };
 
         [Fact]
+        public async Task RefreshCacheAcceptsSixtyThousandPagesAndRejectsAnother()
+        {
+            var session = new TuneInCatalogueSession(null, TimeSpan.FromHours(1), () => DateTime.UtcNow,
+                maxPages: TuneInCatalogueSession.MaxRefreshPages, maxBytes: TuneInCatalogueSession.MaxRefreshBytes);
+            var document = Opml("");
+            for (var index = 0; index < TuneInCatalogueSession.MaxRefreshPages; index++)
+            {
+                var request = new DirectoryRequest();
+                request.Parameters["id"] = "c" + index;
+                await session.FetchAsync(request, () => Task.FromResult(document), Token);
+            }
+            Assert.Equal(60000, session.PageCount);
+            var extra = new DirectoryRequest();
+            extra.Parameters["id"] = "c60000";
+            await Assert.ThrowsAsync<InvalidDataException>(() => session.FetchAsync(extra,
+                () => Task.FromResult(document), Token));
+        }
+
+        [Fact]
+        public async Task RecentPagesExpireWithoutRenewalAndNeverReplaceLiveValidation()
+        {
+            var now = DateTime.UtcNow;
+            var request = new DirectoryRequest();
+            request.Parameters["id"] = "c1";
+            var calls = 0;
+            Task<XDocument> Fetch()
+            {
+                calls++;
+                return Task.FromResult(Opml("<outline type='audio' guide_id='s1'/>"));
+            }
+            var first = new TuneInCatalogueSession(null, TimeSpan.FromHours(1), () => now);
+            await first.FetchAsync(request, Fetch, Token);
+            var recent = first.SnapshotFetchedPages();
+            now = now.AddMinutes(9);
+            var second = new TuneInCatalogueSession(null, TimeSpan.FromHours(1), () => now, recentPages: recent);
+            await second.FetchAsync(request, Fetch, Token);
+            Assert.Equal(1, calls);
+            Assert.Empty(second.SnapshotFetchedPages());
+            await second.FetchAsync(request, Fetch, Token, liveOnly: true);
+            Assert.Equal(2, calls);
+            now = now.AddMinutes(1);
+            var expired = new TuneInCatalogueSession(null, TimeSpan.FromHours(1), () => now, recentPages: recent);
+            await expired.FetchAsync(request, Fetch, Token);
+            Assert.Equal(3, calls);
+        }
+
+        [Fact]
         public async Task RegionalGenreOptOutKeepsExistingIdsAndOrdinaryListings()
         {
             var config = Ready();
