@@ -55,7 +55,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
         '.settingsLockState', '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
         '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
-        '.cleanupConfirm', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.backupStart',
+        '.cleanupConfirm', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.cleanupScope', '.backupStart',
         '.backupStatus', '.cleanupBackupVerified', '#tuneInReportHint']) elements[name] = new Element();
     for (const [section, summary, open] of [
         ['.globalSection', '.globalSummary', true],
@@ -69,6 +69,19 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         elements[section].open = open;
         elements[summary] = elements[section].appendChild(new Element('summary'));
     }
+    for (const [summary, text, indicator] of [
+        ['.refreshSummary', 'Catalog Refresh', '.refreshIndicator'],
+        ['.maintenanceSummary', 'Maintenance', '.maintenanceIndicator']
+    ]) {
+        const title = elements[summary].appendChild(new Element('span'));
+        title.textContent = text + ' ';
+        elements[indicator] = elements[summary].appendChild(new Element('span'));
+        elements[indicator].hidden = true;
+    }
+    elements['.refreshIndicator'].textContent = 'Refreshing';
+    elements['.maintenanceIndicator'].textContent = 'Maintenance is active';
+    elements['.refreshSummaryDetails'] = elements['.refreshSummary'].appendChild(new Element('span'));
+    elements['.refreshOverall'] = elements['.refreshSummary'].appendChild(new Element('span'));
     const enhanced = [];
     const view = {
         addEventListener(event, handler) { handlers[event] = handler; },
@@ -178,6 +191,13 @@ test('all dashboard actions use native Emby buttons without plugin color overrid
     assert.doesNotMatch(styles, /[^{}]*(?:button|refreshCancel|refreshStart|refreshLogButton|refreshDismiss)[^{}]*\{/);
 });
 
+test('main settings, refresh, and maintenance share one width container', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /<div class="auto-center">\s*<form>[\s\S]*?<\/form>\s*<details class="tuneInSection tuneInNeutralPanel tuneInRefresh"/);
+    assert.match(html, /<\/details>\s*<details class="tuneInSection tuneInNeutralPanel">\s*<summary class="maintenanceSummary">/);
+    assert.match(html, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.tuneInActivity::before\s*\{\s*animation:\s*none/);
+});
+
 test('first activation opens and loads Language and Location even when native click defaults are cancelled', async () => {
     const app = harness();
     const visit = app.instance.onResume();
@@ -215,6 +235,79 @@ test('first activation opens and loads Language and Location even when native cl
         assert.equal(root.open, true);
         assert.equal(app.selectors.length, index + 1);
     }
+});
+
+test('opening every selected category immediately loads its first level', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ TalkMode: 'selected', SportsMode: 'selected', PodcastsMode: 'selected' });
+    await visit;
+    enableBrowsing(app);
+    for (const [index, category] of ['language', 'location', 'music', 'talk', 'sports', 'podcast', 'local'].entries()) {
+        const section = app.elements['.selectors'].childNodes[index];
+        section.open = false;
+        const root = section.descendants().find(node => node.tagName === 'details');
+        const loading = section.childNodes[0].handlers.click({ preventDefault() {} });
+        assert.equal(section.open, true);
+        assert.equal(root.open, true);
+        assert.equal(app.selectors.length, index + 1);
+        assert.equal(app.selectors[index].options.url.params.Category, category);
+        app.selectors[index].resolve({ Items: [{ Id: 'c1', Name: 'First level', CanSelect: true }] });
+        await loading;
+        assert.match(root.textContent, /First level/);
+    }
+});
+
+test('choosing selected topics in an open category loads choices without another click', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    enableBrowsing(app);
+    const section = app.elements['.selectors'].childNodes[3];
+    section.childNodes[0].handlers.click({ preventDefault() {} });
+    const mode = section.childNodes[1];
+    mode.value = 'selected';
+    const loading = mode.handlers.change();
+    assert.equal(app.selectors.length, 1);
+    assert.equal(app.selectors[0].options.url.params.Category, 'talk');
+    app.selectors[0].resolve({ Items: [{ Id: 'c1', Name: 'News', CanSelect: true }] });
+    await loading;
+    assert.match(section.textContent, /News/);
+});
+
+test('closing a category cancels its scheduled automatic retry', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    enableBrowsing(app);
+    const section = app.elements['.selectors'].childNodes[0];
+    section.open = false;
+    const loading = section.childNodes[0].handlers.click({ preventDefault() {} });
+    app.selectors[0].reject({ status: 503 });
+    await settle();
+    section.childNodes[0].handlers.click({ preventDefault() {} });
+    [...app.timers.values()].find(item => item.delay === 1000).handler();
+    await loading;
+    assert.equal(app.selectors.length, 1);
+});
+
+test('a selector authorization failure remains visible without an automatic retry', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    enableBrowsing(app);
+    const section = app.elements['.selectors'].childNodes[2];
+    section.open = false;
+    const loading = section.childNodes[0].handlers.click({ preventDefault() {} });
+    app.selectors[0].reject({ status: 403 });
+    await loading;
+    assert.equal(app.selectors.length, 1);
+    assert.match(section.textContent, /HTTP 403/);
+    assert.ok(section.descendants().some(node => node.tagName === 'button' && node.textContent === 'Retry'));
+    assert.equal([...app.timers.values()].some(timer => timer.delay === 1000), false);
 });
 
 test('an open selector retries a transient first failure once without a second click', async () => {
@@ -613,8 +706,8 @@ test('status polls once per visit, drains prior requests and updates only the cu
 
 test('idle polling is slower, refresh actions are explicit, and old polls cannot overwrite action results', async () => {
     const app = harness(true);
-    app.elements['.tuneInRefresh'].open = true;
     const visit = app.instance.onResume();
+    app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
     app.reads[0].resolve({});
     app.refresh[0].resolve({ State: 'NeverRun', Busy: false,
         Categories: [{ Category: 'talk', Name: 'Talk', State: 'No recorded refresh' }] });
@@ -707,8 +800,8 @@ test('partial reports survive same-run polls and stale retrievals cannot replace
 
 test('category counts show only filtered availability and Emby inventory left of Refresh', async () => {
     const app = harness(true);
-    app.elements['.tuneInRefresh'].open = true;
     const visit = app.instance.onResume();
+    app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
     app.reads[0].resolve({});
     app.refresh[0].resolve({ State: 'Partial', Busy: false, Categories: [
         { Category: 'talk', Name: 'Talk', State: 'Partial (applied)', StationCounts: {
@@ -743,13 +836,13 @@ test('category counts show only filtered availability and Emby inventory left of
 test('In Emby keeps last known values and timestamps when the settings screen reopens', async () => {
     for (const inventory of [0, 7]) {
         const app = harness(true);
-        app.elements['.tuneInRefresh'].open = true;
         const checkedAt = '2026-11-19T10:00:00Z';
         const status = { State: 'Completed', Busy: false, Categories: [
             { Category: 'talk', Name: 'Talk', State: 'Imported',
                 StationCounts: { AvailableStations: 8, EmbyStations: inventory, EmbyCheckedUtc: checkedAt } }
         ] };
         let visit = app.instance.onResume();
+        app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
         app.reads[0].resolve({});
         app.refresh[0].resolve(status);
         await visit;
@@ -758,6 +851,7 @@ test('In Emby keeps last known values and timestamps when the settings screen re
         assert.equal(value().textContent, String(inventory));
         app.instance.onPause();
         visit = app.instance.onResume();
+        app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
         app.reads[1].resolve({});
         app.refresh[1].resolve(status);
         await visit;
@@ -777,7 +871,7 @@ test('In Emby keeps last known values and timestamps when the settings screen re
     }
 });
 
-test('collapsing browsing settings, including Music genres, keeps choices and does not start provider requests', async () => {
+test('collapsing browsing settings keeps choices; reopening categories loads their choices', async () => {
     const app = harness();
     const visit = app.instance.onResume();
     app.reads[0].resolve({ EnableTalk: true, LatLon: '1,2', Music: [{ Id: 'g1', Name: 'Rock' }] });
@@ -788,12 +882,16 @@ test('collapsing browsing settings, including Music genres, keeps choices and do
         ...app.elements['.selectors'].childNodes.filter(section => section.open).map(section => section.childNodes[0])];
     for (const summary of summaries) {
         assert.equal(summary.parentNode.open, true);
+        const requestsBeforeCollapse = app.selectors.length;
         summary.handlers.click({ preventDefault() {} });
         assert.equal(summary.parentNode.open, false);
+        assert.equal(app.selectors.length, requestsBeforeCollapse);
         summary.handlers.click({ preventDefault() {} });
         assert.equal(summary.parentNode.open, true);
     }
-    assert.equal(app.selectors.length, 0);
+    assert.equal(app.selectors.length, 4);
+    app.selectors.forEach(request => request.resolve({ Items: [] }));
+    await settle();
     assert.match(music.textContent, /Rock/);
     assert.equal(app.latLon.value, '1,2');
     assert.ok(app.elements['.categories'].descendants().some(item => item.checked));
@@ -812,11 +910,15 @@ test('maintenance previews before confirming and blocks settings and refresh unt
     const click = name => app.elements[name].handlers.click();
     assert.equal(click('.cleanupConfirm'), undefined);
     assert.equal(app.cleanup.length, 0);
+    assert.equal(app.elements['.cleanupPreview'].disabled, true);
+    app.elements['.cleanupScope'].value = 'talk';
+    app.elements['.cleanupScope'].handlers.change();
     const preview = click('.cleanupPreview');
     assert.equal(app.cleanup[0].options.url.route, 'TuneIn/Cleanup/Preview');
-    app.cleanup[0].resolve({ Token: 'preview-token', Folders: 2, Stations: 7 });
+    assert.equal(JSON.parse(app.cleanup[0].options.data).Category, 'talk');
+    app.cleanup[0].resolve({ Token: 'preview-token', Scope: 'Talk', Folders: 2, Stations: 7 });
     await preview;
-    assert.match(app.elements['.cleanupPreviewText'].textContent, /2 folders and 7 station entries/);
+    assert.match(app.elements['.cleanupPreviewText'].textContent, /2 folders and 7 station entries from Talk/);
     assert.equal(app.elements['.cleanupConfirmation'].hidden, false);
     assert.equal(app.elements['.cleanupBack'].focused, true);
     assert.equal(app.elements['.cleanupConfirm'].disabled, true);
@@ -831,6 +933,10 @@ test('maintenance previews before confirming and blocks settings and refresh unt
     app.cleanup[1].resolve({ ...live, Cleanup: { State: 'Running', Total: 9, Removed: 0 } });
     await start;
     assert.equal(app.elements['.settingsLocked'].disabled, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    assert.equal(app.elements['.configurationFields'].disabled, true);
+    assert.equal(app.elements['.maintenanceIndicator'].hidden, false);
+    assert.match(app.elements['.settingsLockStatus'].textContent, /maintenance is active/);
     assert.equal(app.elements['.refreshStart'].disabled, true);
     assert.equal(app.elements['.cleanupPreview'].disabled, true);
     assert.match(app.elements['.cleanupStatus'].textContent, /0 of 9/);
@@ -838,6 +944,79 @@ test('maintenance previews before confirming and blocks settings and refresh unt
     await settle();
     assert.match(app.elements['.cleanupStatus'].textContent, /8 of 9.*1 entries could not be removed/);
     assert.equal(app.elements['.settingsLocked'].disabled, false);
+    assert.equal(app.elements['.maintenanceIndicator'].hidden, true);
+    assert.equal(app.elements['.globalFields'].disabled, false);
+    assert.equal(app.elements['.configurationFields'].disabled, false);
+});
+
+test('refresh locks settings immediately and shows activity even when the section is collapsed', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve({ State: 'Completed', Busy: false, SettingsLocked: false,
+        Categories: [{ Category: 'talk', Name: 'Talk', State: 'Imported' }] });
+    await visit;
+    await settle();
+    app.elements['.tuneInRefresh'].open = true;
+    const start = app.elements['.refreshStart'].handlers.click();
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    assert.equal(app.elements['.configurationFields'].disabled, true);
+    assert.equal(app.elements['.settingsLocked'].disabled, true);
+    app.elements['.tuneInRefresh'].open = false;
+    app.refresh[1].resolve({ State: 'Running', Busy: true, Phase: 'Discovering', Category: 'talk',
+        SettingsLocked: false, Categories: [{ Category: 'talk', Name: 'Talk', State: 'Discovering' }] });
+    await start;
+    assert.equal(app.elements['.refreshIndicator'].hidden, false);
+    assert.equal(app.elements['.maintenanceIndicator'].hidden, true);
+    assert.match(app.elements['.settingsLockStatus'].textContent, /catalog refresh is active/);
+    app.formHandlers.submit({ preventDefault() {} });
+    assert.equal(app.writes.length, 0);
+    app.refresh[2].resolve({ State: 'Completed', Busy: false, SettingsLocked: false,
+        Categories: [{ Category: 'talk', Name: 'Talk', State: 'Imported' }] });
+    await settle();
+    assert.equal(app.elements['.refreshIndicator'].hidden, true);
+    assert.equal(app.elements['.globalFields'].disabled, false);
+    assert.equal(app.elements['.configurationFields'].disabled, false);
+    assert.equal(app.elements['.settingsLocked'].disabled, false);
+});
+
+test('settings remain disabled when refresh status is unavailable', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].reject(new Error('status unavailable'));
+    await visit;
+    await settle();
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    assert.equal(app.elements['.configurationFields'].disabled, true);
+    assert.equal(app.elements['.button-submit'].disabled, true);
+    assert.equal(app.elements['.settingsLocked'].disabled, true);
+});
+
+test('changing cleanup scope invalidates the preview and backup acknowledgement', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    await open(app.elements['.maintenanceSection']);
+    const scope = app.elements['.cleanupScope'];
+    scope.value = 'talk';
+    scope.handlers.change();
+    const preview = app.elements['.cleanupPreview'].handlers.click();
+    app.cleanup[0].resolve({ Token: 'first', Scope: 'Talk', Folders: 1, Stations: 2 });
+    await preview;
+    app.elements['.cleanupBackupVerified'].checked = true;
+    app.elements['.cleanupBackupVerified'].handlers.change();
+    scope.value = 'all';
+    scope.handlers.change();
+    assert.equal(app.elements['.cleanupConfirmation'].hidden, true);
+    assert.equal(app.elements['.cleanupBackupVerified'].checked, false);
+    assert.equal(app.elements['.cleanupConfirm'].disabled, true);
+    const next = app.elements['.cleanupPreview'].handlers.click();
+    assert.equal(JSON.parse(app.cleanup[1].options.data).Category, 'all');
+    app.cleanup[1].resolve({ Token: 'second', Scope: 'All categories', Folders: 3, Stations: 4 });
+    await next;
+    assert.match(app.elements['.cleanupPreviewText'].textContent, /All categories/);
 });
 
 test('backup uses the dedicated action and cleanup stays disabled while Emby has not finished', async () => {
@@ -858,14 +1037,100 @@ test('backup uses the dedicated action and cleanup stays disabled while Emby has
     app.backup[2].resolve({ State: 'Completed' });
     await settle();
     assert.match(app.elements['.backupStatus'].textContent, /completed successfully/);
+    app.elements['.cleanupScope'].value = 'all';
+    app.elements['.cleanupScope'].handlers.change();
     assert.equal(app.elements['.cleanupPreview'].disabled, false);
     app.instance.onPause();
 });
 
-test('Catalog Refresh opens by default and can collapse and reopen with fresh status', async () => {
+test('Catalog Refresh defaults open only for the first refresh or an active refresh', async () => {
+    for (const [status, expected] of [
+        [{ State: 'NeverRun', HasRefreshBeenStarted: false }, true],
+        [{ State: 'NeverRun', HasRefreshBeenStarted: true }, false],
+        [{ State: 'NeverRun', HasRefreshBeenStarted: false, StartedUtc: '2026-11-20T00:00:00Z' }, false],
+        [{ State: 'Completed', HasRefreshBeenStarted: true }, false],
+        [{ State: 'Error', HasRefreshBeenStarted: true }, false],
+        [{ State: 'Running', Busy: true, HasRefreshBeenStarted: true }, true]
+    ]) {
+        const app = harness(true);
+        const visit = app.instance.onResume();
+        assert.equal(app.elements['.tuneInRefresh'].open, false);
+        app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+        app.refresh[0].resolve({ ...status, SettingsLocked: false });
+        await visit;
+        await settle();
+        assert.equal(app.elements['.tuneInRefresh'].open, expected, JSON.stringify(status));
+        app.instance.onPause();
+    }
+});
+
+test('manual Catalog Refresh choice is preserved while status loads and while refreshing', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    const section = app.elements['.tuneInRefresh'];
+    app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve({ State: 'Completed', Busy: false, SettingsLocked: false });
+    await visit;
+    await settle();
+    assert.equal(section.open, true);
+    app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
+    [...app.timers.values()].find(timer => timer.delay === 10000).handler();
+    app.refresh[1].resolve({ State: 'Running', Busy: true, SettingsLocked: false });
+    await settle();
+    assert.equal(section.open, false);
+    assert.equal(app.elements['.refreshIndicator'].hidden, false);
+    app.instance.onPause();
+    const next = app.instance.onResume();
+    app.reads[1].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[2].resolve({ State: 'Running', Busy: true, SettingsLocked: false });
+    await next;
+    await settle();
+    assert.equal(section.open, true);
+});
+
+test('Catalog Refresh applies its default after a status read recovers', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].reject(new Error('offline'));
+    await visit;
+    await settle();
+    assert.equal(app.elements['.tuneInRefresh'].open, false);
+    assert.match(app.elements['.refreshStatus'].textContent, /Retrying automatically/);
+    [...app.timers.values()].find(timer => timer.delay === 10000).handler();
+    app.refresh[1].resolve({ State: 'NeverRun', HasRefreshBeenStarted: false, Busy: false, SettingsLocked: false });
+    await settle();
+    assert.equal(app.elements['.tuneInRefresh'].open, true);
+});
+
+test('programmatic Catalog Refresh opening and stale visits do not override the current choice', async () => {
+    const app = harness(true);
+    let visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    await visit;
+    app.instance.onPause();
+    visit = app.instance.onResume();
+    app.reads[1].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve({ State: 'Completed', Busy: false, SettingsLocked: false });
+    await visit;
+    await settle();
+    assert.equal(app.elements['.tuneInRefresh'].open, false);
+    app.refresh[1].resolve({ State: 'Running', Busy: true, SettingsLocked: false });
+    await settle();
+    const section = app.elements['.tuneInRefresh'];
+    assert.equal(section.open, true);
+    section.handlers.toggle();
+    app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
+    app.refresh[2].resolve({ State: 'Running', Busy: true, SettingsLocked: false });
+    await settle();
+    assert.equal(section.open, false);
+});
+
+test('Catalog Refresh can be opened, collapsed and reopened with fresh status', async () => {
     const app = harness(true);
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    assert.match(html, /<details class="[^"]*\btuneInRefresh" open>/);
+    assert.match(html, /<details class="[^"]*\btuneInRefresh">/);
     const visit = app.instance.onResume();
     const section = app.elements['.tuneInRefresh'];
     const list = app.elements['.tuneInRefreshCategories'];
@@ -915,8 +1180,8 @@ for (const resume of [true, false]) {
     test(`recovery prompt submits explicit choice (${resume ? 'retry' : 'prioritize'}) and respects queue capacity`, async () => {
         const app = harness(true);
         const section = app.elements['.tuneInRefresh'];
-        section.open = true;
         const visit = app.instance.onResume();
+        app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
         app.reads[0].resolve({});
         const categories = [
             { Category: 'local', Name: 'Local Radio' }, { Category: 'presets', Name: 'My Favorites' },
@@ -962,8 +1227,8 @@ for (const resume of [true, false]) {
 
 test('category interval dropdowns restore saved values and save changes without starting a refresh', async () => {
     const app = harness(true);
-    app.elements['.tuneInRefresh'].open = true;
     const visit = app.instance.onResume();
+    app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
     app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, RefreshSchedules: [{ Category: 'talk', IntervalHours: 24 }] });
     app.refresh[0].resolve({ SettingsLocked: false, Categories: [
         { Category: 'talk', Name: 'Talk' }, { Category: 'sports', Name: 'Sports' }] });
@@ -1095,8 +1360,8 @@ test('topic filters load lazily and save independent modes and selected IDs', as
 
 test('category outcomes keep their status text as well as color, and queued rows are neutral', async () => {
     const app = harness(true);
-    app.elements['.tuneInRefresh'].open = true;
     const visit = app.instance.onResume();
+    app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
     app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
     app.refresh[0].resolve({ SettingsLocked: false, QueuedRequests: ['music'], Categories: [
         { Category: 'talk', Name: 'Talk', State: 'Imported' },
@@ -1109,6 +1374,57 @@ test('category outcomes keep their status text as well as color, and queued rows
     assert.deepEqual(rows.map(row => row.attributes['data-outcome']), ['Completed', 'Partial', 'Error', '']);
     assert.deepEqual(rows.map(row => row.childNodes[0].textContent),
         ['Talk: Imported', 'Sports: Partial (applied)', 'Podcasts: Failed', 'Music: Queued']);
+});
+
+test('Catalog Refresh aggregates category outcomes even while collapsed', async () => {
+    const categories = states => states.map((state, index) => ({ Category: String(index), Name: String(index), State: state }));
+    for (const [status, outcome, text] of [
+        [{ State: 'Completed', Categories: categories(['Imported', 'Unchanged']) }, 'Completed', 'successful'],
+        [{ State: 'Completed', Categories: categories(['Imported', 'Partial (applied)']) }, 'Partial', 'partial'],
+        [{ State: 'Completed', Categories: categories(['Incomplete (left unchanged)', 'Failed']) }, 'Error', 'error'],
+        [{ State: 'Error', Categories: categories(['Imported']) }, 'Error', 'error'],
+        [{ State: 'TimedOut', Categories: [] }, 'Error', 'error'],
+        [{ State: 'Partial', Categories: categories(['Imported']) }, 'Partial', 'partial'],
+        [{ State: 'Completed', Categories: categories(['Imported', 'No recorded refresh']) }, '', 'not all categories confirmed successful'],
+        [{ State: 'Completed', Categories: [] }, '', 'not all categories confirmed successful'],
+        [{ State: 'Cancelled', Categories: categories(['Imported']) }, '', 'not all categories confirmed successful'],
+        [{ State: 'Running', Busy: true, Categories: categories(['Discovering', 'Imported']) }, '', 'not all categories confirmed successful'],
+        [{ State: 'Running', Busy: true, Categories: categories(['Discovering', 'Failed']) }, 'Error', 'error']
+    ]) {
+        const app = harness(true);
+        const visit = app.instance.onResume();
+        app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+        app.refresh[0].resolve({ ...status, SettingsLocked: false });
+        await visit;
+        await settle();
+        assert.equal(app.elements['.tuneInRefresh'].attributes['data-outcome'], outcome, JSON.stringify(status));
+        assert.equal(app.elements['.refreshOverall'].textContent, ' - Overall: ' + text);
+        app.instance.onPause();
+    }
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    for (const outcome of ['Completed', 'Partial', 'Error'])
+        assert.ok(html.includes(`.tuneInRefresh[data-outcome="${outcome}"]`));
+});
+
+test('Catalog Refresh clears stale overall success when status becomes unavailable', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve({ State: 'Completed', SettingsLocked: false,
+        Categories: [{ Category: 'talk', Name: 'Talk', State: 'Imported' }] });
+    await visit;
+    await settle();
+    assert.equal(app.elements['.tuneInRefresh'].attributes['data-outcome'], 'Completed');
+    [...app.timers.values()].find(timer => timer.delay === 10000).handler();
+    app.refresh[1].reject(new Error('offline'));
+    await settle();
+    assert.equal(app.elements['.tuneInRefresh'].attributes['data-outcome'], '');
+    assert.equal(app.elements['.refreshOverall'].textContent, ' - Overall: status unavailable');
+    [...app.timers.values()].find(timer => timer.delay === 10000).handler();
+    app.refresh[2].resolve({ State: 'Completed', SettingsLocked: false,
+        Categories: [{ Category: 'talk', Name: 'Talk', State: 'Partial (unchanged)' }] });
+    await settle();
+    assert.equal(app.elements['.tuneInRefresh'].attributes['data-outcome'], 'Partial');
 });
 
 test('settings lock protects pending edits and saves without blocking catalog refresh', async () => {
@@ -1187,9 +1503,10 @@ test('collapsed refresh summary and diagnostics expose live discovery metrics', 
         DiscoveryCheckpointUtc: new Date(Date.now() - 60000).toISOString()
     });
     await visit;
+    app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
     assert.equal(app.elements['.tuneInRefresh'].open, false);
     assert.match(app.elements['.refreshSummary'].textContent,
-        /Catalog Refresh - Running - Discovering - Music - 1(?:,|\.|\s)?842 pages - progress \d+ sec ago/);
+        /Catalog Refresh Refreshing - Running - Discovering - Music - 1(?:,|\.|\s)?842 pages - progress \d+ sec ago/);
     assert.match(app.elements['.refreshElapsed'].textContent, /sec/);
     assert.match(app.elements['.refreshWork'].textContent,
         /1(?:,|\.|\s)?842 catalog pages \(limit 5(?:,|\.|\s)?000\); 2 \/ 8 categories checked/);

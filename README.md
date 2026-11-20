@@ -68,7 +68,8 @@ one. If its source is ambiguous, choose regions or coordinates and save.
 Other categories remain independent. Coordinates use decimal latitude and
 longitude separated by a comma, within -90..90 and -180..180.
 
-Expand a selector branch to load its choices. **Add**, at the right of a row,
+Open a category to load its first level of choices; expand a nested branch to
+load its choices. **Add**, at the right of a row,
 saves a selection without expanding it. Saved paths can be individually enabled
 or removed, with up to 100 selections per selector. Choices appear in a
 fixed-height scrolling panel. Temporary branch failures retry once; incomplete
@@ -81,8 +82,9 @@ The **Settings** switch, beside **Global TuneIn Settings**, prevents accidental
 edits and saves. The lock persists across browser sessions and server restarts.
 **Save** locks settings after a successful save; switch it off to edit again.
 The switch shows **Locked** in green or **Unlocked** in red.
-Locking does not save pending changes or stop
-a refresh. **Station Selections** groups Music Genres, Languages, Locations,
+Global and filtering settings, including the lock switch, cannot be changed while
+a catalog refresh or cleanup is active, or while refresh status is unavailable.
+Locking does not save pending changes or stop a refresh. **Station Selections** groups Music Genres, Languages, Locations,
 Local Cities and Regions, Talk Topics, Sports & Leagues, and Podcast Topics. Collapsing it keeps unsaved choices; opening it
 does not fetch from TuneIn by itself.
 Buttons use the active user's native Emby theme.
@@ -113,8 +115,8 @@ saved unchecked choices remain unchanged. Changing these options does not
 change existing navigation IDs.
 
 Talk, Sports, and Podcasts default to **All**. Choose **Selected only** in the
-corresponding selector, then open **Browse** in the category header to load
-options from TuneIn. Saved choices stay below the browser controls.
+corresponding selector to load options from TuneIn when the category is open.
+Saved choices stay below the browser controls.
 Only selected branches still offered by the provider are included. Empty or
 stale selections do not fall back to **All**.
 
@@ -209,12 +211,15 @@ apply previously fetched results without another discovery.
 **TuneIn Station Filtering** is green and collapsed after filtering is enabled
 and saved; otherwise it stays open for configuration. **Audio Categories** and
 **Station Selections** collapse after settings are saved and start collapsed on later visits.
-**Catalog Refresh** starts expanded and can be collapsed independently; its
+**Catalog Refresh** starts collapsed unless no refresh has ever started or a
+refresh is active. You can expand or collapse it independently; its
 heading keeps the current refresh state visible.
-Its neutral gray background follows the active Emby theme: light gray on a
-light theme and a darker surface on a dark theme. Green marks success without
-a bold outline; partial results and errors use stronger orange and red
-outlines alongside their status text.
+Its background is green when all enabled categories have successful results,
+orange if any result is partial, and red if any has an error; errors take
+precedence over partial results. The latest refresh's partial or error state is
+also reflected, even if it did not reach a category. Unconfirmed or unavailable
+results use a neutral surface. The heading includes the overall status in text;
+individual category rows use the same colors and retain their own status text.
 Live metrics show elapsed time, last progress, category progress, and catalog
 pages against the safety limit. During import, progress switches to folders
 served out of the known total. Discovery does not estimate a percentage or ETA
@@ -281,14 +286,18 @@ summary logs and cannot be reconstructed from past aggregate skip counts.
 Administrators can open **Maintenance → Clean Up Library Folders** below **Catalog Refresh**.
 The Maintenance panel follows the active Emby theme; its orange cleanup warning
 appears when the panel is expanded.
+The Maintenance and Catalog Refresh headers indicate when their work is active,
+even while collapsed. Their activity dots respect reduced-motion preferences.
 Cleanup cannot be undone. **Backup Emby** requests the normal **Emby Server Backup**
 scheduled task. It requires the [Backup & Restore plugin and Emby Premiere](https://emby.media/support/articles/Backup-Using-Plugin.html)
 and uses your existing backup settings. TuneIn requires exactly one scheduled
 task named **Emby Server Backup**. A request is not a completed backup: wait for
 Emby to report success, or verify another backup separately if the task is unavailable.
 
-Select **Preview cleanup** to count generated folders and station
-entries verified under the TuneIn channel. Acknowledge that you verified a
+Choose a category or **All categories**, then select **Preview cleanup** to count
+generated folders and station entries verified under the TuneIn channel.
+Category cleanup includes only matching authenticated category folders and their
+verified descendants, including folders from earlier settings. Acknowledge that you verified a
 successful backup, then confirm within five minutes to remove those entries in
 background batches. Unknown or unsigned entries are
 left alone; a folder with remaining children is not deleted. The channel root,
@@ -297,9 +306,18 @@ references to removed entries may break.
 
 Refreshes (including schedules and recovery) and settings writes cannot run
 while cleanup is active. The dashboard reports progress and partial failures.
-Before removing entries, cleanup clears refresh checkpoints and counts so an
-interruption cannot cause old reconciliation data to be replayed. Afterwards,
-select **Refresh all enabled categories** to rebuild the baseline.
+Before removal, cleanup clears recovery and discovery checkpoints. Single-category
+cleanup preserves a compatible saved category baseline and records the cleaned
+category before deleting anything, including across restart or partial failure.
+The cleaned category requires complete discovery before it can be imported again;
+partial discovery cannot restore its old snapshot. A category refresh can rebuild
+it without rediscovering its siblings, although Emby may reconcile the channel
+using those siblings' saved snapshots. If multiple enabled categories have been
+cleaned, a refresh of all enabled categories may be required to rebuild them
+without replaying stale snapshots. Full cleanup, or cleanup without a compatible
+saved baseline, requires **Refresh all enabled categories** to rebuild the baseline.
+Enabled categories can be recreated by a manual or scheduled refresh; disable a
+category in settings if it should stay absent.
 
 ### Request limits and recovery
 

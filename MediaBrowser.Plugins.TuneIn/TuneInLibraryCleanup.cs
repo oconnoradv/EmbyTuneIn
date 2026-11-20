@@ -16,6 +16,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public int Folders { get; set; }
         public int Stations { get; set; }
         public string Message { get; set; }
+        public string Scope { get; set; }
     }
 
     public sealed class TuneInCleanupStatus
@@ -47,6 +48,7 @@ namespace MediaBrowser.Plugins.TuneIn
             internal long Root;
             internal Target[] Targets;
             internal int Unverified;
+            internal string Category;
         }
 
         internal sealed class Target
@@ -71,8 +73,9 @@ namespace MediaBrowser.Plugins.TuneIn
                 current.GetType() == ItemType && current.ExternalId == ExternalId;
         }
 
-        internal Plan Preview(ConfigurationSnapshot snapshot)
+        internal Plan Preview(ConfigurationSnapshot snapshot, string category = null)
         {
+            if (category != null) TuneInBrowsing.CategoryName(category);
             var root = getRoot();
             if (root == null) return new Plan { Targets = Array.Empty<Target>() };
             if (root.InternalId <= 0) throw new InvalidOperationException("The TuneIn channel has no library ID.");
@@ -87,20 +90,43 @@ namespace MediaBrowser.Plugins.TuneIn
             var seen = new HashSet<long> { root.InternalId };
             var targets = new List<Target>();
             var pending = new Stack<long>();
-            pending.Push(root.InternalId);
+            var candidates = items.Length;
+            if (category == null) pending.Push(root.InternalId);
+            else
+            {
+                var roots = children[root.InternalId].Where(item => item is Folder && !(item is Channel)
+                    && TuneInDirectory.GeneratedCategory(snapshot, item.ExternalId, true) == category).ToArray();
+                var scoped = new HashSet<long>();
+                var scopePending = new Stack<long>(roots.Select(item => item.InternalId));
+                while (scopePending.Count != 0)
+                {
+                    var id = scopePending.Pop();
+                    if (!scoped.Add(id)) continue;
+                    foreach (var child in children[id]) scopePending.Push(child.InternalId);
+                }
+                candidates = scoped.Count;
+                foreach (var item in roots)
+                {
+                    if (item.InternalId <= 0 || !seen.Add(item.InternalId)) continue;
+                    targets.Add(new Target(item));
+                    pending.Push(item.InternalId);
+                }
+            }
             while (pending.Count != 0)
             {
                 foreach (var item in children[pending.Pop()])
                 {
                     if (item.InternalId <= 0 || !seen.Add(item.InternalId) || item is Channel ||
-                        !TuneInDirectory.IsGeneratedId(snapshot, item.ExternalId))
+                        (category == null ? !TuneInDirectory.IsGeneratedId(snapshot, item.ExternalId)
+                            : TuneInDirectory.GeneratedCategory(snapshot, item.ExternalId) != category))
                         continue;
                     targets.Add(new Target(item));
                     if (item is Folder) pending.Push(item.InternalId);
                 }
             }
             targets.Reverse(); // Children must be attempted before their parents.
-            return new Plan { Root = root.InternalId, Targets = targets.ToArray(), Unverified = items.Length - targets.Count };
+            return new Plan { Root = root.InternalId, Targets = targets.ToArray(), Unverified = candidates - targets.Count,
+                Category = category };
         }
 
         internal async Task RunAsync(Plan plan, Action<int, int> progress, CancellationToken token)

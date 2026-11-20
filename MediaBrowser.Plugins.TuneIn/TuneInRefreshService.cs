@@ -45,7 +45,10 @@ namespace MediaBrowser.Plugins.TuneIn
 
     [Route("/TuneIn/Cleanup/Preview", "POST")]
     [Authenticated(Roles = "Admin")]
-    public sealed class PreviewTuneInCleanup : IReturn<TuneInCleanupPreview> { }
+    public sealed class PreviewTuneInCleanup : IReturn<TuneInCleanupPreview>
+    {
+        public string Category { get; set; }
+    }
 
     [Route("/TuneIn/Cleanup/Start", "POST")]
     [Authenticated(Roles = "Admin")]
@@ -114,7 +117,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public TuneInCleanupPreview Post(PreviewTuneInCleanup request)
         {
             EnsureAdmin();
-            return refresh.PreviewCleanup();
+            return refresh.PreviewCleanup(request.Category);
         }
 
         public TuneInRefreshStatus Post(StartTuneInCleanup request)

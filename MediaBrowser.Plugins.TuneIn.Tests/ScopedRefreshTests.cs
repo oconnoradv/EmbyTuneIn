@@ -1,8 +1,11 @@
 using MediaBrowser.Common.Net;
 using MediaBrowser.Controller.Channels;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Plugins.TuneIn.Configuration;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -42,6 +45,195 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal(new[] { "talk", "talk" }, fixture.Inventory);
             Assert.Equal(2, refresh.Status().ImportFoldersServed);
             Assert.Equal(2, refresh.Status().ImportFoldersTotal);
+        }
+
+        [Fact]
+        public async Task CategoryDiscoveryRejectsSettingsAndLockChangesUntilItStops()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            fixture.BeforeSports = async token =>
+            {
+                entered.TrySetResult(true);
+                await release.Task.WaitAsync(token);
+            };
+            refresh.Start("sports");
+            try
+            {
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Throws<InvalidOperationException>(() => refresh.UpdateConfiguration(() => fixture.Config.EnableTalk = false));
+                Assert.Throws<InvalidOperationException>(() => refresh.SetSettingsLock(() => false));
+                Assert.True(fixture.Config.EnableTalk);
+            }
+            finally { release.TrySetResult(true); }
+            await WaitUntilIdle(refresh);
+            Assert.False(refresh.SetSettingsLock(() => false));
+        }
+
+        [Fact]
+        public async Task ScopedCleanupRetainsSiblingBaselineAcrossRestartAndRebuildsOnlyTheRemovedCategory()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            var cleanup = fixture.Cleanup("talk");
+            string sportsFingerprint;
+            using (var refresh = fixture.Create(allowScoped: true, cleanup: cleanup))
+            {
+                refresh.Start();
+                await WaitUntilIdle(refresh);
+                sportsFingerprint = fixture.Category("sports").Fingerprint;
+                var preview = refresh.PreviewCleanup("talk");
+                refresh.StartCleanup(preview.Token);
+                await WaitUntilCleanupIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().Cleanup.State);
+                Assert.Equal(new[] { "talk" }, fixture.Store.Read().CleanedCategories);
+                Assert.Equal(sportsFingerprint, fixture.Category("sports").Fingerprint);
+                Assert.Equal("Incomplete (cleanup needs refresh)", refresh.Status().Categories.Single(c => c.Category == "talk").State);
+            }
+            using (var refresh = fixture.Create(allowScoped: true, cleanup: cleanup))
+            {
+                Assert.Equal("Incomplete (cleanup needs refresh)", refresh.Status().Categories.Single(c => c.Category == "talk").State);
+                fixture.Version++;
+                refresh.Start("sports");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(fixture.Category("sports").RootId, fixture.Manager.Restrictions.Last());
+                Assert.Equal(new[] { "talk" }, fixture.Store.Read().CleanedCategories);
+                var refreshedSports = fixture.Category("sports").Fingerprint;
+                var fetches = fixture.Requests.Count;
+                refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Null(fixture.Manager.Restrictions.Last());
+                Assert.Equal(new[] { "talk", "c1" }, fixture.Requests.Skip(fetches));
+                Assert.Equal(refreshedSports, fixture.Category("sports").Fingerprint);
+                Assert.Empty(fixture.Store.Read().CleanedCategories);
+            }
+        }
+
+        [Fact]
+        public async Task MultipleCleanedCategoriesCannotBeReplayedFromStaleSnapshots()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            var cleanup = fixture.Cleanup("talk", "sports");
+            using var refresh = fixture.Create(allowScoped: true, cleanup: cleanup);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            foreach (var category in new[] { "talk", "sports" })
+            {
+                refresh.StartCleanup(refresh.PreviewCleanup(category).Token);
+                await WaitUntilCleanupIdle(refresh);
+            }
+            var imports = fixture.Manager.Restrictions.Count;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Error", refresh.Status().State);
+            Assert.Equal(imports, fixture.Manager.Restrictions.Count);
+            Assert.Equal(2, fixture.Store.Read().CleanedCategories.Count);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Empty(fixture.Store.Read().CleanedCategories);
+        }
+
+        [Fact]
+        public async Task IncompleteDiscoveryCannotRestoreACleanedCategoryFromItsOldSnapshot()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            var cleanup = fixture.Cleanup("talk");
+            using var refresh = fixture.Create(allowScoped: true, cleanup: cleanup);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            refresh.StartCleanup(refresh.PreviewCleanup("talk").Token);
+            await WaitUntilCleanupIdle(refresh);
+            var imports = fixture.Manager.Restrictions.Count;
+            fixture.BrokenTalk = true;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Partial", refresh.Status().State);
+            Assert.Equal(imports, fixture.Manager.Restrictions.Count);
+            Assert.Equal(new[] { "talk" }, fixture.Store.Read().CleanedCategories);
+            fixture.BrokenTalk = false;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Empty(fixture.Store.Read().CleanedCategories);
+        }
+
+        [Fact]
+        public async Task ScopedCleanupPersistsTheMarkerBeforeTheFirstRemoval()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            var cleanup = fixture.Cleanup("talk");
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            fixture.CleanupLibrary.BeforeDelete = () =>
+            {
+                entered.Set();
+                if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException();
+            };
+            using var refresh = fixture.Create(allowScoped: true, cleanup: cleanup);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            try
+            {
+                refresh.StartCleanup(refresh.PreviewCleanup("talk").Token);
+                Assert.True(await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(5))));
+                Assert.Equal(new[] { "talk" }, fixture.Store.Read().CleanedCategories);
+                Assert.Empty(fixture.CleanupLibrary.Removed);
+            }
+            finally { release.Set(); }
+            await WaitUntilCleanupIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().Cleanup.State);
+        }
+
+        [Fact]
+        public async Task InterruptedRebuildCanRetryItsFreshStagedListing()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            var cleanup = fixture.Cleanup("talk");
+            using var refresh = fixture.Create(allowScoped: true, cleanup: cleanup);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            refresh.StartCleanup(refresh.PreviewCleanup("talk").Token);
+            await WaitUntilCleanupIdle(refresh);
+            var attempts = 0;
+            fixture.Manager.BeforeImport = (_, __) =>
+            {
+                if (++attempts == 1) throw new IOException("Interrupted import.");
+                return Task.CompletedTask;
+            };
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal(2, attempts);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Empty(fixture.Store.Read().CleanedCategories);
+        }
+
+        [Fact]
+        public async Task DisablingACleanedCategoryDropsItsMarkerAndRetainsOtherSnapshots()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            var cleanup = fixture.Cleanup("talk");
+            using var refresh = fixture.Create(allowScoped: true, cleanup: cleanup);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            refresh.StartCleanup(refresh.PreviewCleanup("talk").Token);
+            await WaitUntilCleanupIdle(refresh);
+            refresh.UpdateConfiguration(() => fixture.Config.EnableTalk = false);
+            var saved = fixture.Store.Read();
+            Assert.Empty(saved.CleanedCategories);
+            Assert.Equal("sports", Assert.Single(saved.Categories).Category);
+            Assert.DoesNotContain(refresh.Status().Categories, category => category.Category == "talk");
+        }
+
+        private static async Task WaitUntilCleanupIdle(TuneInRefresh refresh)
+        {
+            Assert.True(await Task.Run(() => SpinWait.SpinUntil(
+                () => refresh.Status().Cleanup.State != "Running", TimeSpan.FromSeconds(5))));
         }
 
         [Theory]
@@ -217,7 +409,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             internal readonly List<string> Inventory = new List<string>();
             internal int Version = 1;
             internal int Fetches;
+            internal readonly ConcurrentQueue<string> Requests = new ConcurrentQueue<string>();
             internal Func<CancellationToken, Task> BeforeSports;
+            internal bool BrokenTalk;
+            internal LibraryCleanupTests.LibraryProxy CleanupLibrary;
+            internal readonly PluginConfiguration Config;
 
             internal ExperimentalImportFixture(bool includeMusic = false)
             {
@@ -226,12 +422,17 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true,
                     EnableMusic = includeMusic
                 };
+                Config = config;
                 if (includeMusic) config.Music.Add(new CatalogSelection { Id = "g1", Name = "Genre" });
                 directory = new TuneInDirectory(() => config, async (request, token) =>
                 {
                     Interlocked.Increment(ref Fetches);
+                    Requests.Enqueue(request.Parameters.GetValueOrDefault("c") ?? request.Parameters.GetValueOrDefault("id"));
                     if (BeforeSports != null && request.Parameters.GetValueOrDefault("c") == "sports")
                         await BeforeSports(token);
+                    if (BrokenTalk && request.Parameters.GetValueOrDefault("c") == "talk")
+                        return XDocument.Parse("<opml><body><outline type='link' text='Bad' "
+                            + "URL='https://opml.radiotime.com/Browse.ashx?id=c1&amp;filter=bad%20value'/></body></opml>");
                     if (!request.Parameters.ContainsKey("id"))
                         return XDocument.Parse("<opml><body><outline type='link' text='Subfolder' "
                             + "URL='https://opml.radiotime.com/Browse.ashx?id=c1'/></body></opml>");
@@ -247,10 +448,24 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             internal TuneInCategorySnapshot Category(string category) =>
                 Store.Read().Categories.Single(saved => saved.Category == category);
 
-            internal TuneInRefresh Create(bool allowScoped = false, TimeSpan? timeout = null) => new TuneInRefresh(directory, Store, () => channel,
+            internal TuneInLibraryCleanup Cleanup(params string[] categories)
+            {
+                var api = DispatchProxy.Create<ILibraryManager, LibraryCleanupTests.LibraryProxy>();
+                var library = (LibraryCleanupTests.LibraryProxy)api;
+                CleanupLibrary = library;
+                var root = new Channel { InternalId = 1, Name = "TuneIn" };
+                library.Items.Add(1, root);
+                var snapshot = directory.Snapshot();
+                for (var i = 0; i < categories.Length; i++)
+                    library.Items.Add(i + 2, new Folder { InternalId = i + 2, ParentId = 1,
+                        ExternalId = channel.GetCategoryRoot(snapshot, categories[i]).Id });
+                return new TuneInLibraryCleanup(api, () => root, null);
+            }
+
+            internal TuneInRefresh Create(bool allowScoped = false, TimeSpan? timeout = null, TuneInLibraryCleanup cleanup = null) => new TuneInRefresh(directory, Store, () => channel,
                 (source, folder, session, strict, token) => source.GetRefreshChannelItems(folder, session, strict, token),
                 (source, staged, restriction, token) => TuneInRefreshService.ImportChannel(manager, source, staged, restriction, token),
-                null, timeoutOverride: timeout ?? TimeSpan.FromSeconds(10), allowScopedImport: allowScoped,
+                null, timeoutOverride: timeout ?? TimeSpan.FromSeconds(10), allowScopedImport: allowScoped, libraryCleanup: cleanup,
                 updateArtwork: (_, folder, token) => Artwork.Add(directory.Resolve(directory.Snapshot(), folder).Category),
                 countStations: (_, folder, token) =>
                 {
@@ -2602,6 +2817,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         refresh.Start("talk");
                         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
                         Assert.Throws<InvalidOperationException>(() => refresh.UpdateConfiguration(() => config.EnableTalk = false));
+                        Assert.Throws<InvalidOperationException>(() => refresh.SetSettingsLock(() => false));
                         Assert.Equal(new[] { "all" }, refresh.Start().QueuedRequests);
                         refresh.Cancel();
                         await WaitUntilIdle(refresh);

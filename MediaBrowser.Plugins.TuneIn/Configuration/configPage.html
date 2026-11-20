@@ -118,7 +118,8 @@
             padding: 0 1em;
         }
         .tuneInGlobalPanel:has(> .tuneInGlobal[open]), .tuneInNeutralPanel[open] { padding-block-end: 1em; }
-        .tuneInGlobalPanel:has(> .tuneInGlobal[data-saved="true"]), .tuneInRefreshCategories [data-outcome="Completed"] {
+        .tuneInGlobalPanel:has(> .tuneInGlobal[data-saved="true"]), .tuneInRefresh[data-outcome="Completed"],
+        .tuneInRefreshCategories [data-outcome="Completed"] {
             background: color-mix(in srgb, #38864c 17%, transparent);
         }
         .tuneInNeutralPanel[data-filtering-configured="true"] {
@@ -150,12 +151,12 @@
             .globalSummary { grid-area: 1 / 1; }
             .tuneInGlobal::details-content { grid-column: 1 / -1; }
         }
-        .tuneInRefreshCategories [data-outcome="Partial"] {
+        .tuneInRefresh[data-outcome="Partial"], .tuneInRefreshCategories [data-outcome="Partial"] {
             background: color-mix(in srgb, #bc6b19 17%, transparent);
             outline: 2px solid #bc6b19;
             outline-offset: -2px;
         }
-        .tuneInRefreshCategories [data-outcome="Error"] {
+        .tuneInRefresh[data-outcome="Error"], .tuneInRefreshCategories [data-outcome="Error"] {
             background: color-mix(in srgb, #bf4141 17%, transparent);
             outline: 2px solid #bf4141;
             outline-offset: -2px;
@@ -174,6 +175,30 @@
         .tuneInSection > summary:focus-visible {
             outline: 2px solid currentColor;
             outline-offset: 2px;
+        }
+        .tuneInActivity {
+            display: inline-flex;
+            align-items: center;
+            gap: .4em;
+            margin-inline-start: .65em;
+            font-size: .8em;
+            font-weight: normal;
+        }
+        .tuneInActivity[hidden] { display: none; }
+        .tuneInActivity::before {
+            content: '';
+            inline-size: .55em;
+            block-size: .55em;
+            flex: none;
+            border-radius: 50%;
+            background: currentColor;
+            animation: tuneInActivityPulse 1.5s ease-in-out infinite;
+        }
+        @keyframes tuneInActivityPulse {
+            50% { opacity: .25; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .tuneInActivity::before { animation: none; }
         }
         .catalogRefreshPrompt {
             margin: .75em 0;
@@ -388,7 +413,8 @@
     </style>
     <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
 
-        <form class="auto-center">
+        <div class="auto-center">
+        <form>
             <p class="status" role="status" aria-live="polite"></p>
             <p class="status catalogRefreshPrompt" role="status" hidden></p>
             <div class="tuneInSection tuneInSectionBox tuneInGlobalPanel">
@@ -472,8 +498,8 @@
                 <button is="emby-button" type="submit" class="raised button-submit block" disabled><span>Save</span></button>
             </div>
         </form>
-        <details class="auto-center tuneInSection tuneInNeutralPanel tuneInRefresh" open>
-            <summary class="refreshSummary">Catalog Refresh</summary>
+        <details class="tuneInSection tuneInNeutralPanel tuneInRefresh">
+            <summary class="refreshSummary"><span>Catalog Refresh</span> <span class="tuneInActivity refreshIndicator" role="status" hidden>Refreshing</span><span class="refreshSummaryDetails"></span><span class="refreshOverall"></span></summary>
             <p>Checks the saved TuneIn categories and updates the Emby library when needed.</p>
                 <p class="refreshStatus" role="status">Reading refresh status...</p>
                 <dl class="refreshMetrics" aria-label="Current refresh metrics">
@@ -509,12 +535,26 @@
                 </form>
             </dialog>
         </details>
-        <details class="auto-center tuneInSection tuneInNeutralPanel">
-            <summary class="maintenanceSummary">Maintenance</summary>
+        <details class="tuneInSection tuneInNeutralPanel">
+            <summary class="maintenanceSummary"><span>Maintenance</span> <span class="tuneInActivity maintenanceIndicator" role="status" hidden>Maintenance is active</span></summary>
             <div class="tuneInCleanupWarning">
                 <h3>Clean Up Library Folders</h3>
                 <p><strong>Cleanup cannot be undone.</strong> Back up Emby and wait for a successful backup before removing any entries.</p>
-                <p>Cleanup removes generated folders and station entries from the TuneIn channel, not the channel itself, settings, or media files. Playlists and other references may break. Use Refresh all enabled categories to rebuild the catalog.</p>
+                <p>Cleanup removes generated folders and station entries from the Emby TuneIn channel; it does not remove the channel itself, settings, or media files. Playlists and other references may break.</p>
+                <p>For one category, compatible saved snapshots of other categories are retained. Refresh can recreate an enabled category; rebuilding it requires complete discovery and may reconcile other categories from their saved snapshots. If multiple categories were cleaned, or no compatible baseline exists, Refresh all enabled categories may be required. Disable a category if it should stay absent.</p>
+                <label for="tuneInCleanupScope">Folders to remove</label>
+                <select is="emby-select" id="tuneInCleanupScope" class="cleanupScope">
+                    <option value="">Choose a category</option>
+                    <option value="all">All categories</option>
+                    <option value="local">Local Radio</option>
+                    <option value="music">Music</option>
+                    <option value="language">By Language</option>
+                    <option value="location">By Location</option>
+                    <option value="talk">Talk</option>
+                    <option value="sports">Sports</option>
+                    <option value="podcast">Podcasts</option>
+                    <option value="presets">My Favorites</option>
+                </select>
                 <div class="tuneInCleanupActions">
                     <button is="emby-button" type="button" class="raised backupStart" disabled>Backup Emby</button>
                     <button is="emby-button" type="button" class="raised cleanupPreview" disabled>Preview cleanup</button>
@@ -535,5 +575,6 @@
                 <p class="cleanupError" role="alert"></p>
             </div>
         </details>
+        </div>
     </div>
 </div>

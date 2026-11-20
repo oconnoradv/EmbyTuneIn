@@ -439,15 +439,16 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
-        internal TuneInCleanupPreview PreviewCleanup()
+        internal TuneInCleanupPreview PreviewCleanup(string category = null)
         {
             lock (gate)
             {
                 EnsureCleanupAvailable();
                 cleanupPlan = null;
-                var plan = libraryCleanup.Preview(directory.Snapshot());
+                if (category == "all") category = null;
+                var plan = libraryCleanup.Preview(directory.Snapshot(), category);
                 if (plan.Targets.Length == 0)
-                    return new TuneInCleanupPreview { Message = "No verified generated entries were found in the TuneIn channel." };
+                    return new TuneInCleanupPreview { Message = "No verified generated entries were found in the selected cleanup scope." };
                 cleanupPlan = plan;
                 cleanupToken = Guid.NewGuid().ToString("N");
                 cleanupExpires = clock().AddMinutes(5);
@@ -455,6 +456,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 return new TuneInCleanupPreview
                 {
                     Token = cleanupToken,
+                    Scope = category == null ? "All categories" : TuneInBrowsing.CategoryName(category),
                     Folders = folders,
                     Stations = plan.Targets.Length - folders,
                     Message = plan.Unverified == 0 ? null : $"{plan.Unverified} unverified entries will be left alone."
@@ -483,24 +485,32 @@ namespace MediaBrowser.Plugins.TuneIn
         private async Task RunCleanupAsync(TuneInLibraryCleanup.Plan plan, CancellationToken token)
         {
             var stopped = false;
+            var baselinePreserved = false;
             try
             {
-                // Clear every replay source before deleting the first library entry. A restart
-                // during deletion will then require a fresh baseline rather than replay old metadata.
                 store.ClearRecovery();
                 store.ClearDiscovery();
-                store.Clear();
+                var snapshot = directory.Snapshot();
+                var checkpoint = plan.Category == null ? null : store.Read();
+                var preserve = checkpoint != null && checkpoint.ConfigurationKey == snapshot.Key;
+                if (preserve)
+                {
+                    if (snapshot.Enabled(plan.Category) && !checkpoint.CleanedCategories.Contains(plan.Category))
+                        checkpoint.CleanedCategories.Add(plan.Category);
+                    store.Write(checkpoint);
+                    baselinePreserved = true;
+                }
+                else store.Clear();
                 lock (gate)
                 {
                     pendingImport = null;
                     activeRecovery = null;
-                    dirtyCategory = null;
                     status = new TuneInRefreshStatus();
                     failureLog = null;
                     recoveryId = Guid.NewGuid().ToString("N");
                     committed = new CommittedCatalogue(null, new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal));
                     categoryStateKey = null;
-                    LoadCategoryStates(statusConfiguration);
+                    LoadCategoryStates(snapshot);
                 }
                 await libraryCleanup.RunAsync(plan, (removed, failed) =>
                 {
@@ -522,7 +532,9 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     cleanup.State = stopped ? "Failed" : cleanup.Failed > 0 ? "Partial" : "Completed";
                     cleanup.Message = stopped ? "Cleanup stopped before completing. Review the server log and preview again if needed."
-                        : "Run Refresh all enabled categories to rebuild the catalog.";
+                        : plan.Category == null ? "Run Refresh all enabled categories to rebuild the catalog."
+                        : baselinePreserved ? "Other category snapshots were retained. A refresh can recreate enabled categories."
+                        : "No compatible baseline was retained. Run Refresh all enabled categories to rebuild the catalog.";
                 }
             }
         }
@@ -546,6 +558,8 @@ namespace MediaBrowser.Plugins.TuneIn
             lock (gate)
             {
                 EnsureNoCleanup();
+                if (work != null && !work.IsCompleted)
+                    throw new InvalidOperationException("The TuneIn settings lock cannot change while refresh work is active or draining.");
                 cleanupPlan = null;
                 return update();
             }
@@ -592,6 +606,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         category.Fingerprint = TuneInStagedImport.Fingerprint(category.Folders);
                     }
                     checkpoint.Categories = retained;
+                    checkpoint.CleanedCategories.RemoveAll(category => !current.Enabled(category));
                     checkpoint.PendingCategories = current.Categories.Where(category =>
                         !retained.Any(saved => saved.Category == category) &&
                         checkpoint.DirtyCategory != category &&
@@ -673,6 +688,11 @@ namespace MediaBrowser.Plugins.TuneIn
                     categoryStates[category.Category] = category.DiscoveryPartial ? "Partial (applied)" : "Imported";
                     if (category.StationCounts != null)
                         categoryCounts[category.Category] = category.StationCounts.Copy();
+                }
+                foreach (var category in checkpoint.CleanedCategories.Where(snapshot.Enabled))
+                {
+                    categoryStates[category] = "Incomplete (cleanup needs refresh)";
+                    categoryCounts.Remove(category);
                 }
             }
             catch (Exception error)
@@ -779,6 +799,7 @@ namespace MediaBrowser.Plugins.TuneIn
             var folders = new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal);
             foreach (var category in checkpoint?.Categories ?? new List<TuneInCategorySnapshot>())
             {
+                if (checkpoint.CleanedCategories.Contains(category.Category)) continue;
                 foreach (var folder in category.Folders)
                 {
                     folders[folder.Id] = TuneInStagedImport.RestoreFolder(folder);
@@ -907,7 +928,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         && checkpoint.Categories.Count == roots.Length
                         && enabled.Select((category, index) => listings.TryGetValue(category, out var saved)
                             && saved.RootId == roots[index].Id).All(matches => matches);
-                    var progressive = mayScope && requestedCategory == null && replay == null && roots.Length > 0;
+                    var progressive = mayScope && requestedCategory == null && replay == null && roots.Length > 0
+                        && checkpoint.CleanedCategories.Count == 0;
                     if (progressive)
                         categories = categories.OrderBy(category => category == dirtyAtStart ? 0 : category == "music" ? 2 : 1)
                             .ToArray();
@@ -983,7 +1005,8 @@ namespace MediaBrowser.Plugins.TuneIn
 
                         foreach (var category in categories)
                             ReadEmbyStationCount(snapshot, channel, category, roots[Array.IndexOf(enabled, category)].Id, linked.Token);
-                        var importRequired = categories.Length != 0 && (needsRebuild || dirtyAtStart != null || checkpoint.NeedsImport);
+                        var importRequired = categories.Length != 0 && (needsRebuild || dirtyAtStart != null || checkpoint.NeedsImport
+                            || categories.Any(checkpoint.CleanedCategories.Contains));
                         var changed = new HashSet<string>(StringComparer.Ordinal);
                         var cannotApply = false;
                         bool IsForwardPage(string parent, string child) => TuneInBrowsing.IsForwardPage(snapshot,
@@ -1034,6 +1057,13 @@ namespace MediaBrowser.Plugins.TuneIn
                                 counts.AvailableCheckedUtc = clock();
                             });
                             var allowExclusions = snapshot.Value.AllowPartialCatalogImport;
+                            if (staged.DiscoveryIncomplete && checkpoint.CleanedCategories.Contains(category))
+                            {
+                                partial.Add(category);
+                                Update(() => categoryStates[category] = "Incomplete (left unchanged)");
+                                if (!progressive) cannotApply = true;
+                                continue;
+                            }
                             if (progressive && staged.DiscoveryIncomplete)
                             {
                                 partial.Add(category);
@@ -1070,7 +1100,8 @@ namespace MediaBrowser.Plugins.TuneIn
                                 status.CategoriesCompleted = completed.Count;
                                 status.Progress = 99d * completed.Count / categories.Length;
                             });
-                            if (progressive && (changed.Contains(category) || checkpoint.DirtyCategory == category))
+                            if (progressive && (changed.Contains(category) || checkpoint.DirtyCategory == category
+                                || checkpoint.CleanedCategories.Contains(category)))
                             {
                                 discoveryTime.Stop();
                                 await ApplyImport(categorySnapshot.RootId, progressiveCategory: category).ConfigureAwait(false);
@@ -1113,6 +1144,10 @@ namespace MediaBrowser.Plugins.TuneIn
                         Update(() => status.Phase = "Preparing import");
                         // Only newly enabled, never-imported categories may wait outside the complete saved tree.
                         var importedCategories = enabled.Where(listings.ContainsKey).ToArray();
+                        if (restriction == null && checkpoint.CleanedCategories.Any(category =>
+                            enabled.Contains(category) && !completed.Contains(category)
+                            && !(replay != null && categories.Contains(category) && !partial.Contains(category))))
+                            throw new InvalidOperationException("A cleaned TuneIn category requires a complete refresh before a channel-wide import.");
                         var importedRoots = roots.Where(root => importedCategories.Any(category => listings[category].RootId == root.Id)).ToArray();
                         var importedListings = importedCategories.Select(category => listings[category]).ToArray();
                         var appliedCategories = restriction == null ? importedCategories : new[] { progressiveCategory ?? requestedCategory };
@@ -1257,6 +1292,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         checkpoint.NeedsImport = false;
                         checkpoint.DirtyCategory = null;
                         checkpoint.DirtyImportWasScoped = false;
+                        checkpoint.CleanedCategories.RemoveAll(appliedCategories.Contains);
                         checkpoint.ChannelImportVersion = ChannelImportVersion;
                         Persist(snapshot, checkpoint, started, BuildCommitted(checkpoint, snapshot.Key));
                         pendingImport = null;
@@ -1268,6 +1304,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (didImport)
                     {
                         var restriction = mayScope && requestedCategory != null && !listings[requestedCategory].DiscoveryPartial
+                            && !checkpoint.CleanedCategories.Contains(requestedCategory)
                             ? listings[requestedCategory].RootId : null;
                         if (restriction == null && checkpoint.DirtyImportWasScoped && requestedCategory == dirtyAtStart)
                             throw new InvalidOperationException("Cannot safely retry the interrupted scoped TuneIn import. "

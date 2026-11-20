@@ -51,6 +51,89 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public async Task CategoryPreviewDeletesOnlyMatchingVerifiedTreeAndAcceptsOldScopes()
+        {
+            var fixture = new Fixture();
+            fixture.Config.EnableSports = true;
+            var talk = fixture.SignedId();
+            var sports = fixture.SignedId("sports");
+            fixture.Config.Username = "changed";
+            fixture.Add(2, 1, talk);
+            fixture.Add(3, 2, talk);
+            fixture.Add(4, 1, sports);
+            fixture.Add(5, 4, sports);
+            var plan = fixture.Cleanup.Preview(fixture.Directory.Snapshot(), "talk");
+            Assert.Equal(new long[] { 3, 2 }, plan.Targets.Select(item => item.Id));
+            Assert.Equal(0, plan.Unverified);
+            await fixture.Cleanup.RunAsync(plan, (_, _) => { }, CancellationToken.None);
+            Assert.Equal(new long[] { 3, 2 }, fixture.Library.Removed);
+            Assert.Equal(new long[] { 1, 4, 5 }, fixture.Library.Items.Keys.OrderBy(id => id));
+        }
+
+        [Fact]
+        public async Task CategoryCleanupProtectsForeignAndOtherCategoryChildren()
+        {
+            var fixture = new Fixture();
+            fixture.Config.EnableSports = true;
+            fixture.Add(2, 1, fixture.SignedId());
+            fixture.Add(3, 2, fixture.SignedId("sports"));
+            fixture.Add(4, 2, "foreign");
+            var plan = fixture.Cleanup.Preview(fixture.Directory.Snapshot(), "talk");
+            Assert.Single(plan.Targets);
+            Assert.Equal(2, plan.Unverified);
+            await fixture.Cleanup.RunAsync(plan, (removed, failed) => Assert.Equal((0, 1), (removed, failed)),
+                CancellationToken.None);
+            Assert.Empty(fixture.Library.Removed);
+            Assert.Throws<ArgumentException>(() => fixture.Cleanup.Preview(fixture.Directory.Snapshot(), "unknown"));
+        }
+
+        [Fact]
+        public void CategoryPreviewDoesNotTreatSignedNestedEntryAsCategoryRoot()
+        {
+            var fixture = new Fixture();
+            var request = new DirectoryRequest();
+            request.Parameters["c"] = "talk";
+            var nested = fixture.Directory.Register(fixture.Directory.Snapshot(),
+                new NavigationEntry { Category = "talk", Request = request });
+            fixture.Add(2, 1, nested);
+            Assert.Empty(fixture.Cleanup.Preview(fixture.Directory.Snapshot(), "talk").Targets);
+        }
+
+        [Fact]
+        public async Task NewScopedPreviewInvalidatesThePreviousToken()
+        {
+            var fixture = new Fixture();
+            fixture.Config.EnableSports = true;
+            fixture.Add(2, 1, fixture.SignedId());
+            fixture.Add(3, 1, fixture.SignedId("sports"));
+            var path = Path.Combine(Path.GetTempPath(), "tunein-cleanup-" + Guid.NewGuid().ToString("N"));
+            var store = new TuneInRefreshStore(path);
+            using var refresh = new TuneInRefresh(fixture.Directory, store,
+                () => throw new InvalidOperationException(), (_, _, _, _, _) => throw new InvalidOperationException(),
+                (_, _, _, _) => throw new InvalidOperationException(), null, libraryCleanup: fixture.Cleanup);
+            try
+            {
+                var talk = refresh.PreviewCleanup("talk");
+                var sports = refresh.PreviewCleanup("sports");
+                Assert.Equal("Talk", talk.Scope);
+                Assert.Equal("Sports", sports.Scope);
+                Assert.Throws<InvalidOperationException>(() => refresh.StartCleanup(talk.Token));
+                refresh.StartCleanup(sports.Token);
+                Assert.True(await Task.Run(() => SpinWait.SpinUntil(
+                    () => refresh.Status().Cleanup.State != "Running", TimeSpan.FromSeconds(5))));
+                Assert.Equal("Completed", refresh.Status().Cleanup.State);
+                Assert.Contains("No compatible baseline", refresh.Status().Cleanup.Message);
+                Assert.Equal(new long[] { 3 }, fixture.Library.Removed);
+            }
+            finally
+            {
+                store.Clear();
+                store.ClearDiscovery();
+                store.ClearRecovery();
+            }
+        }
+
+        [Fact]
         public async Task ConfirmedCleanupBlocksRefreshAndWritesAndClearsDurableReplayBeforeDeletion()
         {
             var fixture = new Fixture();
@@ -128,7 +211,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Cleanup = new TuneInLibraryCleanup(api, () => channel, null);
             }
 
-            internal string SignedId() => Directory.Register(Directory.Snapshot(), new NavigationEntry { Category = "talk" });
+            internal string SignedId(string category = "talk") =>
+                Directory.Register(Directory.Snapshot(), new NavigationEntry { Category = category });
             internal void Add(long id, long parent, string externalId) =>
                 Library.Items.Add(id, new Folder { InternalId = id, ParentId = parent, ExternalId = externalId });
         }

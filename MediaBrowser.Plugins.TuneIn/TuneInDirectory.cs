@@ -426,6 +426,34 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static bool IsGeneratedId(ConfigurationSnapshot snapshot, string id) =>
             ReadSignedPayload(snapshot, id) != null;
 
+        internal static string GeneratedCategory(ConfigurationSnapshot snapshot, string id, bool requireRoot = false)
+        {
+            var bytes = ReadSignedPayload(snapshot, id);
+            if (bytes == null) return null;
+            try
+            {
+                using (var stream = new MemoryStream(bytes))
+                using (var reader = XmlReader.Create(stream, new XmlReaderSettings
+                { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 4096 }))
+                {
+                    var document = XElement.Load(reader);
+                    var category = document.Element("category")?.Value;
+                    if (document.Name != "entry" || !new[] { "local", "music", "language", "location",
+                        "talk", "sports", "podcast", "presets" }.Contains(category))
+                        return null;
+                    if (requireRoot && (document.Element("request") != null
+                        || !string.IsNullOrEmpty(document.Element("selection")?.Value)
+                        || !string.IsNullOrEmpty(document.Element("station")?.Value)
+                        || !string.IsNullOrEmpty(document.Element("contentCategory")?.Value)
+                        || !string.IsNullOrEmpty(document.Element("musicSelection")?.Value)
+                        || !string.IsNullOrEmpty(document.Element("topicBranch")?.Value)))
+                        return null;
+                    return category;
+                }
+            }
+            catch (XmlException) { return null; }
+        }
+
         private static byte[] ReadSignedPayload(ConfigurationSnapshot snapshot, string id)
         {
             if (id == null || id.Length > 6000 || !Regex.IsMatch(id, @"\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}\z"))

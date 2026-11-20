@@ -356,6 +356,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Contains("Global TuneIn Settings", html);
             Assert.Contains("Enable TuneIn Station Filtering", html);
             Assert.Contains("Clean Up Library Folders", html);
+            Assert.Contains("<div class=\"auto-center\">", html);
+            Assert.Contains("class=\"tuneInSection tuneInNeutralPanel tuneInRefresh\"", html);
+            Assert.Contains("class=\"tuneInActivity maintenanceIndicator\"", html);
+            Assert.Contains("class=\"tuneInActivity refreshIndicator\"", html);
             Assert.Contains("Please go to the Catalog Refresh section", script);
         }
 

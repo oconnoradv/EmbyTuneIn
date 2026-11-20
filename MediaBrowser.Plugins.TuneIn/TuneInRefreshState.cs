@@ -86,6 +86,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public bool DirtyImportWasScoped { get; set; }
         public int ChannelImportVersion { get; set; }
         public List<string> PendingCategories { get; set; } = new List<string>();
+        public List<string> CleanedCategories { get; set; } = new List<string>();
         public bool NeedsImport { get; set; }
     }
 
@@ -223,6 +224,9 @@ namespace MediaBrowser.Plugins.TuneIn
             if (checkpoint == null || checkpoint.ConfigurationKey?.Length != 64
                 || checkpoint.Categories == null || checkpoint.Categories.Count > 8
                 || checkpoint.PendingCategories == null || checkpoint.PendingCategories.Count > 8
+                || checkpoint.CleanedCategories == null || checkpoint.CleanedCategories.Count > 8
+                || checkpoint.CleanedCategories.Any(category => !validCategories.Contains(category))
+                || checkpoint.CleanedCategories.Distinct().Count() != checkpoint.CleanedCategories.Count
                 || checkpoint.PendingCategories.Any(category => !validCategories.Contains(category))
                 || checkpoint.PendingCategories.Distinct().Count() != checkpoint.PendingCategories.Count
                 || checkpoint.Categories.Any(category => category != null && checkpoint.PendingCategories.Contains(category.Category))
