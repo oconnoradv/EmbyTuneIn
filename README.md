@@ -4,6 +4,25 @@ TuneIn adds an audio channel to Emby with administrator-configured browsing,
 category refreshes, station counts, and live playback. Opening the settings
 page or channel root does not recursively crawl the TuneIn catalog.
 
+## Branch and pre-release scope
+
+This branch and the `v1.2.8-music-refresh-resilience-rc.1` pre-release
+share the maintenance work through commit `07de70e`, followed here by import
+draining status and the first-refresh reminder. The maintenance branch later
+advanced independently to `4056a8e`. Its republished
+`v1.2.8-maintenance-browsing-refresh-rc.1` is a different build; its later
+recovery and playback improvements are **not** included here.
+
+In particular, this branch uses 60-minute discovery and import attempts with
+timeout retries, rather than the maintenance branch's 48-hour attempts and
+interruption-only recovery. The latter uses a recovery sidecar for eligible
+interrupted work across restarts and does not automatically retry timeouts or
+manual cancellation. It also has a priority playback-start queue, one-use
+playback plans, separate broadcaster-opening limit, redirect checks, and
+import-stall warnings that this branch does not include. The behavior
+documented below applies to this branch, not necessarily to the later
+maintenance build.
+
 ## Requirements and installation
 
 Use Emby Server **4.9.1.90+ stable** or a compatible **4.9.2.7+ beta**.
@@ -12,8 +31,10 @@ The plugin assembly version is **1.2.8.0**. Release downloads include
 the files.
 
 1. Stop Emby and back up the existing plugin DLL, TuneIn configuration,
-   `TuneIn.refresh.xml`, and `tunein-fork-settings-lock.xml` if present.
-   A full server-data backup also preserves library metadata for rollback.
+   `TuneIn.refresh.xml`, its `TuneIn.refresh.xml.discovery` checkpoint if
+   present, any `TuneIn.refresh.xml.recovery` sidecar from a different build,
+   and `tunein-fork-settings-lock.xml` if present. A full server-data backup
+   also preserves library metadata for rollback.
 2. Replace `MediaBrowser.Plugins.TuneIn.dll` in the plugins directory.
    Keep only one copy; do not copy dependency DLLs or reset the configuration.
 3. Restart Emby and reload its dashboard. If cached settings fields remain
@@ -50,6 +71,9 @@ saves a selection without expanding it. Saved paths can be individually enabled
 or removed, with up to 100 selections per selector. Choices appear in a
 fixed-height scrolling panel. Temporary branch failures retry once; incomplete
 branches are marked, and saved choices are preserved.
+By Language follows TuneIn's group links for each selected language; those
+groups are not additional language selections. The Music, Talk, and Sports
+groups still respect their corresponding saved category scopes.
 
 **Lock settings** prevents accidental edits and saves. The lock persists across
 browser sessions and server restarts. **Save** locks settings after a successful
@@ -161,7 +185,9 @@ The collapsible **Catalog Refresh** heading keeps the current state visible.
 Live metrics show elapsed time, last progress, category progress, and catalog
 pages against the safety limit. During import, progress switches to folders
 served out of the known total. Discovery does not estimate a percentage or ETA
-from the page cap.
+from the page cap. A served folder indicates that Emby requested its listing;
+it does not confirm that Emby committed it to its database. Repeated requests
+do not increase the unique folder count, but do update the last-progress time.
 
 **Diagnostics** shows provider attempts and successes, cached-page replays,
 active HTTP requests, rate-limit retries, checkpoint resume, and skipped-link
@@ -263,6 +289,13 @@ less than 48 hours old from discovery start. Changing settings, cancelling,
 starting a different refresh, or restarting Emby discards that in-memory
 catalog; the next refresh then runs discovery before repairing the library.
 
+**Import recovery is replay, not resumable import.** Emby's
+[`IChannelManager.RefreshChannelContent`](https://dev.emby.media/reference/pluginapi/MediaBrowser.Controller.Channels.IChannelManager.html)
+does not provide this plugin with a per-folder commit acknowledgement or a
+cursor for resuming a nested import. Replaying a complete tree avoids treating
+served folders as committed or omitting siblings. Discovery checkpoints retain
+provider pages, not completed Emby database writes.
+
 The server log records automatic retries and per-attempt timings for discovery,
 HTTP fetching, pacing, backoff, cached parsing, and import. Rate adaptation
 does not guarantee provider acceptance or bypass TuneIn limits.
@@ -321,6 +354,26 @@ responsibility of the installed Emby client/server. Keep the host patched;
 the local handoff is not a network sandbox. Handoff supports the recognized
 MP3/AAC sequence, not arbitrary ad formats, DRM, or HLS sequencing. Ordinary
 HLS destinations remain on Emby's native direct playback path.
+
+## Manual testing
+
+Use a test server and back it up before installing. Automated tests do not
+establish live dashboard, import, authentication, or playback behavior.
+
+- Open and reopen settings; check the theme, keyboard navigation, selector
+  expansion, **Add**, saved choices, and retry feedback. Verify Local Radio
+  uses only its selected source.
+- Save settings and verify the first-refresh reminder, then start a refresh
+  and confirm it stays dismissed after reopening settings and restarting Emby.
+- Refresh all enabled categories to establish a baseline. Refresh one category,
+  verify its siblings remain in Emby, and check the counts, artwork, status,
+  and diagnostic report when applicable. Test partial results and retention
+  with controlled provider failures; never assume a partial listing is complete.
+- Verify schedules with the panel closed and confirm these actions do not
+  create or trigger Emby Scheduled Tasks. Interrupt an import on the test
+  server and check that a subsequent refresh reconciles the complete tree.
+- Test ordinary and supported separate-introduction playback, stopping and
+  changing stations, and disabling a relevant scope during playback.
 
 ## Build and test
 
