@@ -83,6 +83,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public DateTime StartedUtc { get; set; }
         public List<TuneInCategorySnapshot> Categories { get; set; } = new List<TuneInCategorySnapshot>();
         public string DirtyCategory { get; set; }
+        public bool DirtyImportWasScoped { get; set; }
         public int ChannelImportVersion { get; set; }
         public List<string> PendingCategories { get; set; } = new List<string>();
         public bool NeedsImport { get; set; }
@@ -240,7 +241,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     .Sum(item => 256L + 2L * ((item?.Id?.Length ?? 0) + (item?.Name?.Length ?? 0)
                     + (item?.Type?.Length ?? 0) + (item?.ContentType?.Length ?? 0)
                     + (item?.MediaType?.Length ?? 0) + (item?.ImageUrl?.Length ?? 0))))) > TuneInStagedImport.MaxEstimatedBytes
-                || (checkpoint.DirtyCategory != null && !validCategories.Contains(checkpoint.DirtyCategory)))
+                || (checkpoint.DirtyCategory != null && !validCategories.Contains(checkpoint.DirtyCategory))
+                || (checkpoint.DirtyImportWasScoped && checkpoint.DirtyCategory == null))
                 throw new InvalidDataException("Invalid TuneIn refresh state.");
 
             foreach (var category in checkpoint.Categories)
@@ -272,6 +274,7 @@ namespace MediaBrowser.Plugins.TuneIn
         internal const int MaxRefreshBytes = 40 * 1024 * 1024;
         private readonly object gate = new object();
         private readonly Dictionary<string, TuneInCachedPage> pages = new Dictionary<string, TuneInCachedPage>();
+        private readonly HashSet<string> liveOnlyPages = new HashSet<string>(StringComparer.Ordinal);
         private readonly Dictionary<string, TaskCompletionSource<bool>> pending = new Dictionary<string, TaskCompletionSource<bool>>();
         private readonly AsyncLocal<FolderRead> currentFolder = new AsyncLocal<FolderRead>();
         private readonly Func<DateTime> clock;
@@ -364,18 +367,27 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal List<TuneInCachedPage> SnapshotPages()
         {
-            lock (gate) return pages.Values.ToList();
+            lock (gate) return pages.Values.Where(page => !liveOnlyPages.Contains(page.Key)).ToList();
         }
 
         private bool Fresh(TuneInCachedPage page) =>
             page != null && page.SavedUtc <= clock() && clock() - page.SavedUtc < lifetime;
 
-        internal async Task<XDocument> FetchAsync(DirectoryRequest request, Func<Task<XDocument>> fetch, CancellationToken token)
+        internal async Task<XDocument> FetchAsync(DirectoryRequest request, Func<Task<XDocument>> fetch, CancellationToken token,
+            bool liveOnly = false)
         {
             token.ThrowIfCancellationRequested();
             string key;
             using (var hash = SHA256.Create())
-                key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(request.Url))).Replace("-", "");
+                key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(
+                    (liveOnly ? "live validation:" : "") + request.Url))).Replace("-", "");
+
+            if (liveOnly)
+            {
+                // Prove branch membership afresh after resuming discovery; never checkpoint this evidence.
+                lock (gate)
+                    if (liveOnlyPages.Add(key)) RemovePage(key);
+            }
 
             if (Timings == null) return await FetchPageAsync(key, fetch, token).ConfigureAwait(false);
 

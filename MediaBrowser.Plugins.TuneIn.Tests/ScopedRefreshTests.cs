@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
@@ -16,8 +17,298 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 {
     public sealed class ScopedRefreshTests
     {
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task RestrictedImportUsesTheEmbyArgumentAndOnlyRequiresItsCategory(bool enumerateChannelRoot)
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Null(Assert.Single(fixture.Manager.Restrictions));
+            var oldSports = fixture.Category("sports").Fingerprint;
+            fixture.Artwork.Clear();
+            fixture.Inventory.Clear();
+            fixture.Manager.EnumerateChannelRoot = enumerateChannelRoot;
+            fixture.Version++;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Equal(fixture.Category("talk").RootId, fixture.Manager.Restrictions.Last());
+            Assert.Equal(oldSports, fixture.Category("sports").Fingerprint);
+            Assert.Equal(new[] { "talk" }, fixture.Artwork);
+            Assert.Equal(new[] { "talk", "talk" }, fixture.Inventory);
+            Assert.Equal(2, refresh.Status().ImportFoldersServed);
+            Assert.Equal(2, refresh.Status().ImportFoldersTotal);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task IncompleteOrOutOfScopeReadLeavesDirtyStateAndRetriesWithTheSameRestriction(bool readSibling)
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            var originalTalk = fixture.Category("talk").Fingerprint;
+            var talkId = fixture.Category("talk").RootId;
+            fixture.Manager.SkipDescendants = !readSibling;
+            fixture.Manager.ReadSibling = readSibling;
+            fixture.Version++;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Error", refresh.Status().State);
+            Assert.Equal("talk", fixture.Store.Read().DirtyCategory);
+            Assert.True(fixture.Store.Read().DirtyImportWasScoped);
+            Assert.Equal(originalTalk, fixture.Category("talk").Fingerprint);
+            Assert.Equal(new[] { null, talkId }, fixture.Manager.Restrictions);
+            fixture.Manager.SkipDescendants = fixture.Manager.ReadSibling = false;
+            var reads = fixture.Fetches;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Equal(reads, fixture.Fetches);
+            Assert.Equal(new[] { null, talkId, talkId }, fixture.Manager.Restrictions);
+            Assert.Null(fixture.Store.Read().DirtyCategory);
+        }
+
+        [Theory]
+        [InlineData("default")]
+        [InlineData("topology")]
+        [InlineData("unrelated dirty")]
+        public async Task DoesNotRestrictWhenTheBaselineOrOptInDoesNotPermitIt(string reason)
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create();
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            var checkpoint = fixture.Store.Read();
+            checkpoint.NeedsImport = reason == "topology";
+            if (reason == "unrelated dirty") checkpoint.DirtyCategory = "sports";
+            fixture.Store.Write(checkpoint);
+            fixture.Version++;
+            var recovery = refresh.Start("talk");
+            if (recovery.RecoveryChoiceRequired) refresh.Start("talk", recovery.RecoveryId, false);
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Equal(new string[] { null, null }, fixture.Manager.Restrictions);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task RefreshAllKeepsTheEarlierCommitWhenLaterDiscoveryOrImportFails(bool failDuringImport)
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            var oldTalk = fixture.Category("talk").Fingerprint;
+            var oldSports = fixture.Category("sports").Fingerprint;
+            var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            async Task Fail(CancellationToken token)
+            {
+                entered.SetResult(true);
+                await release.Task.WaitAsync(token);
+                throw new InvalidDataException("A later provider page failed.");
+            }
+            if (failDuringImport)
+            {
+                var sportsId = fixture.Category("sports").RootId;
+                fixture.Manager.BeforeImport = (restriction, token) => restriction == sportsId
+                    ? Fail(token) : Task.CompletedTask;
+            }
+            else fixture.BeforeSports = Fail;
+            fixture.Version++;
+            refresh.Start();
+            try
+            {
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.NotEqual(oldTalk, fixture.Category("talk").Fingerprint);
+                Assert.Equal(oldSports, fixture.Category("sports").Fingerprint);
+                Assert.Equal(failDuringImport ? "sports" : null, fixture.Store.Read().DirtyCategory);
+                Assert.Equal(failDuringImport, fixture.Store.Read().DirtyImportWasScoped);
+                Assert.Equal(fixture.Category(failDuringImport ? "sports" : "talk").RootId,
+                    fixture.Manager.Restrictions.Last());
+            }
+            finally { release.TrySetResult(true); }
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Error", refresh.Status().State);
+            Assert.NotEqual(oldTalk, fixture.Category("talk").Fingerprint);
+            Assert.Equal(oldSports, fixture.Category("sports").Fingerprint);
+            Assert.Equal("Imported", refresh.Status().Categories.Single(category => category.Category == "talk").State);
+            Assert.Equal(failDuringImport ? "sports" : null, fixture.Store.Read().DirtyCategory);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task ProgressiveRefreshImportsMusicLastUnlessItNeedsRepair(bool repairMusic)
+        {
+            using var fixture = new ExperimentalImportFixture(includeMusic: true);
+            using var refresh = fixture.Create(allowScoped: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Null(Assert.Single(fixture.Manager.Restrictions));
+            if (repairMusic)
+            {
+                var checkpoint = fixture.Store.Read();
+                checkpoint.DirtyCategory = "music";
+                checkpoint.DirtyImportWasScoped = true;
+                fixture.Store.Write(checkpoint);
+            }
+            fixture.Version++;
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            var expected = repairMusic ? new[] { "music", "talk", "sports" } : new[] { "talk", "sports", "music" };
+            Assert.Equal(expected.Select(category => fixture.Category(category).RootId),
+                fixture.Manager.Restrictions.Skip(1));
+            Assert.Equal(new[] { "music", "talk", "sports" }, refresh.Status().Categories.Select(category => category.Category));
+        }
+
         [Fact]
-        public async Task ServerShutdownDuringImportRecoversOriginalCompleteRequest()
+        public async Task ProgressiveImportTimeoutRetriesSameCategoryBeforeProceeding()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: true, timeout: TimeSpan.FromSeconds(1));
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            var talk = fixture.Category("talk").RootId;
+            var sports = fixture.Category("sports").RootId;
+            var attempts = new Dictionary<string, int>();
+            fixture.Manager.BeforeImport = async (restriction, token) =>
+            {
+                attempts.TryGetValue(restriction, out var count);
+                attempts[restriction] = ++count;
+                if (count == 1)
+                    await Task.Delay(Timeout.Infinite, token);
+                var status = refresh.Status();
+                Assert.Equal(1, status.AutomaticRetry);
+                Assert.Equal(3, status.AutomaticRetryLimit);
+                Assert.Equal("import", status.AutomaticRetryPhase);
+                Assert.Equal("timeout", status.AutomaticRetryReason);
+            };
+            fixture.Version++;
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Equal(2, refresh.Status().ImportTimeouts);
+            Assert.Equal(new[] { null, talk, talk, sports, sports }, fixture.Manager.Restrictions);
+            Assert.Null(fixture.Store.Read().DirtyCategory);
+            Assert.Equal(new[] { "Imported", "Imported" }, refresh.Status().Categories.Select(category => category.State));
+        }
+
+        private sealed class ExperimentalImportFixture : IDisposable
+        {
+            private readonly string path = Path.Combine(Path.GetTempPath(), $"tunein-experimental-{Guid.NewGuid():N}.xml");
+            private readonly TuneInDirectory directory;
+            private readonly TuneInChannel channel;
+            private readonly IChannelManager manager;
+            internal readonly ExperimentalChannelManager Manager;
+            internal readonly TuneInRefreshStore Store;
+            internal readonly List<string> Artwork = new List<string>();
+            internal readonly List<string> Inventory = new List<string>();
+            internal int Version = 1;
+            internal int Fetches;
+            internal Func<CancellationToken, Task> BeforeSports;
+
+            internal ExperimentalImportFixture(bool includeMusic = false)
+            {
+                var config = new PluginConfiguration
+                {
+                    SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true,
+                    EnableMusic = includeMusic
+                };
+                if (includeMusic) config.Music.Add(new CatalogSelection { Id = "g1", Name = "Genre" });
+                directory = new TuneInDirectory(() => config, async (request, token) =>
+                {
+                    Interlocked.Increment(ref Fetches);
+                    if (BeforeSports != null && request.Parameters.GetValueOrDefault("c") == "sports")
+                        await BeforeSports(token);
+                    if (!request.Parameters.ContainsKey("id"))
+                        return XDocument.Parse("<opml><body><outline type='link' text='Subfolder' "
+                            + "URL='https://opml.radiotime.com/Browse.ashx?id=c1'/></body></opml>");
+                    return XDocument.Parse($"<opml><body><outline type='audio' guide_id='s{Version}' text='Radio'/></body></opml>");
+                });
+                channel = new TuneInChannel(directory);
+                manager = DispatchProxy.Create<IChannelManager, ExperimentalChannelManager>();
+                Manager = (ExperimentalChannelManager)manager;
+                if (includeMusic) Manager.ExpectedRoots = new[] { "Music", "Talk", "Sports" };
+                Store = new TuneInRefreshStore(path);
+            }
+
+            internal TuneInCategorySnapshot Category(string category) =>
+                Store.Read().Categories.Single(saved => saved.Category == category);
+
+            internal TuneInRefresh Create(bool allowScoped = false, TimeSpan? timeout = null) => new TuneInRefresh(directory, Store, () => channel,
+                (source, folder, session, strict, token) => source.GetRefreshChannelItems(folder, session, strict, token),
+                (source, staged, restriction, token) => TuneInRefreshService.ImportChannel(manager, source, staged, restriction, token),
+                null, timeoutOverride: timeout ?? TimeSpan.FromSeconds(10), allowScopedImport: allowScoped,
+                updateArtwork: (_, folder, token) => Artwork.Add(directory.Resolve(directory.Snapshot(), folder).Category),
+                countStations: (_, folder, token) =>
+                {
+                    Inventory.Add(directory.Resolve(directory.Snapshot(), folder).Category);
+                    return 1;
+                });
+
+            public void Dispose()
+            {
+                Store.Clear();
+                Store.ClearDiscovery();
+                Store.ClearRecovery();
+            }
+        }
+
+        public class ExperimentalChannelManager : DispatchProxy
+        {
+            internal readonly List<string> Restrictions = new List<string>();
+            internal bool EnumerateChannelRoot = true;
+            internal bool SkipDescendants;
+            internal bool ReadSibling;
+            internal string[] ExpectedRoots = new[] { "Talk", "Sports" };
+            internal Func<string, CancellationToken, Task> BeforeImport;
+
+            protected override object Invoke(MethodInfo method, object[] args)
+            {
+                if (method.Name != "RefreshChannelContent") throw new NotSupportedException(method.Name);
+                return Refresh((TuneInChannel)args[0], (int)args[1], (string)args[2], (CancellationToken)args[3]);
+            }
+
+            private async Task Refresh(TuneInChannel channel, int depth, string restriction, CancellationToken token)
+            {
+                Restrictions.Add(restriction);
+                if (BeforeImport != null) await BeforeImport(restriction, token);
+                async Task<ChannelItemResult> Read(string id) =>
+                    await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = id }, token);
+                async Task Walk(string id, int level)
+                {
+                    if (level > depth) throw new InvalidOperationException("The delegated depth did not cover the staged tree.");
+                    var listing = await Read(id);
+                    if (restriction != null && SkipDescendants) return;
+                    foreach (var child in listing.Items.Where(item => item.Type == ChannelItemType.Folder))
+                        await Walk(child.Id, level + 1);
+                }
+                if (restriction == null || EnumerateChannelRoot || ReadSibling)
+                {
+                    var roots = await Read(null);
+                    Assert.Equal(ExpectedRoots, roots.Items.Select(item => item.Name));
+                    if (ReadSibling)
+                        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                            await Read(roots.Items.Single(root => root.Id != restriction).Id));
+                }
+                await Walk(restriction, restriction == null ? 1 : 2);
+            }
+        }
+
+        [Fact]
+        public async Task ManualRestartAfterServerShutdownRecoversOriginalCompleteRequest()
         {
             var config = new PluginConfiguration
             {
@@ -134,7 +425,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task RepeatedImportFolderRequestsDoNotAdvanceProgressOrHideStalls()
+        public async Task RepeatedImportFolderRequestsDoNotAdvanceUniqueProgress()
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
             var now = new DateTime(2026, 11, 19, 0, 0, 0, DateTimeKind.Utc);
@@ -185,7 +476,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
-        public async Task ImportInterruptionDrainsThenReplaysCompleteTreeAndPreservesPartialStatus(bool partial)
+        public async Task ImportInterruptionDrainsAndReplaysCompleteTreeWithPartialStatus(bool partial)
         {
             var config = new PluginConfiguration
             {
@@ -294,7 +585,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task DiscoveryStopsAfterThreeInterruptionRetriesAndLeavesExistingLibraryUntouched()
+        public async Task DiscoveryRetriesInterruptionsOnlyThreeTimesAndKeepsExistingLibrary()
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
             var block = false;
@@ -773,14 +1064,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
-        public async Task ParallelDiscoveryAutomaticallyReplaysCompletedSiblingAfterTimeout(bool responseDeadline)
+        public async Task ParallelDiscoveryTimeoutRetriesAndReusesCompletedSibling(bool responseDeadline)
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
             var requests = new System.Collections.Concurrent.ConcurrentQueue<string>();
-            var retryObserved = new TaskCompletionSource<int?>(TaskCreationOptions.RunContinuationsAsynchronously);
             var firstSlowRead = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var slowReads = 0;
-            TuneInRefresh runningRefresh = null;
             var directory = new TuneInDirectory(() => config, async (request, token) =>
             {
                 var id = request.Parameters.GetValueOrDefault("id") ?? "root";
@@ -801,7 +1090,6 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         }
                         await Task.Delay(Timeout.Infinite, token);
                     }
-                    retryObserved.TrySetResult(runningRefresh.Status().AutomaticRetry);
                 }
                 else Assert.True(firstSlowRead.Task.IsCompleted);
                 return XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>");
@@ -818,12 +1106,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         Assert.Equal(2, ReadStagedTree(staged, token)["Talk"].Length);
                         return Task.CompletedTask;
                     }, null, timeoutOverride: TimeSpan.FromSeconds(2));
-                runningRefresh = refresh;
                 refresh.Start("talk");
-                Assert.Equal(1, await retryObserved.Task.WaitAsync(TimeSpan.FromSeconds(10)));
                 await WaitUntilIdle(refresh);
                 Assert.Equal("Completed", refresh.Status().State);
                 Assert.Equal(1, refresh.Status().DiscoveryTimeouts);
+                Assert.Null(store.ReadRecovery());
                 Assert.Equal(2, refresh.Status().CacheHits);
                 Assert.Equal(new[] { "root", "c1", "c2", "c1" }, requests);
             }
@@ -837,7 +1124,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
-        public async Task DiscoveryDeadlineBeforeImportAutomaticallyResumesUnlessCancelled(bool cancel)
+        public async Task DiscoveryDeadlineBeforeImportRetriesUnlessCancelled(bool cancel)
         {
             var config = new PluginConfiguration
             {
@@ -897,6 +1184,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 }
                 Assert.Equal("Partial", refresh.Status().State);
                 Assert.Equal(1, refresh.Status().DiscoveryTimeouts);
+                Assert.Null(store.ReadRecovery());
                 Assert.Equal(1, refresh.Status().CacheHits);
                 Assert.Equal(1, refresh.Status().SkippedBrowseLinks);
                 Assert.Equal(1, imports);
@@ -911,7 +1199,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task ImportDeadlineStopsAfterThreeRetriesWithoutRecrawlingAndReportsTheStoppedPhase()
+        public async Task ImportDeadlineRetriesAndReportsTheStoppedPhase()
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
             var requests = 0;
@@ -941,12 +1229,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal(4, refresh.Status().ImportTimeouts);
                 Assert.Equal(1, requests);
                 Assert.Equal(4, imports);
+                Assert.Null(store.ReadRecovery());
                 Assert.Null(refresh.Status().AutomaticRetry);
                 Assert.True(refresh.Status().ImportMayHavePartiallyApplied);
                 Assert.Equal("talk", store.Read().DirtyCategory);
                 var report = refresh.GetFailureLog().Text;
                 Assert.Contains("Stopped during: Importing", report);
-                Assert.Contains("automatic retry limit reached", report);
                 Assert.Contains("Import timeouts: 4 (automatic retry limit: 3)", report);
                 Assert.Contains("Import may have partially applied: True", report);
             }
@@ -955,6 +1243,251 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 File.Delete(path);
                 store.ClearDiscovery();
             }
+        }
+
+        [Theory]
+        [InlineData("complete")]
+        [InlineData("cancel")]
+        [InlineData("deadline")]
+        [InlineData("timeout")]
+        [InlineData("invalid data")]
+        public async Task TerminalImportDoesNotRecoverAutomaticallyAfterRestart(string stop)
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var requests = 0;
+            var imports = 0;
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                requests++;
+                return Task.FromResult(XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-terminal-restart-{Guid.NewGuid():N}.xml");
+            var store = new TuneInRefreshStore(path);
+            TuneInRefresh runningRefresh = null;
+            TuneInRefresh Create() => new TuneInRefresh(directory, store, () => channel,
+                (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                async (_, staged, __, token) =>
+                {
+                    imports++;
+                    Assert.NotNull(store.ReadRecovery());
+                    ReadStagedTree(staged, token);
+                    if (stop == "cancel")
+                    {
+                        runningRefresh.Cancel();
+                        token.ThrowIfCancellationRequested();
+                    }
+                    if (stop == "deadline") await Task.Delay(Timeout.Infinite, token);
+                    if (stop == "timeout") throw new TimeoutException("Emby import timed out.");
+                    if (stop == "invalid data") throw new InvalidDataException("Invalid import state.");
+                }, null, timeoutOverride: TimeSpan.FromSeconds(1));
+            try
+            {
+                using (var refresh = Create())
+                {
+                    runningRefresh = refresh;
+                    refresh.Start("talk");
+                    await WaitUntilIdle(refresh);
+                    Assert.Equal(stop == "complete" ? "Completed" : stop == "cancel" ? "Cancelled"
+                        : stop == "invalid data" ? "Error" : "TimedOut", refresh.Status().State);
+                    Assert.Null(store.ReadRecovery());
+                    Assert.Equal(stop == "deadline" ? 4 : 1, imports);
+                }
+                using var restarted = Create();
+                restarted.CheckSchedules();
+                await WaitUntilIdle(restarted);
+                Assert.Equal(1, requests);
+                Assert.Equal(stop == "deadline" ? 4 : 1, imports);
+                Assert.Null(store.ReadRecovery());
+            }
+            finally
+            {
+                store.Clear();
+                store.ClearDiscovery();
+                store.ClearRecovery();
+            }
+        }
+
+        [Fact]
+        public async Task ServerShutdownDuringImportRecoversOriginalCompleteRequest()
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true
+            };
+            var requests = 0;
+            var imports = 0;
+            var importing = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                requests++;
+                return Task.FromResult(XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-import-restart-{Guid.NewGuid():N}.xml");
+            var store = new TuneInRefreshStore(path);
+            TuneInRefresh Create() => new TuneInRefresh(directory, store, () => channel,
+                (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                (c, staged, _, token) => c.ImportAsync(staged, async () =>
+                {
+                    imports++;
+                    Assert.Equal(new[] { "Talk", "Sports" }, ReadStagedTree(staged, token).Keys);
+                    if (imports == 1)
+                    {
+                        importing.SetResult(true);
+                        await Task.Delay(Timeout.Infinite, token);
+                    }
+                }), null);
+            try
+            {
+                using (var refresh = Create())
+                {
+                    refresh.Start();
+                    await importing.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    refresh.Dispose();
+                }
+                var interrupted = store.ReadRecovery();
+                Assert.NotNull(interrupted);
+                Assert.Null(interrupted.RequestedCategory);
+                Assert.Equal("import", interrupted.Phase);
+                Assert.NotNull(store.Read().DirtyCategory);
+                using var restarted = Create();
+                restarted.CheckSchedules();
+                await WaitUntilIdle(restarted);
+                Assert.Equal(1, imports);
+                Assert.Equal(2, requests);
+                Assert.NotNull(store.Read().DirtyCategory);
+                restarted.Start();
+                await WaitUntilIdle(restarted);
+                Assert.Equal("Completed", restarted.Status().State);
+                Assert.Equal(2, imports);
+                Assert.Equal(4, requests);
+                Assert.Null(store.ReadRecovery());
+                Assert.Null(store.Read().DirtyCategory);
+                Assert.Equal(2, store.Read().Categories.Count);
+            }
+            finally
+            {
+                store.Clear();
+                store.ClearRecovery();
+            }
+        }
+
+        [Theory]
+        [InlineData("discovery", 0, false)]
+        [InlineData("import", 1, true)]
+        [InlineData("discovery", 3, true)]
+        public async Task InterruptedRefreshDoesNotRunBeforeManualRequestOrDueSchedule(string phase, int retries, bool scheduled)
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true,
+                RefreshSchedules = new List<CategoryRefreshSchedule>
+                {
+                    new CategoryRefreshSchedule { Category = "talk", IntervalHours = 6 }
+                }
+            };
+            var now = DateTime.UtcNow;
+            var imports = 0;
+            var requests = 0;
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                requests++;
+                return Task.FromResult(XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-startup-recovery-{Guid.NewGuid():N}.xml");
+            var store = new TuneInRefreshStore(path);
+            store.WriteRecovery(new TuneInRefreshRecovery
+            {
+                ConfigurationKey = directory.Snapshot().Key,
+                RequestedCategory = "talk", Phase = phase, Retries = retries
+            });
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, store, () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        imports++;
+                        Assert.Equal(retries < 3 ? retries + 1 : 0, store.ReadRecovery().Retries);
+                        ReadStagedTree(staged, token);
+                        return Task.CompletedTask;
+                    }, null, clock: () => now);
+                refresh.CheckSchedules();
+                await WaitUntilIdle(refresh);
+                now = now.AddHours(6).AddSeconds(-1);
+                refresh.CheckSchedules();
+                Assert.Equal(0, imports);
+                Assert.Equal(0, requests);
+                Assert.Equal("NeverRun", refresh.Status().State);
+                Assert.Equal(retries, store.ReadRecovery().Retries);
+                if (scheduled)
+                {
+                    now = now.AddSeconds(1);
+                    refresh.CheckSchedules();
+                }
+                else refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(1, imports);
+                Assert.Equal(1, requests);
+                Assert.Null(store.ReadRecovery());
+            }
+            finally
+            {
+                store.Clear();
+                store.ClearRecovery();
+            }
+        }
+
+        [Fact]
+        public async Task RepeatedImportFolderRequestsDoNotAdvanceProgressOrHideStalls()
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var now = new DateTime(2026, 11, 19, 0, 0, 0, DateTimeKind.Utc);
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+                Task.FromResult(XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>")));
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-import-progress-{Guid.NewGuid():N}.xml");
+            TuneInRefresh runningRefresh = null;
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        now = now.AddMinutes(1);
+                        var root = Assert.Single(staged.Read(null, token).Items);
+                        var firstProgress = runningRefresh.Status().LastProgressUtc;
+                        Assert.Equal(now, firstProgress);
+                        Assert.Equal(1, runningRefresh.Status().ImportFoldersServed);
+
+                        now = now.AddMinutes(1);
+                        Assert.Equal(root.Id, Assert.Single(staged.Read(string.Empty, token).Items).Id);
+                        var repeated = runningRefresh.Status();
+                        Assert.Equal(firstProgress, repeated.LastProgressUtc);
+                        Assert.Equal(1, repeated.ImportFoldersServed);
+                        Assert.NotNull(new TuneInImportStallDiagnostics().TryCreate(now, repeated.LastProgressUtc,
+                            repeated.ImportFoldersTotal, repeated.ImportFoldersServed, false));
+
+                        now = now.AddMinutes(1);
+                        var station = Assert.Single(staged.Read(root.Id, token).Items);
+                        var nextProgress = runningRefresh.Status().LastProgressUtc;
+                        Assert.Equal(now, nextProgress);
+                        Assert.Equal(2, runningRefresh.Status().ImportFoldersServed);
+                        now = now.AddMinutes(1);
+                        Assert.Equal(station.Id, Assert.Single(staged.Read(root.Id, token).Items).Id);
+                        Assert.Equal(nextProgress, runningRefresh.Status().LastProgressUtc);
+                        Assert.Equal(2, runningRefresh.Status().ImportFoldersServed);
+                        return Task.CompletedTask;
+                    }, null, clock: () => now);
+                runningRefresh = refresh;
+                refresh.Start("talk");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+            }
+            finally { File.Delete(path); }
         }
 
         [Fact]
@@ -994,7 +1527,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
-        public async Task ImportTimeoutDrainsThenReplaysFreshCompleteTreeAndPreservesPartialStatus(bool partial)
+        public async Task ImportInterruptionDrainsThenReplaysCompleteTreeAndPreservesPartialStatus(bool partial)
         {
             var config = new PluginConfiguration
             {
@@ -1038,7 +1571,6 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                             if (retryImports == 2)
                             {
                                 Assert.NotSame(timedOutTree, staged);
-                                Assert.ThrowsAny<OperationCanceledException>(() => timedOutTree.Read(null, CancellationToken.None));
                                 Assert.Equal(1, runningRefresh.Status().AutomaticRetry);
                                 Assert.Equal(3, runningRefresh.Status().AutomaticRetryLimit);
                                 Assert.Equal("import", runningRefresh.Status().AutomaticRetryPhase);
@@ -1051,7 +1583,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         if (changed && retryImports == 1)
                         {
                             timedOutTree = staged;
-                            try { await Task.Delay(Timeout.Infinite, token); }
+                            try { throw new OperationCanceledException("Emby interrupted the import without cancelling the refresh."); }
                             catch (OperationCanceledException)
                             {
                                 drained.TrySetResult(true);
@@ -1059,7 +1591,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                                 throw;
                             }
                         }
-                    }), null, timeoutOverride: TimeSpan.FromSeconds(1),
+                    }), null, timeoutOverride: TimeSpan.FromSeconds(5),
                     countStations: (_, __, ___) => 0);
                 runningRefresh = refresh;
                 refresh.Start();
@@ -1074,9 +1606,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     await drained.Task.WaitAsync(TimeSpan.FromSeconds(5));
                     Assert.True(refresh.Status().Busy);
                     Assert.Equal(1, retryImports);
-                    Assert.Equal("Import deadline reached; waiting for active work to stop", refresh.Status().Activity);
-                    Assert.Equal("Import deadline reached; draining", refresh.Status().Phase);
-                    Assert.Equal("Import deadline reached; draining", refresh.Status().Categories.Single(category => category.Category == "music").State);
+                    Assert.Equal("Importing", refresh.Status().Phase);
+                    Assert.Null(refresh.Status().AutomaticRetry);
                     var pending = store.Read();
                     Assert.Equal("music", pending.DirtyCategory);
                     Assert.Equal(savedMusic, pending.Categories.Single(category => category.Category == "music").Fingerprint);
@@ -1085,13 +1616,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 await WaitUntilIdle(refresh);
                 Assert.Equal(partial ? "Partial" : "Completed", refresh.Status().State);
                 Assert.Equal(0, refresh.Status().DiscoveryTimeouts);
-                Assert.Equal(1, refresh.Status().ImportTimeouts);
+                Assert.Equal(0, refresh.Status().ImportTimeouts);
                 Assert.Equal(3, imports);
                 Assert.Equal(new[] { "g71" }, requests);
                 Assert.False(refresh.Status().ImportMayHavePartiallyApplied);
                 Assert.True(refresh.Status().ReportAvailable);
                 Assert.Equal(partial ? 1 : 0, refresh.Status().SkippedBrowseLinks);
-                Assert.Contains("Import timeouts: 1", refresh.GetFailureLog().Text);
+                Assert.Contains("Automatic interruption retries: 1", refresh.GetFailureLog().Text);
                 var saved = store.Read();
                 Assert.Null(saved.DirtyCategory);
                 Assert.Equal(partial, saved.Categories.Single(category => category.Category == "music").DiscoveryPartial);
@@ -1197,7 +1728,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task DiscoveryStopsAfterTenAutomaticRetriesAndLeavesExistingLibraryUntouched()
+        public async Task DiscoveryStopsAfterThreeInterruptionRetriesAndLeavesExistingLibraryUntouched()
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
             var block = false;
@@ -1211,7 +1742,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     attempts++;
                     var active = runningRefresh.Status();
                     activeRetries.Add((active.AutomaticRetry, active.AutomaticRetryLimit));
-                    await Task.Delay(Timeout.Infinite, token);
+                    await Task.Yield();
+                    throw new IOException("Provider connection interrupted.");
                 }
                 return XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/></body></opml>");
             });
@@ -1237,12 +1769,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 block = true;
                 refresh.Start("talk");
                 await WaitUntilIdle(refresh, TimeSpan.FromSeconds(30));
-                Assert.Equal("TimedOut", refresh.Status().State);
-                Assert.Equal(11, refresh.Status().DiscoveryTimeouts);
-                Assert.Equal(11, attempts);
+                Assert.Equal("Error", refresh.Status().State);
+                Assert.Equal(0, refresh.Status().DiscoveryTimeouts);
+                Assert.Equal(4, attempts);
                 Assert.Equal((null, null), activeRetries[0]);
-                Assert.Equal(Enumerable.Range(1, 10).Select(n => ((int?)n, (int?)10)), activeRetries.Skip(1));
+                Assert.Equal(Enumerable.Range(1, 3).Select(n => ((int?)n, (int?)3)), activeRetries.Skip(1));
                 Assert.Null(refresh.Status().AutomaticRetry);
+                Assert.Contains("interruption retry limit reached", refresh.Status().Phase);
                 Assert.Null(refresh.Status().DiscoveryCheckpointUtc);
                 Assert.Equal(1, imports);
                 Assert.Equal(checkpoint, File.ReadAllText(path));
@@ -1310,7 +1843,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     Assert.Null(store.ReadDiscovery(key, null, now, TimeSpan.FromHours(48)));
                     Assert.Null(store.ReadDiscovery(new string('0', 64), "talk", now, TimeSpan.FromHours(48)));
                     Assert.Null(store.ReadDiscovery(key, "talk", initial.AddHours(48), TimeSpan.FromHours(48)));
-                    if (restart) refresh.Cancel();
+                    if (restart) refresh.Dispose();
                     await WaitUntilIdle(refresh);
                     if (restart)
                     {
@@ -1323,12 +1856,15 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         Assert.Equal(1, refresh.Status().DiscoveryTimeouts);
                         Assert.Contains("1 discovery timeout", refresh.Status().Phase);
                         Assert.True(refresh.Status().Resumed);
+                        Assert.Null(store.ReadRecovery());
                     }
                 }
                 if (restart)
                 {
                     now = initial.AddHours(47);
                     using var refresh = NewRefresh();
+                    refresh.CheckSchedules();
+                    Assert.False(refresh.Status().Busy);
                     refresh.Start("talk");
                     await WaitUntilIdle(refresh);
                     Assert.Equal("Completed", refresh.Status().State);
@@ -1493,11 +2029,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("talk", "untrusted", "Error", "InvalidDataException")]
         [InlineData("talk", "pagination", "Error", "InvalidDataException")]
         [InlineData("talk", "transport", "Error", "IOException")]
-        [InlineData("talk", "cancelled", "Error", "OperationCanceledException")]
+        [InlineData("talk", "cancelled", "Cancelled", "Cancelled")]
         [InlineData("music", "untrusted", "Error", "InvalidDataException")]
         [InlineData("music", "pagination", "Error", "InvalidDataException")]
         [InlineData("music", "transport", "Error", "IOException")]
-        [InlineData("music", "cancelled", "Error", "OperationCanceledException")]
+        [InlineData("music", "cancelled", "Cancelled", "Cancelled")]
         public async Task UnrecoverableDiscoveryDoesNotBecomePartialAfterARejectedLink(
             string category, string failure, string state, string errorCode)
         {
@@ -1507,12 +2043,17 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 EnableTalk = category == "talk", EnableMusic = category == "music", AllowPartialCatalogImport = true
             };
             if (category == "music") config.Music.Add(new CatalogSelection { Id = "g2698", Enabled = true });
+            TuneInRefresh runningRefresh = null;
             var directory = new TuneInDirectory(() => config, (request, token) =>
             {
                 if (request.Parameters.TryGetValue("id", out var id) && id != "g2698")
                 {
                     if (failure == "transport") throw new IOException("Provider connection failed.");
-                    if (failure == "cancelled") throw new OperationCanceledException(token);
+                    if (failure == "cancelled")
+                    {
+                        runningRefresh.Cancel();
+                        token.ThrowIfCancellationRequested();
+                    }
                     throw new InvalidOperationException("The refused destination must not be fetched.");
                 }
                 var next = failure == "untrusted"
@@ -1532,6 +2073,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
                     (_, __, ___, ____) => { imports++; return Task.CompletedTask; }, null);
+                runningRefresh = refresh;
                 refresh.Start();
                 await WaitUntilIdle(refresh);
                 var status = refresh.Status();
@@ -1740,6 +2282,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var channel = new TuneInChannel(directory);
             var imports = 0;
             var path = Path.Combine(Path.GetTempPath(), $"tunein-inventory-failure-{Guid.NewGuid():N}.xml");
+            TuneInRefresh runningRefresh = null;
             try
             {
                 using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
@@ -1749,8 +2292,16 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                         imports++;
                         ReadStagedTree(staged, token);
                         return Task.CompletedTask;
-                    }, null, countStations: (_, __, ___) => cancel
-                        ? throw new OperationCanceledException() : throw new IOException("Synthetic inventory failure."));
+                    }, null, countStations: (_, __, token) =>
+                    {
+                        if (cancel)
+                        {
+                            runningRefresh.Cancel();
+                            token.ThrowIfCancellationRequested();
+                        }
+                        throw new IOException("Synthetic inventory failure.");
+                    });
+                runningRefresh = refresh;
                 refresh.Start();
                 await WaitUntilIdle(refresh);
                 Assert.Equal(cancel ? "Cancelled" : "Completed", refresh.Status().State);

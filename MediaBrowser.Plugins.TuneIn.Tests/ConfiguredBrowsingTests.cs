@@ -17,6 +17,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml;
 using System.Xml.Linq;
 using System.Xml.Serialization;
 using Xunit;
@@ -43,7 +44,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var before = directory.Snapshot();
             var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
             foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "HideRegionalGenres",
-                "AllowPartialCatalogImport", "HasStartedCatalogRefresh" })
+                "AllowPartialCatalogImport", "HasStartedCatalogRefresh",
+                "SettingsSaved", "TalkMode", "TalkIds", "SportsMode", "SportsIds", "PodcastsMode", "PodcastIds" })
                 legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });
             using (var xml = new StringWriter(System.Globalization.CultureInfo.InvariantCulture))
             {
@@ -59,6 +61,75 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.NotEqual(before.DiscoveryKey, after.DiscoveryKey);
             Assert.Equal(new[] { "Popular", "Radio" },
                 (await browser.GetItemsAsync(folder, Token)).Items.Select(item => item.Name).OrderBy(name => name));
+        }
+
+        [Theory]
+        [InlineData("local")]
+        [InlineData("location")]
+        [InlineData("talk")]
+        [InlineData("sports")]
+        [InlineData("podcast")]
+        public async Task KeepsProviderGenrePivotAndItsContentsButNotIndividualAliases(string category)
+        {
+            var config = Ready();
+            config.EnableLocation = config.EnableTalk = config.EnableSports = config.EnablePodcasts = true;
+            config.EnableLocalRadio = true;
+            config.LocalRadioSource = "regions";
+            config.LocalCities.Add(new CatalogSelection { Id = "r10" });
+            config.Locations.Add(new CatalogSelection { Id = "r10" });
+            var id = category == "location" || category == "local" ? "r10" : "c100";
+            var directory = new TuneInDirectory(() => config, (request, _) => Task.FromResult(Opml(
+                (request.Parameters.ContainsKey("pivot") ? "" :
+                    "<outline type='link' text='By Genre' URL='https://opml.radiotime.com/Browse.ashx?id=" + id +
+                    "&amp;pivot=genre&amp;filter=country'/>") +
+                "<outline type='link' text='Rock' URL='https://opml.radiotime.com/Browse.ashx?id=" + id + "&amp;filter=g79'/>" +
+                "<outline type='audio' text='Radio' guide_id='s1'/>")));
+            var snapshot = directory.Snapshot();
+            var browser = new TuneInBrowsing(directory, _ => null);
+            var listing = category == "location"
+                ? directory.Register(snapshot, TuneInBrowsing.StartingEntries(snapshot, category).Single())
+                : browser.CategoryRoot(snapshot, category).Id;
+            var visible = (await browser.GetItemsAsync(listing, Token)).Items;
+            Assert.DoesNotContain(visible, item => item.Name == "Rock");
+            var pivot = Assert.Single(visible, item => item.Name == "By Genre");
+            var grouped = (await browser.GetItemsAsync(pivot.Id, Token)).Items;
+            Assert.Contains(grouped, item => item.Name == "Rock");
+            Assert.Contains(grouped, item => item.Name == "Radio");
+        }
+
+        [Theory]
+        [InlineData("", 1)]
+        [InlineData("<ApiRequestIntervalSeconds>3</ApiRequestIntervalSeconds>", 3)]
+        [InlineData("<ApiRequestIntervalSeconds>17</ApiRequestIntervalSeconds>", 17)]
+        public void RequestIntervalDefaultsOnlyWhenNotSaved(string setting, int expected)
+        {
+            using var reader = new StringReader("<PluginConfiguration>" + setting + "</PluginConfiguration>");
+            var config = (PluginConfiguration)new XmlSerializer(typeof(PluginConfiguration)).Deserialize(reader);
+            Assert.Equal(expected, config.ApiRequestIntervalSeconds);
+        }
+
+        [Fact]
+        public async Task DiscoveryCoalescesIdenticalInFlightPagesWithoutMergingDifferentQueries()
+        {
+            var requests = new List<bool>();
+            var session = new TuneInCatalogueSession(null, TimeSpan.FromMinutes(1), () => DateTime.UtcNow,
+                requested: hit => requests.Add(hit), timings: new TuneInRefreshTimings());
+            var request = new DirectoryRequest();
+            request.Parameters.Add("id", "r10");
+            request.Parameters.Add("filter", "s:popular");
+            var page = new TaskCompletionSource<XDocument>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var first = session.FetchAsync(request, () => page.Task, Token);
+            var same = session.FetchAsync(request.Copy(), () => throw new InvalidOperationException("Duplicate fetch"), Token);
+            Assert.False(same.IsCompleted);
+            page.SetResult(Opml("<outline type='audio' guide_id='s1'/>"));
+            await Task.WhenAll(first, same);
+            foreach (var difference in new[] { "offset", "pivot", "username", "latlon" })
+            {
+                var other = request.Copy();
+                other.Parameters[difference] = "2";
+                await session.FetchAsync(other, () => Task.FromResult(Opml("<outline type='audio' guide_id='s2'/>")), Token);
+            }
+            Assert.Equal(new[] { false, true, false, false, false, false }, requests);
         }
         [Fact]
         public async Task PartialImportPolicyPreservesNavigationAndDiscoveryIdentity()
@@ -108,6 +179,152 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             "<outline type='link' text='" + name + "' URL='https://opml.radiotime.com/Browse.ashx?id=" + id + "'/>";
         private static readonly CancellationToken Token = CancellationToken.None;
 
+        [Theory]
+        [InlineData("talk", "g214", "c25212376", null)]
+        [InlineData("sports", "c100006105", "g2723", null)]
+        [InlineData("podcast", "c23980497", "c583296", "p:topic")]
+        public async Task SelectedTopicsOnlyFollowOptionsFromTheirOwnRoot(string category, string selected, string other,
+            string filter)
+        {
+            var config = Ready();
+            config.EnableTalk = config.EnableSports = config.EnablePodcasts = true;
+            config.TalkMode = config.SportsMode = config.PodcastsMode = "selected";
+            config.TalkIds = config.SportsIds = config.PodcastIds = new List<string> { selected };
+            string Context(string id) => id + (filter == null ? "" : "&amp;filter=" + filter);
+            var requests = new List<DirectoryRequest>();
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                requests.Add(request);
+                if (request.Parameters.TryGetValue("c", out var classifier))
+                {
+                    Assert.Equal(category, classifier);
+                    return Task.FromResult(Opml("<outline text='Options'>"
+                        + Link(Context(other), "Other branch") + Link(Context(selected), "Selected branch")
+                        + Link("c1000&amp;filter=s:popular", "Unsupported context")
+                        + Link(Context("c1001") + "&amp;offset=10", "Next page")
+                        + "<outline type='link' text='Mismatch' guide_id='c1003' URL='https://opml.radiotime.com/Browse.ashx?id="
+                        + Context("c1002") + "'/>"
+                        + "<outline type='link' text='Foreign host' URL='https://example.test/Browse.ashx?id=c1004'/>"
+                        + "<outline key='related'>" + Link(Context("c1005")) + "</outline>"
+                        + "<outline type='audio' guide_id='s1' text='Unselected station'/>"
+                        + "</outline>"));
+                }
+                Assert.Equal(selected, request.Parameters["id"]);
+                Assert.Equal(filter, request.Parameters.GetValueOrDefault("filter"));
+                return Task.FromResult(Opml(Link(Context(other), "Other branch")
+                    + "<outline type='link' text='All' URL='https://opml.radiotime.com/Browse.ashx?c=" + category + "'/>"
+                    + "<outline type='audio' guide_id='s9' text='Selected station'/>"));
+            });
+            var browser = new TuneInBrowsing(directory, _ => null);
+            Assert.Equal(3, (await browser.GetItemsAsync(null, Token)).Items.Count);
+            Assert.Empty(requests);
+            await Assert.ThrowsAsync<ArgumentException>(() => directory.SelectAsync(category, selected, false, Token));
+            var choices = await directory.SelectAsync(category, null, false, Token);
+            Assert.True(choices.ContainsStationMetadata);
+            Assert.NotNull(choices.Warning);
+            Assert.Equal(new[] { other, selected }.OrderBy(id => id), choices.Items.Select(item => item.Id).OrderBy(id => id));
+            Assert.All(choices.Items, item => { Assert.True(item.CanSelect); Assert.False(item.CanExpand); });
+            await directory.SelectAsync(category, null, false, Token);
+            Assert.Single(requests);
+
+            var snapshot = directory.Snapshot();
+            var root = browser.CategoryRoot(snapshot, category);
+            var session = new TuneInCatalogueSession(null, TimeSpan.FromMinutes(1), () => DateTime.UtcNow);
+            var branch = Assert.Single((await browser.GetItemsAsync(root.Id, Token, session)).Items);
+            Assert.Equal("Selected branch", branch.Name);
+            var station = Assert.Single((await browser.GetItemsAsync(branch.Id, Token, session)).Items);
+            Assert.Equal("s9", directory.Resolve(snapshot, station.Id).StationId);
+            Assert.Equal(3, requests.Count); // One selector call, one live session root, one selected content call.
+            Assert.Single(session.SnapshotPages()); // The live root cannot be replayed from a discovery checkpoint.
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task SelectedTopicDiscoveryFailsClosedForEmptyOrStaleIds(bool empty)
+        {
+            var config = Ready();
+            config.EnablePodcasts = true;
+            config.PodcastsMode = "selected";
+            if (!empty) config.PodcastIds.Add("c23980497");
+            var option = Link("c23980497&amp;filter=p:topic", "Tennis");
+            var requests = 0;
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                Assert.Equal("podcast", request.Parameters["c"]);
+                requests++;
+                return Task.FromResult(Opml(option));
+            });
+            var browser = new TuneInBrowsing(directory, _ => null);
+            var root = browser.CategoryRoot(directory.Snapshot(), "podcast");
+            var session = new TuneInCatalogueSession(null, TimeSpan.FromMinutes(1), () => DateTime.UtcNow);
+            if (!empty)
+            {
+                Assert.Single((await directory.SelectAsync("podcast", null, false, Token)).Items);
+                Assert.Single((await browser.GetItemsAsync(root.Id, Token, session)).Items);
+                // Same ID without its approved category context no longer identifies this Podcast branch.
+                option = Link("c23980497", "Tennis");
+                session = new TuneInCatalogueSession(session.SnapshotPages(), TimeSpan.FromMinutes(1), () => DateTime.UtcNow);
+            }
+            var channel = new TuneInChannel(directory);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => TuneInStagedImport.DiscoverAsync(channel, root,
+                session, Token, (id, catalogue, _, token) => browser.GetItemsAsync(id, token, catalogue), null, null, (_, __) => false));
+            Assert.Equal(empty ? 0 : 3, requests);
+        }
+
+        [Fact]
+        public void TopicScopesInvalidateOnlyRelatedCategoryRebindingAndKeepAllCompatible()
+        {
+            var config = Ready();
+            config.EnableTalk = config.EnableSports = true;
+            var directory = new TuneInDirectory(() => config, (_, __) => throw new InvalidOperationException());
+            var browser = new TuneInBrowsing(directory, _ => null);
+            var before = directory.Snapshot();
+            var talk = browser.CategoryRoot(before, "talk").Id;
+            var sports = browser.CategoryRoot(before, "sports").Id;
+            config.TalkMode = "ALL";
+            config.TalkIds.Add("g214");
+            Assert.Equal(before.Key, directory.Snapshot().Key);
+            config.TalkMode = "selected";
+            config.TalkIds.Add("c25212376");
+            var after = directory.Snapshot();
+            Assert.NotEqual(before.Key, after.Key);
+            Assert.NotEqual(before.DiscoveryKey, after.DiscoveryKey);
+            Assert.Throws<InvalidOperationException>(() => directory.Resolve(after, talk));
+            Assert.Throws<InvalidOperationException>(() => directory.CategoryRebinder(before, after, "talk"));
+            Assert.Equal(browser.CategoryRoot(after, "sports").Id, directory.CategoryRebinder(before, after, "sports")(sports));
+            config.TalkIds.Reverse();
+            config.TalkIds.Add("g214");
+            Assert.Equal(after.Key, directory.Snapshot().Key);
+            Assert.DoesNotContain("c25212376", before.TopicIds("talk"));
+            config.TalkIds.Add("https://example.test/");
+            Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void SettingsSaveHistoryDistinguishesFreshAndLegacyBrowsingWithoutChangingScope(bool browsingEnabled)
+        {
+            var serializer = new XmlSerializer(typeof(PluginConfiguration));
+            using var empty = new StringReader("<PluginConfiguration/>");
+            var fresh = (PluginConfiguration)serializer.Deserialize(empty);
+            Assert.False(fresh.SettingsSaved);
+            var key = new ConfigurationSnapshot(fresh).Key;
+            fresh.SettingsSaved = true;
+            Assert.Equal(key, new ConfigurationSnapshot(fresh).Key);
+            var legacyXml = "<PluginConfiguration><SchemaVersion>1</SchemaVersion><ConfigurationCompleted>"
+                + XmlConvert.ToString(browsingEnabled) + "</ConfigurationCompleted>";
+            using var legacy = new StringReader(legacyXml + "</PluginConfiguration>");
+            var existing = (PluginConfiguration)serializer.Deserialize(legacy);
+            Assert.True(existing.SettingsSaved);
+            Assert.Equal("all", existing.TalkMode);
+            Assert.Equal("all", existing.SportsMode);
+            Assert.Equal("all", existing.PodcastsMode);
+            using var explicitFalse = new StringReader(legacyXml + "<SettingsSaved>false</SettingsSaved></PluginConfiguration>");
+            Assert.False(((PluginConfiguration)serializer.Deserialize(explicitFalse)).SettingsSaved);
+        }
+
         [Fact]
         public void SettingsAreRegisteredInAdvancedAndRemainTheMainPluginPage()
         {
@@ -122,6 +339,24 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.False(settings.EnableInUserMenu);
             Assert.EndsWith(".Configuration.configPage.html", settings.EmbeddedResourcePath);
             Assert.False(pages.Single(page => page.Name == "tuneinjs").EnableInMainMenu);
+        }
+
+        [Fact]
+        public void PluginAssemblyEmbedsTheCurrentControlPanel()
+        {
+            var assembly = typeof(Plugin).Assembly;
+            using var htmlStream = assembly.GetManifestResourceStream("MediaBrowser.Plugins.TuneIn.Configuration.configPage.html");
+            using var jsStream = assembly.GetManifestResourceStream("MediaBrowser.Plugins.TuneIn.Configuration.configPage.js");
+            Assert.NotNull(htmlStream);
+            Assert.NotNull(jsStream);
+            using var htmlReader = new StreamReader(htmlStream);
+            using var jsReader = new StreamReader(jsStream);
+            var html = htmlReader.ReadToEnd();
+            var script = jsReader.ReadToEnd();
+            Assert.Contains("Global TuneIn Settings", html);
+            Assert.Contains("Enable TuneIn Station Filtering", html);
+            Assert.Contains("Clean Up Library Folders", html);
+            Assert.Contains("Please go to the Catalog Refresh section", script);
         }
 
         [Fact]
@@ -454,7 +689,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public void InvalidAdminConfigurationIsRejectedServerSide()
         {
             var config = Ready();
-            Assert.Equal(3, new PluginConfiguration().ApiRequestIntervalSeconds);
+            Assert.Equal(1, new PluginConfiguration().ApiRequestIntervalSeconds);
             config.ApiRequestIntervalSeconds = 0;
             Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
             config.ApiRequestIntervalSeconds = 31;

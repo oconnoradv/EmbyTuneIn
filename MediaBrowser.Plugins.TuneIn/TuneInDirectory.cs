@@ -21,7 +21,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private static readonly XmlSerializer Serializer = new XmlSerializer(typeof(PluginConfiguration));
         private static readonly XmlSerializer ScopeSerializer = CreateScopeSerializer();
         private static readonly string[] CategoryKeys = { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
-        private static readonly int[] ScheduleHours = { 6, 12, 24, 168 };
+        private static readonly int[] ScheduleHours = { 6, 12, 24, 168, 720 };
         public PluginConfiguration Value { get; }
         public string Key { get; }
 
@@ -34,6 +34,9 @@ namespace MediaBrowser.Plugins.TuneIn
                     Value = (PluginConfiguration)Serializer.Deserialize(reader);
                 writer.GetStringBuilder().Clear();
                 ScopeSerializer.Serialize(writer, Value);
+                // All retains the exact legacy XML hash, including when inactive choices are saved.
+                foreach (var category in TopicCategories.Where(UsesSelectedTopics))
+                    writer.Write("\n" + category + ":selected:" + string.Join(",", TopicIds(category)));
                 using (var hash = SHA256.Create())
                     Key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(writer.ToString()))).Replace("-", "");
             }
@@ -67,6 +70,44 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         public bool Ready => Value.ConfigurationCompleted && Value.SchemaVersion == 1;
+        private static readonly string[] TopicCategories = { "talk", "sports", "podcast" };
+        internal static bool IsTopicCategory(string category) => TopicCategories.Contains(category);
+
+        private static string TopicMode(PluginConfiguration value, string category) =>
+            category == "talk" ? value.TalkMode : category == "sports" ? value.SportsMode : value.PodcastsMode;
+
+        private static List<string> ConfiguredTopicIds(PluginConfiguration value, string category) =>
+            category == "talk" ? value.TalkIds : category == "sports" ? value.SportsIds : value.PodcastIds;
+
+        internal bool UsesSelectedTopics(string category)
+        {
+            if (!IsTopicCategory(category)) return false;
+            var mode = TopicMode(Value, category);
+            // An unrecognized persisted mode must not broaden browsing to All.
+            return !string.IsNullOrEmpty(mode) && !string.Equals(mode, "all", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal IEnumerable<string> TopicIds(string category) =>
+            string.Equals(TopicMode(Value, category), "selected", StringComparison.OrdinalIgnoreCase)
+                ? (ConfiguredTopicIds(Value, category) ?? new List<string>()).Where(id => ValidId(id, category))
+                    .Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal)
+                : Enumerable.Empty<string>();
+
+        internal bool UsesSelections(string category) => UsesSelectedTopics(category)
+            || category == "local" || category == "music" || category == "language" || category == "location";
+
+        private void CopyTopicScope(PluginConfiguration scope, string category)
+        {
+            if (!UsesSelectedTopics(category)) return;
+            var ids = TopicIds(category).ToList();
+            switch (category)
+            {
+                case "talk": scope.TalkMode = "selected"; scope.TalkIds = ids; break;
+                case "sports": scope.SportsMode = "selected"; scope.SportsIds = ids; break;
+                case "podcast": scope.PodcastsMode = "selected"; scope.PodcastIds = ids; break;
+            }
+        }
+
         public string LocalSource => Value.EnableLocalRadio ? ResolveLocalSource(Value) : null;
         public IEnumerable<string> Categories => CategoryKeys.Where(Enabled);
         internal string CategoryScopeKey(string category)
@@ -111,6 +152,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     break;
                 default: throw new ArgumentException("Invalid TuneIn category.", nameof(category));
             }
+            if (IsTopicCategory(category)) CopyTopicScope(scope, category);
             return new ConfigurationSnapshot(scope).Key;
         }
         internal static bool ValidSchedule(CategoryRefreshSchedule schedule) =>
@@ -155,7 +197,8 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public static bool ValidId(string id, string category) => id != null && Regex.IsMatch(id,
             category == "language" ? @"\Al[1-9][0-9]{0,9}\z"
-                : category == "music" ? @"\A[cg][1-9][0-9]{0,9}\z" : @"\Ar[1-9][0-9]{0,9}\z");
+                : category == "music" || IsTopicCategory(category) ? @"\A[cg][1-9][0-9]{0,9}\z"
+                : @"\Ar[1-9][0-9]{0,9}\z");
 
         public static bool TryCoordinates(string value, out string normalized)
         {
@@ -187,6 +230,16 @@ namespace MediaBrowser.Plugins.TuneIn
                 throw new ArgumentException("Choose one Local Radio source: enabled regions or valid coordinates.");
             if ((value.Username ?? "").Length > 128)
                 throw new ArgumentException("TuneIn username exceeds 128 characters.");
+            foreach (var category in TopicCategories)
+            {
+                var mode = TopicMode(value, category);
+                if (!string.IsNullOrEmpty(mode) && !string.Equals(mode, "all", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(mode, "selected", StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("Invalid TuneIn topic selection mode.");
+                var ids = ConfiguredTopicIds(value, category);
+                if (ids != null && (ids.Count > 100 || ids.Any(id => !ValidId(id, category))))
+                    throw new ArgumentException("Invalid or excessive TuneIn topic selections.");
+            }
             foreach (var category in new[] { "music", "language", "location", "local" })
             {
                 var items = category == "music" ? value.Music : category == "language" ? value.Languages
@@ -266,6 +319,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public string StationId { get; set; }
         public string ContentCategory { get; set; }
         public string MusicSelectionId { get; set; }
+        public string TopicBranchKey { get; set; }
     }
 
     public sealed class SelectorItem
@@ -277,6 +331,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public bool CanExpand { get; set; }
         public bool CanSelect { get; set; }
         internal string ProviderHub { get; set; }
+        internal DirectoryRequest TopicRequest { get; set; }
     }
 
     public sealed class SelectorResult
@@ -331,6 +386,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 new XElement("station", entry.StationId ?? ""), new XElement("name", entry.Name ?? ""),
                 new XElement("contentCategory", entry.ContentCategory ?? ""),
                 new XElement("musicSelection", entry.MusicSelectionId ?? ""));
+            if (entry.TopicBranchKey != null)
+                document.Add(new XElement("topicBranch", entry.TopicBranchKey));
             if (entry.Request != null)
             {
                 var request = new XElement("request", new XAttribute("method", entry.Request.Method));
@@ -365,22 +422,33 @@ namespace MediaBrowser.Plugins.TuneIn
             };
         }
 
-        private NavigationEntry ResolveSigned(ConfigurationSnapshot snapshot, string id)
+        // Ownership survives settings changes; navigation still requires the current key and scope.
+        internal static bool IsGeneratedId(ConfigurationSnapshot snapshot, string id) =>
+            ReadSignedPayload(snapshot, id) != null;
+
+        private static byte[] ReadSignedPayload(ConfigurationSnapshot snapshot, string id)
         {
             if (id == null || id.Length > 6000 || !Regex.IsMatch(id, @"\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}\z"))
-                throw new InvalidOperationException("Invalid TuneIn navigation identifier. Return to the channel root.");
+                return null;
             var parts = id.Split('.');
-            if (parts[0].Length % 4 == 1) throw new InvalidOperationException("Invalid TuneIn navigation encoding.");
+            if (parts[0].Length % 4 == 1) return null;
             var bytes = Decode(parts[0]);
             var supplied = Decode(parts[1]);
-            if (bytes.Length > 4096) throw new InvalidOperationException("TuneIn navigation entry exceeds limit.");
+            if (bytes.Length > 4096) return null;
             using (var hmac = new HMACSHA256(Convert.FromBase64String(snapshot.Value.NavigationSecret)))
             {
                 var expected = hmac.ComputeHash(bytes);
                 var difference = expected.Length ^ supplied.Length;
                 for (var i = 0; i < expected.Length && i < supplied.Length; i++) difference |= expected[i] ^ supplied[i];
-                if (difference != 0) throw new InvalidOperationException("TuneIn navigation signature rejected.");
+                return difference == 0 ? bytes : null;
             }
+        }
+
+        private NavigationEntry ResolveSigned(ConfigurationSnapshot snapshot, string id)
+        {
+            var bytes = ReadSignedPayload(snapshot, id);
+            if (bytes == null)
+                throw new InvalidOperationException("Invalid or unauthenticated TuneIn navigation identifier. Return to the channel root.");
             using (var stream = new MemoryStream(bytes))
             using (var reader = XmlReader.Create(stream, new XmlReaderSettings
             { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 4096 }))
@@ -395,7 +463,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     StationId = EmptyToNull(document.Element("station")?.Value),
                     Name = document.Element("name")?.Value,
                     ContentCategory = EmptyToNull(document.Element("contentCategory")?.Value),
-                    MusicSelectionId = EmptyToNull(document.Element("musicSelection")?.Value)
+                    MusicSelectionId = EmptyToNull(document.Element("musicSelection")?.Value),
+                    TopicBranchKey = EmptyToNull(document.Element("topicBranch")?.Value)
                 };
                 var request = document.Element("request");
                 if (request != null)
@@ -418,10 +487,14 @@ namespace MediaBrowser.Plugins.TuneIn
             snapshot.Enabled(entry.Category)
             && (entry.StationId == null || TuneInBrowsing.ValidStation(entry.StationId))
             && (entry.Category != "language" || LanguageContentAllowed(snapshot, entry))
+            && (snapshot.UsesSelectedTopics(entry.Category)
+                ? (entry.SelectionId != null) == (entry.TopicBranchKey != null)
+                : entry.TopicBranchKey == null)
             && (entry.SelectionId == null ? entry.Request == null && entry.StationId == null
-                || !new[] { "local", "music", "language", "location" }.Contains(entry.Category)
+                || !snapshot.UsesSelections(entry.Category)
                 : entry.SelectionId == "coordinates" ? entry.Category == "local" && snapshot.LocalSource == "coordinates"
-                    : snapshot.Selections(entry.Category).Any(s => s.Id == entry.SelectionId));
+                    : snapshot.UsesSelectedTopics(entry.Category) ? snapshot.TopicIds(entry.Category).Contains(entry.SelectionId)
+                        : snapshot.Selections(entry.Category).Any(s => s.Id == entry.SelectionId));
 
         internal static bool LanguageContentAllowed(ConfigurationSnapshot snapshot, NavigationEntry entry)
         {
@@ -443,11 +516,11 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         public async Task<XDocument> FetchAsync(ConfigurationSnapshot snapshot, DirectoryRequest request, CancellationToken token,
-            TuneInCatalogueSession session = null)
+            TuneInCatalogueSession session = null, bool liveOnly = false)
         {
             CheckCurrent(snapshot, token);
             var document = session == null ? await fetch(request, token, null).ConfigureAwait(false)
-                : await session.FetchAsync(request, () => fetch(request, token, session.Timings), token).ConfigureAwait(false);
+                : await session.FetchAsync(request, () => fetch(request, token, session.Timings), token, liveOnly).ConfigureAwait(false);
             CheckCurrent(snapshot, token);
             return document;
         }
@@ -456,10 +529,11 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInCatalogueSession catalogue = null)
         {
             var snapshot = Snapshot();
-            if (!new[] { "music", "language", "location", "local" }.Contains(category))
+            var topicCategory = ConfigurationSnapshot.IsTopicCategory(category);
+            if (!topicCategory && !new[] { "music", "language", "location", "local" }.Contains(category))
                 throw new ArgumentException("Invalid selector category.");
             var root = string.IsNullOrEmpty(parent);
-            if (!root && !ConfigurationSnapshot.ValidId(parent, category))
+            if (!root && (topicCategory || !ConfigurationSnapshot.ValidId(parent, category)))
                 throw new ArgumentException("Invalid selector parent.");
             var cacheKey = category + ":" + parent;
             SelectorItem parentItem = null;
@@ -471,6 +545,12 @@ namespace MediaBrowser.Plugins.TuneIn
                         .SelectMany(p => p.Value.Items).FirstOrDefault(i => i.Id == parent);
                 if (!root && (parentItem == null || parentItem.AncestorIds.Count >= 20))
                     throw new ArgumentException("Load selector ancestry from the root first (maximum depth 20).");
+            }
+            if (topicCategory)
+            {
+                var topics = await ReadTopicRootAsync(snapshot, category, token).ConfigureAwait(false);
+                CacheSelector(snapshot, cacheKey, topics, token);
+                return topics;
             }
             var request = new DirectoryRequest();
             if (category == "language")
@@ -516,8 +596,6 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (result.Items.Count > 2000) throw new InvalidDataException("Selector response exceeds 2000 choices.");
             }
             result.Items = result.Items.GroupBy(i => i.Id).Select(g => g.First()).ToList();
-            var characters = SelectorCharacters(result);
-            if (characters > 2 * 1024 * 1024) throw new InvalidDataException("TuneIn selector labels exceed cache limit.");
             result.Warning = omitted ? "Some TuneIn links could not be shown; this branch is incomplete."
                 : result.ContainsStationMetadata ? "This branch includes stations, which are not selection options." : null;
             if (catalogue != null)
@@ -525,6 +603,14 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (omitted) throw new InvalidDataException("TuneIn language validation returned incomplete links.");
                 return result;
             }
+            CacheSelector(snapshot, cacheKey, result, token);
+            return result;
+        }
+
+        private void CacheSelector(ConfigurationSnapshot snapshot, string cacheKey, SelectorResult result, CancellationToken token)
+        {
+            var characters = SelectorCharacters(result);
+            if (characters > 2 * 1024 * 1024) throw new InvalidDataException("TuneIn selector labels exceed cache limit.");
             lock (gate)
             {
                 CheckCurrent(snapshot, token);
@@ -535,7 +621,45 @@ namespace MediaBrowser.Plugins.TuneIn
                 selectors[cacheKey] = result;
                 selectorCharacters += characters;
             }
-            return result;
+        }
+
+        internal async Task<SelectorResult> ReadTopicRootAsync(ConfigurationSnapshot snapshot, string category,
+            CancellationToken token, TuneInCatalogueSession session = null)
+        {
+            if (!ConfigurationSnapshot.IsTopicCategory(category)) throw new ArgumentException("Invalid topic category.");
+            var request = new DirectoryRequest();
+            request.Parameters["c"] = category;
+            var document = await FetchAsync(snapshot, request, token, session, liveOnly: true).ConfigureAwait(false);
+            var rows = TuneInBrowsing.ContentRows(document.Root.Element("body")).ToList();
+            var items = new Dictionary<string, SelectorItem>(StringComparer.Ordinal);
+            var omitted = false;
+            foreach (var row in rows.Where(row => Attribute(row, "type") == "link"))
+            {
+                if ((Attribute(row, "key") ?? "").StartsWith("next", StringComparison.Ordinal)) continue;
+                DirectoryRequest link;
+                try { link = DirectoryRequest.ParseLink(Attribute(row, "URL")); }
+                catch (InvalidDataException) { omitted = true; continue; }
+                var id = link.Parameters.GetValueOrDefault("id");
+                var guideId = Attribute(row, "guide_id");
+                var filter = link.Parameters.GetValueOrDefault("filter");
+                if (link.Method != "Browse.ashx" || !ConfigurationSnapshot.ValidId(id, category)
+                    || (guideId != null && guideId != id) || link.Parameters.Keys.Any(key => key != "id" && key != "filter")
+                    || filter != (category == "podcast" ? "p:topic" : null)) continue;
+                if (items.ContainsKey(id)) continue;
+                var label = Attribute(row, "text") ?? id;
+                if (label.Length > 256 || items.Count >= 2000)
+                    throw new InvalidDataException("TuneIn topic options exceed the selector limit.");
+                items.Add(id, new SelectorItem { Id = id, Name = label, Path = label,
+                    AncestorIds = new List<string> { category }, CanSelect = true, TopicRequest = link });
+            }
+            var containsStations = rows.Any(row => Attribute(row, "type") == "audio");
+            return new SelectorResult
+            {
+                Items = items.Values.ToList(),
+                ContainsStationMetadata = containsStations,
+                Warning = omitted ? "Some TuneIn links could not be shown; this branch is incomplete."
+                    : containsStations ? "This branch includes stations, which are not selection options." : null
+            };
         }
 
         private static int SelectorCharacters(SelectorResult result) => result.Items.Sum(i =>

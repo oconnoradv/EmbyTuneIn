@@ -33,11 +33,12 @@ class Element {
     setAttribute(name, value) { this.attributes[name] = value; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
     showModal() { this.open = true; }
+    focus() { this.focused = true; }
     close() { this.open = false; if (this.handlers.close) this.handlers.close(); }
     descendants() { return this.childNodes.flatMap(child => [child, ...child.descendants()]); }
 }
 
-function harness(manualStatus = false, manualSave = false) {
+function harness(manualStatus = false, manualSave = false, manualBackup = false) {
     const handlers = {};
     const formHandlers = {};
     const username = new Element('input');
@@ -47,16 +48,21 @@ function harness(manualStatus = false, manualSave = false) {
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon,
         '.apiRequestIntervalSeconds': requestInterval };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.categories', '.selectors',
-        '.loginFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
+        '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
-        '.localSelector', '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
-        '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
-        '.refreshResumeFirst', '.refreshNewFirst']) elements[name] = new Element();
+        '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
+        '.settingsLockState', '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
+        '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
+        '.cleanupConfirm', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.backupStart',
+        '.backupStatus', '.cleanupBackupVerified', '#tuneInReportHint']) elements[name] = new Element();
     for (const [section, summary, open] of [
+        ['.globalSection', '.globalSummary', true],
         ['.categoriesSection', '.categoriesSummary', true],
-        ['.localSection', '.localSummary', true],
+        ['.browsingSection', '.browsingSummary', true],
+        ['.stationSelectionsSection', '.stationSelectionsSummary', true],
+        ['.maintenanceSection', '.maintenanceSummary', false],
         ['.tuneInRefresh', '.refreshSummary', false]
     ]) {
         elements[section] = new Element('details');
@@ -79,6 +85,8 @@ function harness(manualStatus = false, manualSave = false) {
     const selectors = [];
     const refresh = [];
     const locks = [];
+    const cleanup = [];
+    const backup = [];
     const timers = new Map();
     let timerId = 0;
     let serverLocked = false;
@@ -112,7 +120,12 @@ function harness(manualStatus = false, manualSave = false) {
             else if (options.url.route.startsWith('TuneIn/Refresh/')) {
                 refresh.push({ options, ...request });
                 if (!manualStatus && options.type === 'GET') request.resolve({ SettingsLocked: serverLocked });
-            } else selectors.push({ options, ...request });
+            } else if (options.url.route.startsWith('TuneIn/Cleanup/')) cleanup.push({ options, ...request });
+            else if (options.url.route.startsWith('TuneIn/Backup/')) {
+                backup.push({ options, ...request });
+                if (!manualBackup && options.type === 'GET') request.resolve({ State: 'Ready' });
+            }
+            else selectors.push({ options, ...request });
             return request.promise;
         }
     };
@@ -138,12 +151,18 @@ function harness(manualStatus = false, manualSave = false) {
     });
 
     return { instance: new PluginView(view), username, latLon, requestInterval, formHandlers, reads, writes, notices, errors, loader,
-        elements, selectors, enhanced, calls, handlers, refresh, locks, timers };
+        elements, selectors, enhanced, calls, handlers, refresh, locks, cleanup, backup, timers };
 }
 
 function open(details) {
     details.open = true;
     return details.handlers.toggle();
+}
+
+function enableBrowsing(app) {
+    const control = app.elements['.configurationCompleted'];
+    control.checked = true;
+    control.handlers.change();
 }
 
 test('all dashboard actions use native Emby buttons without plugin color overrides', () => {
@@ -164,9 +183,10 @@ test('first activation opens and loads Language and Location even when native cl
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     await visit;
+    enableBrowsing(app);
     for (const index of [0, 1]) {
         const section = app.elements['.selectors'].childNodes[index];
-        const root = section.childNodes.find(node => node.tagName === 'details');
+        const root = section.descendants().find(node => node.tagName === 'details');
         const summary = root.childNodes[0];
         let prevented = false;
         const loading = summary.handlers.click({ preventDefault() { prevented = true; } });
@@ -202,7 +222,8 @@ test('an open selector retries a transient first failure once without a second c
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     await visit;
-    const root = app.elements['.selectors'].childNodes[1].childNodes.find(node => node.tagName === 'details');
+    enableBrowsing(app);
+    const root = app.elements['.selectors'].childNodes[1].descendants().find(node => node.tagName === 'details');
     const loading = open(root);
     app.selectors[0].reject({ status: 503 });
     await settle();
@@ -227,7 +248,8 @@ test('selector retry is bounded and does not send requests after leaving setting
         const visit = app.instance.onResume();
         app.reads[0].resolve({});
         await visit;
-        const root = app.elements['.selectors'].childNodes[0].childNodes.find(node => node.tagName === 'details');
+        enableBrowsing(app);
+        const root = app.elements['.selectors'].childNodes[0].descendants().find(node => node.tagName === 'details');
         const loading = open(root);
         app.selectors[0].reject({ response: { status: 502 } });
         await settle();
@@ -247,7 +269,7 @@ test('selector retry is bounded and does not send requests after leaving setting
 test('native view lifecycle loads labeled upstream settings on each visit', async () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /data-controller="__plugin\/tuneinjs"/);
-    assert.match(html, /<legend>Your TuneIn Login<\/legend>[\s\S]*class="txtUsername"[^>]*label="TuneIn User:"[\s\S]*class="localSource"[\s\S]*class="txtLatLon"[\s\S]*class="settingsLocked"/);
+    assert.match(html, /<fieldset class="globalFields"[\s\S]*<fieldset class="loginFields"[\s\S]*<legend>Your TuneIn Login<\/legend>[\s\S]*class="txtUsername"[^>]*label="TuneIn User:"[\s\S]*class="localSource"[\s\S]*class="txtLatLon"[\s\S]*class="configurationCompleted"[\s\S]*class="settingsLocked"/);
     assert.doesNotMatch(html, /<h2>Favorites<\/h2>/);
     assert.match(html, /class="txtLatLon"[^>]*label="Your LatLon:"/);
     const app = harness();
@@ -257,7 +279,7 @@ test('native view lifecycle loads labeled upstream settings on each visit', asyn
     await first;
     assert.equal(app.username.value, 'listener');
     assert.equal(app.latLon.value, '1,2');
-    assert.equal(String(app.requestInterval.value), '3');
+    assert.equal(String(app.requestInterval.value), '1');
     app.instance.onPause('away');
     const second = app.instance.onResume();
     app.reads[1].resolve({ Username: null, LatLon: null });
@@ -287,8 +309,8 @@ test('save retains unrelated configuration and converts empty fields to null', a
     assert.equal(app.writes[0].config.LatLon, null);
     assert.equal(app.writes[0].config.Other, 42);
     assert.equal(app.writes[0].config.SchemaVersion, 1);
-    assert.equal(app.writes[0].config.ConfigurationCompleted, false);
-    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 3);
+    assert.equal(app.writes[0].config.ConfigurationCompleted, true);
+    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 1);
     assert.deepEqual(app.notices, ['saved']);
 });
 
@@ -377,6 +399,32 @@ test('opening settings is lazy and native checkbox captions remain visible text'
     assert.equal(saved.childNodes.length, 0);
     assert.ok(app.enhanced.some(event => event.event === 'create'));
     assert.match(app.elements['.status'].textContent, /TuneIn catalog refresh is unavailable/);
+    assert.equal(app.elements['.configurationCompleted'].checked, true);
+    assert.equal(app.elements['.status'].textContent,
+        'The TuneIn catalog refresh is unavailable until Global Settings have been reviewed and saved.');
+    assert.equal(app.elements['.status'].attributes['data-configuration-required'], 'true');
+    assert.equal(app.elements['.browsingSection'].attributes['data-filtering-configured'], 'false');
+    assert.equal(app.elements['.browsingSection'].open, true);
+});
+
+test('saved filtering opt-out remains disabled', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: false });
+    await visit;
+    assert.equal(app.elements['.configurationCompleted'].checked, false);
+    assert.equal(app.elements['.browsingSection'].attributes['data-filtering-configured'], 'false');
+    assert.equal(app.elements['.browsingSection'].open, true);
+});
+
+test('enabled filtering collapses the filtering section', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    await visit;
+    assert.equal(app.elements['.status'].attributes['data-configuration-required'], 'false');
+    assert.equal(app.elements['.browsingSection'].attributes['data-filtering-configured'], 'true');
+    assert.equal(app.elements['.browsingSection'].open, false);
 });
 
 test('yellow first-refresh prompt appears only until refresh history exists', async () => {
@@ -409,8 +457,11 @@ test('only explicit selector actions fetch branches and save multiple local sele
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     await visit;
-    const section = app.elements['.localSelector'].childNodes[0];
-    const root = section.childNodes.find(node => node.tagName === 'details');
+    enableBrowsing(app);
+    const section = app.elements['.selectors'].childNodes.find(node =>
+        node.childNodes[0].textContent === 'Local Cities and Regions');
+    assert.equal(section.tagName, 'details');
+    const root = section.descendants().find(node => node.tagName === 'details');
     const loading = open(root);
     assert.equal(open(root), loading);
     assert.equal(app.selectors.length, 1);
@@ -464,6 +515,7 @@ test('invalid optional coordinates block save only when enabled', async () => {
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     await visit;
+    enableBrowsing(app);
     const local = app.instance.view.querySelector('[data-category="EnableLocalRadio"]');
     local.checked = true;
     app.elements['.localSource'].value = 'coordinates';
@@ -485,7 +537,8 @@ test('stale selector results do not overwrite a later visit', async () => {
     const first = app.instance.onResume();
     app.reads[0].resolve({});
     await first;
-    const root = app.elements['.selectors'].childNodes[0].childNodes.find(node => node.tagName === 'details');
+    enableBrowsing(app);
+    const root = app.elements['.selectors'].childNodes[0].descendants().find(node => node.tagName === 'details');
     const loading = open(root);
     app.instance.onPause();
     const second = app.instance.onResume();
@@ -503,8 +556,9 @@ test('a language branch retries independently, caches on reopening, and offers o
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     await visit;
+    enableBrowsing(app);
     const section = app.elements['.selectors'].childNodes[0];
-    const root = section.childNodes.find(node => node.tagName === 'details');
+    const root = section.descendants().find(node => node.tagName === 'details');
     const first = open(root);
     app.selectors[0].resolve({ Items: [{ Id: 'l122', Name: 'Arabic', Path: 'Arabic', CanExpand: true, CanSelect: true }] });
     await first;
@@ -729,9 +783,9 @@ test('collapsing browsing settings, including Music genres, keeps choices and do
     app.reads[0].resolve({ EnableTalk: true, LatLon: '1,2', Music: [{ Id: 'g1', Name: 'Rock' }] });
     await visit;
     const music = app.elements['.selectors'].childNodes[2];
-    assert.equal(music.childNodes[0].textContent, 'Music genres');
-    const summaries = [app.elements['.categoriesSummary'], app.elements['.localSummary'],
-        ...app.elements['.selectors'].childNodes.map(section => section.childNodes[0])];
+    assert.equal(music.childNodes[0].textContent, 'Music Genres');
+    const summaries = [app.elements['.browsingSummary'], app.elements['.categoriesSummary'], app.elements['.stationSelectionsSummary'],
+        ...app.elements['.selectors'].childNodes.filter(section => section.open).map(section => section.childNodes[0])];
     for (const summary of summaries) {
         assert.equal(summary.parentNode.open, true);
         summary.handlers.click({ preventDefault() {} });
@@ -743,6 +797,69 @@ test('collapsing browsing settings, including Music genres, keeps choices and do
     assert.match(music.textContent, /Rock/);
     assert.equal(app.latLon.value, '1,2');
     assert.ok(app.elements['.categories'].descendants().some(item => item.checked));
+});
+
+test('maintenance previews before confirming and blocks settings and refresh until cleanup stops', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true, ApiRequestIntervalSeconds: 3 });
+    const live = { SettingsLocked: false, Categories: [{ Category: 'talk', Name: 'Talk' }] };
+    app.refresh[0].resolve(live);
+    await visit;
+    await settle();
+    assert.equal(app.requestInterval.value, 3);
+    await open(app.elements['.maintenanceSection']);
+    const click = name => app.elements[name].handlers.click();
+    assert.equal(click('.cleanupConfirm'), undefined);
+    assert.equal(app.cleanup.length, 0);
+    const preview = click('.cleanupPreview');
+    assert.equal(app.cleanup[0].options.url.route, 'TuneIn/Cleanup/Preview');
+    app.cleanup[0].resolve({ Token: 'preview-token', Folders: 2, Stations: 7 });
+    await preview;
+    assert.match(app.elements['.cleanupPreviewText'].textContent, /2 folders and 7 station entries/);
+    assert.equal(app.elements['.cleanupConfirmation'].hidden, false);
+    assert.equal(app.elements['.cleanupBack'].focused, true);
+    assert.equal(app.elements['.cleanupConfirm'].disabled, true);
+    app.elements['.cleanupBackupVerified'].checked = true;
+    app.elements['.cleanupBackupVerified'].handlers.change();
+    const start = click('.cleanupConfirm');
+    assert.equal(app.cleanup[1].options.url.route, 'TuneIn/Cleanup/Start');
+    assert.equal(JSON.parse(app.cleanup[1].options.data).Token, 'preview-token');
+    assert.equal(app.elements['.cleanupConfirmation'].hidden, true);
+    assert.equal(app.elements['.button-submit'].disabled, true);
+    app.refresh[1].resolve(live);
+    app.cleanup[1].resolve({ ...live, Cleanup: { State: 'Running', Total: 9, Removed: 0 } });
+    await start;
+    assert.equal(app.elements['.settingsLocked'].disabled, true);
+    assert.equal(app.elements['.refreshStart'].disabled, true);
+    assert.equal(app.elements['.cleanupPreview'].disabled, true);
+    assert.match(app.elements['.cleanupStatus'].textContent, /0 of 9/);
+    app.refresh.at(-1).resolve({ ...live, Cleanup: { State: 'Partial', Total: 9, Removed: 8, Failed: 1 } });
+    await settle();
+    assert.match(app.elements['.cleanupStatus'].textContent, /8 of 9.*1 entries could not be removed/);
+    assert.equal(app.elements['.settingsLocked'].disabled, false);
+});
+
+test('backup uses the dedicated action and cleanup stays disabled while Emby has not finished', async () => {
+    const app = harness(false, false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    const opened = open(app.elements['.maintenanceSection']);
+    app.backup[0].resolve({ State: 'Ready' });
+    await opened;
+    const start = app.elements['.backupStart'].handlers.click();
+    assert.deepEqual(app.backup[1].options.url, { route: 'TuneIn/Backup/Start', params: undefined });
+    app.backup[1].resolve({ State: 'Running' });
+    await start;
+    assert.match(app.elements['.backupStatus'].textContent, /Wait for Emby/);
+    assert.equal(app.elements['.cleanupPreview'].disabled, true);
+    [...app.timers.values()][0].handler();
+    app.backup[2].resolve({ State: 'Completed' });
+    await settle();
+    assert.match(app.elements['.backupStatus'].textContent, /completed successfully/);
+    assert.equal(app.elements['.cleanupPreview'].disabled, false);
+    app.instance.onPause();
 });
 
 test('Catalog Refresh opens by default and can collapse and reopen with fresh status', async () => {
@@ -847,7 +964,7 @@ test('category interval dropdowns restore saved values and save changes without 
     const app = harness(true);
     app.elements['.tuneInRefresh'].open = true;
     const visit = app.instance.onResume();
-    app.reads[0].resolve({ RefreshSchedules: [{ Category: 'talk', IntervalHours: 24 }] });
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, RefreshSchedules: [{ Category: 'talk', IntervalHours: 24 }] });
     app.refresh[0].resolve({ SettingsLocked: false, Categories: [
         { Category: 'talk', Name: 'Talk' }, { Category: 'sports', Name: 'Sports' }] });
     await visit;
@@ -858,16 +975,17 @@ test('category interval dropdowns restore saved values and save changes without 
     assert.equal(sports.value, '0');
     talk.value = '0';
     talk.handlers.change();
-    sports.value = '12';
+    assert.ok(sports.childNodes.some(option => option.value === '720' && option.textContent === 'Every 30 days'));
+    sports.value = '720';
     sports.handlers.change();
     app.formHandlers.submit({ preventDefault() {} });
-    assert.equal(JSON.stringify(app.writes[0].config.RefreshSchedules), '[{"Category":"sports","IntervalHours":12}]');
+    assert.equal(JSON.stringify(app.writes[0].config.RefreshSchedules), '[{"Category":"sports","IntervalHours":720}]');
     assert.ok(app.refresh.every(request => request.options.type === 'GET'));
 });
 
 test('returning to saved settings opens the Control Panel with the category sections collapsed', async () => {
     const app = harness();
-    const sections = () => [app.elements['.categoriesSection'], app.elements['.localSection'],
+    const sections = () => [app.elements['.categoriesSection'], app.elements['.stationSelectionsSection'],
         ...app.elements['.selectors'].childNodes];
     const first = app.instance.onResume();
     app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: false });
@@ -885,6 +1003,114 @@ test('returning to saved settings opens the Control Panel with the category sect
     assert.equal(app.selectors.length, 0);
 });
 
+test('first save history is independent of the browsing checkbox and the settings lock', async () => {
+    const app = harness(false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: false, SettingsSaved: false });
+    await visit;
+    const global = app.elements['.globalSection'];
+    const categorySections = ['.browsingSection', '.categoriesSection', '.stationSelectionsSection']
+        .map(name => app.elements[name]);
+    const categoryPickers = () => app.elements['.selectors'].childNodes;
+    assert.ok(categorySections.every(section => section.open));
+    assert.ok(categoryPickers().some(section => section.open));
+    assert.equal(global.open, true);
+    assert.equal(global.attributes['data-saved'], 'false');
+    assert.equal(app.elements['.configurationCompleted'].checked, false);
+    assert.equal(app.elements['.configurationFields'].disabled, true);
+    assert.equal(app.elements['.hideRegionalGenres'].disabled, true);
+    assert.equal(app.requestInterval.disabled, true);
+    await open(app.elements['.selectors'].childNodes[0].descendants().find(node => node.tagName === 'details'));
+    assert.equal(app.selectors.length, 0);
+    enableBrowsing(app);
+    assert.equal(app.elements['.configurationFields'].disabled, false);
+    assert.equal(app.elements['.hideRegionalGenres'].disabled, false);
+    assert.equal(app.requestInterval.disabled, false);
+    assert.equal(app.elements['.refreshStart'].disabled, true);
+    app.formHandlers.submit({ preventDefault() {} });
+    app.writes[0].reject(new Error('save failed'));
+    await settle();
+    assert.equal(global.open, true);
+    assert.equal(global.attributes['data-saved'], 'false');
+    app.elements['.configurationCompleted'].checked = false;
+    app.elements['.configurationCompleted'].handlers.change();
+    app.formHandlers.submit({ preventDefault() {} });
+    app.writes[1].resolve('saved');
+    await settle();
+    assert.equal(global.open, false);
+    assert.equal(global.attributes['data-saved'], 'true');
+    assert.equal(app.elements['.browsingSection'].open, true);
+    assert.ok(categorySections.filter(section => section !== app.elements['.browsingSection'])
+        .concat(categoryPickers()).every(section => !section.open));
+    assert.equal(app.writes[1].config.ConfigurationCompleted, false);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    app.instance.onPause();
+    const next = app.instance.onResume();
+    app.reads[1].resolve({ SettingsSaved: true, SchemaVersion: 1, ConfigurationCompleted: false });
+    await next;
+    assert.equal(global.open, false);
+    assert.equal(app.elements['.browsingSection'].open, true);
+    assert.ok(categorySections.filter(section => section !== app.elements['.browsingSection'])
+        .concat(categoryPickers()).every(section => !section.open));
+    assert.equal(app.elements['.configurationFields'].disabled, true);
+});
+
+test('topic filters load lazily and save independent modes and selected IDs', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    enableBrowsing(app);
+    for (const [i, category, label, id] of [
+        [3, 'talk', 'Talk Topics', 'c1'], [4, 'sports', 'Sports & Leagues', 'c2'],
+        [5, 'podcast', 'Podcast Topics', 'c3']
+    ]) {
+        const [heading, mode, picker] = app.elements['.selectors'].childNodes[i].childNodes;
+        assert.equal(heading.textContent, label);
+        assert.equal(mode.value, 'all');
+        const root = picker.childNodes.find(node => node.tagName === 'details');
+        const savedChoices = picker.childNodes.find(node => node.className === 'tuneInSelectorSaved');
+        assert.ok(savedChoices && picker.childNodes.indexOf(root) < picker.childNodes.indexOf(savedChoices));
+        await open(root);
+        assert.equal(app.selectors.length, i - 3);
+        mode.value = 'selected';
+        mode.handlers.change();
+        const pending = open(root);
+        assert.equal(app.selectors.at(-1).options.url.params.Category, category);
+        app.selectors.at(-1).resolve({ Items: [{ Id: id, Name: 'Provider choice', CanSelect: true }] });
+        await pending;
+        root.descendants().find(node => node.textContent === 'Add').handlers.click();
+        assert.match(savedChoices.textContent, /Provider choice/);
+    }
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    const saved = app.writes[0].config;
+    for (const [mode, ids, id] of [
+        ['TalkMode', 'TalkIds', 'c1'], ['SportsMode', 'SportsIds', 'c2'], ['PodcastsMode', 'PodcastIds', 'c3']
+    ]) {
+        assert.equal(saved[mode], 'selected');
+        assert.deepEqual(Array.from(saved[ids]), [id]);
+    }
+});
+
+test('category outcomes keep their status text as well as color, and queued rows are neutral', async () => {
+    const app = harness(true);
+    app.elements['.tuneInRefresh'].open = true;
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve({ SettingsLocked: false, QueuedRequests: ['music'], Categories: [
+        { Category: 'talk', Name: 'Talk', State: 'Imported' },
+        { Category: 'sports', Name: 'Sports', State: 'Partial (applied)' },
+        { Category: 'podcast', Name: 'Podcasts', State: 'Failed' },
+        { Category: 'music', Name: 'Music', State: 'Imported' }
+    ] });
+    await visit;
+    const rows = app.elements['.tuneInRefreshCategories'].childNodes;
+    assert.deepEqual(rows.map(row => row.attributes['data-outcome']), ['Completed', 'Partial', 'Error', '']);
+    assert.deepEqual(rows.map(row => row.childNodes[0].textContent),
+        ['Talk: Imported', 'Sports: Partial (applied)', 'Podcasts: Failed', 'Music: Queued']);
+});
+
 test('settings lock protects pending edits and saves without blocking catalog refresh', async () => {
     const app = harness(true);
     app.elements['.tuneInRefresh'].open = true;
@@ -892,7 +1118,7 @@ test('settings lock protects pending edits and saves without blocking catalog re
     const save = app.elements['.button-submit'];
     const visit = app.instance.onResume();
     const categories = [{ Category: 'talk', Name: 'Talk', State: 'Imported' }];
-    app.reads[0].resolve({ Languages: [{ Id: 'l1', Name: 'English', Enabled: true }] });
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, Languages: [{ Id: 'l1', Name: 'English', Enabled: true }] });
     await visit;
     assert.equal(toggle.disabled, true);
     assert.equal(save.disabled, true);
@@ -934,16 +1160,15 @@ for (const phase of ['discovery', 'import']) test('refresh status identifies the
     app.reads[0].resolve({});
     app.refresh[0].resolve({
         State: 'Running', Phase: 'Importing', Category: 'music', Busy: true,
-        AutomaticRetry: 2, AutomaticRetryLimit: phase === 'import' ? 3 : 10,
-        AutomaticRetryPhase: phase, ImportTimeouts: phase === 'import' ? 2 : 0,
+        AutomaticRetry: 2, AutomaticRetryLimit: 3,
+        AutomaticRetryPhase: phase, AutomaticRetryReason: 'interruption', ImportTimeouts: 0,
         ImportMayHavePartiallyApplied: true
     });
     await visit;
     const text = app.elements['.refreshStatus'].textContent;
     assert.ok(text.includes('Running - Importing - Music. Automatic retry 2 of '
-        + (phase === 'import' ? 3 : 10) + ' after ' + phase + ' timed out'));
-    if (phase === 'import') assert.match(app.elements['.refreshDiagnosticsText'].textContent, /Import timeouts: 2/);
-    assert.doesNotMatch(text, /interrupted import/);
+        + '3 after ' + phase + ' was interrupted'));
+    assert.doesNotMatch(text, /timed out/);
     app.instance.onPause();
 });
 
@@ -1004,7 +1229,7 @@ test('partial discovery reports skipped links without implying an import', async
     assert.match(text, /Partial - Discovery incomplete; existing library left unchanged/);
     assert.match(app.elements['.refreshWork'].textContent, /1 \/ 2 categories checked/);
     assert.match(text, /7 malformed catalog links skipped/);
-    assert.match(text, /enable "Import valid results when catalog entries are skipped" in Catalog browsing, save, then refresh again/);
+    assert.match(text, /enable "Import Valid Results when catalog entries are skipped" in Global TuneIn Settings, save, then refresh again/);
     assert.match(text, /TuneIn returned HTTP 429 \(Too Many Requests\)/);
     assert.match(app.elements['.refreshDiagnosticsText'].textContent,
         /Skipped malformed TuneIn catalog links: 7 \(4 x Music: Invalid catalog fragment; 3 x Music: Invalid catalog link parameter: filter\)/);
@@ -1051,6 +1276,8 @@ test('a failed lock write leaves edits blocked until the server confirms the sta
     app.refresh[0].resolve({ SettingsLocked: false });
     await visit;
     const toggle = app.elements['.settingsLocked'];
+    const state = app.elements['.settingsLockState'];
+    assert.equal(state.textContent, 'Unlocked');
     toggle.checked = true;
     const locking = toggle.handlers.change();
     app.locks[0].reject(new Error('response lost'));
@@ -1062,6 +1289,7 @@ test('a failed lock write leaves edits blocked until the server confirms the sta
     assert.equal(toggle.checked, true);
     assert.equal(toggle.disabled, false);
     assert.equal(app.elements['.button-submit'].disabled, true);
+    assert.equal(state.textContent, 'Locked');
 });
 
 for (const outcome of ['locked', 'save failed', 'lock unconfirmed']) {
