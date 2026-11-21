@@ -69,6 +69,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         elements[section].open = open;
         elements[summary] = elements[section].appendChild(new Element('summary'));
     }
+    elements['.tuneInSettingsSave'] = elements['.button-submit'];
     for (const [summary, text, indicator] of [
         ['.refreshSummary', 'Catalog Refresh', '.refreshIndicator'],
         ['.maintenanceSummary', 'Maintenance', '.maintenanceIndicator']
@@ -191,18 +192,22 @@ test('all dashboard actions use native Emby buttons without plugin color overrid
     for (const attributes of buttons) {
         assert.match(attributes, /\bis="emby-button"/);
         assert.match(attributes, /\bclass="[^"]*\braised\b/);
+        assert.match(attributes, /\bbutton-submit\b/);
         assert.doesNotMatch(attributes, /\bstyle=/);
     }
+    const saveButtons = buttons.filter(attributes => /\btuneInSettingsSave\b/.test(attributes));
+    assert.equal(saveButtons.length, 1);
+    assert.match(saveButtons[0], /\btype="submit"/);
     const styles = html.match(/<style>([\s\S]*?)<\/style>/)[1];
     assert.doesNotMatch(styles, /[^{}]*(?:button|refreshCancel|refreshStart|refreshLogButton|refreshDismiss)[^{}]*\{/);
 });
 
-test('Catalog Refresh uses the native theme accent for its actions and inherits text color', () => {
+test('Catalog Refresh uses the native submit theme for its actions and inherits text color', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     for (const action of ['refreshStart', 'refreshCancel', 'refreshLogButton',
         'refreshResumeFirst', 'refreshNewFirst', 'refreshDismiss']) {
         const tag = html.match(new RegExp('<button\\b[^>]*\\b' + action + '\\b[^>]*>'))[0];
-        assert.match(tag, /\bbutton-accent\b/);
+        assert.match(tag, /\bbutton-submit\b/);
     }
     assert.match(html, /\.tuneInRefresh\s*\{\s*color:\s*inherit;\s*\}/);
 });
@@ -604,6 +609,7 @@ test('only explicit selector actions fetch branches and save multiple local sele
     ] });
     await loading;
     const buttons = section.descendants().filter(node => node.textContent === 'Add');
+    assert.ok(buttons.every(button => /\bbutton-submit\b/.test(button.className)));
     buttons.forEach(button => button.handlers.click());
     const controls = section.descendants().filter(node => node.tagName === 'input' && node.type === 'checkbox');
     assert.equal(controls.length, 2);
@@ -915,7 +921,7 @@ test('category counts show only filtered availability and Emby inventory left of
     assert.equal(rows[0].childNodes[1].childNodes[1].textContent, 'Refresh');
     assert.equal(rows[0].childNodes[1].childNodes[1].attributes.is, 'emby-button');
     assert.match(rows[0].childNodes[1].childNodes[1].className, /\braised\b/);
-    assert.match(rows[0].childNodes[1].childNodes[1].className, /\bbutton-accent\b/);
+    assert.match(rows[0].childNodes[1].childNodes[1].className, /\bbutton-submit\b/);
     assert.deepEqual(values(rows[0]).map(value => value.textContent), ['123 (partial)', '145']);
     assert.match(values(rows[0])[0].attributes.title, /lower bound/);
     assert.deepEqual(values(rows[1]).map(value => value.textContent), ['0', '0']);
@@ -1575,6 +1581,7 @@ test('saved station choices require selection and a confirmation dialog before d
     const dialog = savedColumn.descendants().find(node => node.tagName === 'dialog');
     assert.ok(deleteChoices && dialog);
     assert.equal(deleteChoices.textContent, 'Select Items for Delete');
+    assert.match(deleteChoices.className, /\bbutton-submit\b/);
     assert.equal(deleteChoices.disabled, true);
     const choices = savedColumn.descendants().filter(node => node.tagName === 'input');
     assert.equal(choices.length, 2);

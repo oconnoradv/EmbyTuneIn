@@ -26,11 +26,13 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal TuneInSelectorService(TuneInDirectory directory) { this.directory = directory; }
 
-        public Task<SelectorResult> Get(GetTuneInSelectors request)
+        // Emby's service dispatcher reliably awaits Task<object> for uncached async results.
+        public async Task<object> Get(GetTuneInSelectors request)
         {
             if (Request == null)
                 throw new UnauthorizedAccessException("TuneIn selectors require administrator access.");
-            return directory.SelectAsync(request.Category, request.Parent, request.Refresh, Request.CancellationToken);
+            return await directory.SelectAsync(request.Category, request.Parent, request.Refresh, Request.CancellationToken)
+                .ConfigureAwait(false);
         }
     }
 }

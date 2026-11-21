@@ -513,7 +513,7 @@
             </details>
             <br />
             <div>
-                <button is="emby-button" type="submit" class="raised button-submit block" disabled><span>Save</span></button>
+                <button is="emby-button" type="submit" class="raised button-submit tuneInSettingsSave block" disabled><span>Save</span></button>
             </div>
         </form>
         <details class="tuneInSection tuneInNeutralPanel tuneInRefresh">
@@ -526,9 +526,9 @@
                     <div><dt>Last progress</dt><dd class="refreshLastProgress">-</dd></div>
                 </dl>
                 <div class="tuneInRefreshActions">
-                    <button is="emby-button" type="button" class="raised button-accent refreshStart" disabled>Refresh all enabled categories</button>
-                    <button is="emby-button" type="button" class="raised button-accent refreshCancel" disabled>Cancel refresh</button>
-                    <button is="emby-button" type="button" class="raised button-accent refreshLogButton" disabled>Retrieve refresh log</button>
+                    <button is="emby-button" type="button" class="raised button-submit refreshStart" disabled>Refresh all enabled categories</button>
+                    <button is="emby-button" type="button" class="raised button-submit refreshCancel" disabled>Cancel refresh</button>
+                    <button is="emby-button" type="button" class="raised button-submit refreshLogButton" disabled>Retrieve refresh log</button>
                 </div>
                 <p class="refreshQueueNote" role="status" hidden></p>
                 <p class="refreshError" role="alert"></p>
@@ -547,9 +547,9 @@
                 <h3 id="tuneInRecoveryTitle">Choose which refresh runs first</h3>
                 <p id="tuneInRecoveryText" class="refreshRecoveryText"></p>
                 <form method="dialog" class="tuneInRecoveryActions">
-                    <button is="emby-button" type="button" class="raised button-accent refreshResumeFirst">Retry previous first</button>
-                    <button is="emby-button" type="button" class="raised button-accent refreshNewFirst">Prioritize new refresh</button>
-                    <button is="emby-button" type="submit" class="raised button-accent refreshDismiss" autofocus>Back</button>
+                    <button is="emby-button" type="button" class="raised button-submit refreshResumeFirst">Retry previous first</button>
+                    <button is="emby-button" type="button" class="raised button-submit refreshNewFirst">Prioritize new refresh</button>
+                    <button is="emby-button" type="submit" class="raised button-submit refreshDismiss" autofocus>Back</button>
                 </form>
             </dialog>
         </details>
@@ -574,9 +574,9 @@
                     <option value="presets">My Favorites</option>
                 </select>
                 <div class="tuneInCleanupActions">
-                    <button is="emby-button" type="button" class="raised backupStart" disabled>Backup Emby</button>
-                    <button is="emby-button" type="button" class="raised cleanupPreview" disabled>Preview cleanup</button>
-                    <button is="emby-button" type="button" class="raised cleanupCancel" disabled>Stop cleanup</button>
+                    <button is="emby-button" type="button" class="raised button-submit backupStart" disabled>Backup Emby</button>
+                    <button is="emby-button" type="button" class="raised button-submit cleanupPreview" disabled>Preview cleanup</button>
+                    <button is="emby-button" type="button" class="raised button-submit cleanupCancel" disabled>Stop cleanup</button>
                 </div>
                 <p class="backupStatus" role="status"></p>
                 <div class="cleanupConfirmation" hidden>
@@ -586,8 +586,8 @@
                         <span>I verified a successful backup.</span>
                     </label>
                     <div class="tuneInCleanupActions">
-                        <button is="emby-button" type="button" class="raised cleanupConfirm" disabled>Remove generated entries</button>
-                        <button is="emby-button" type="button" class="raised cleanupBack">Back</button>
+                        <button is="emby-button" type="button" class="raised button-submit cleanupConfirm" disabled>Remove generated entries</button>
+                        <button is="emby-button" type="button" class="raised button-submit cleanupBack">Back</button>
                     </div>
                 </div>
                 <p class="cleanupStatus" role="status"></p>

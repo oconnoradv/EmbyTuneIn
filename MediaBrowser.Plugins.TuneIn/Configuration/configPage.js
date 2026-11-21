@@ -45,7 +45,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         element.type = 'button';
         element.setAttribute('is', 'emby-button');
         element.textContent = text;
-        element.className = 'raised emby-button';
+        element.className = 'raised button-submit emby-button';
         element.addEventListener('click', action);
         return element;
     }
@@ -443,7 +443,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.hideRegionalGenres').disabled = catalogDisabled;
         instance.view.querySelector('.allowPartialCatalogImport').disabled = catalogDisabled;
         instance.view.querySelector('.apiRequestIntervalSeconds').disabled = catalogDisabled;
-        instance.view.querySelector('.button-submit').disabled = disabled;
+        instance.view.querySelector('.tuneInSettingsSave').disabled = disabled;
         instance.refreshCategoryRows.forEach(function (row) { row.schedule.disabled = catalogDisabled; });
         var toggle = instance.view.querySelector('.settingsLocked');
         toggle.disabled = typeof instance.settingsLocked !== 'boolean' || !!instance.lockChanging || !!instance.saving ||
@@ -694,7 +694,6 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 var row = document.createElement('li');
                 var caption = document.createElement('span');
                 var control = button('Refresh', function () { return doRefresh(instance, 'Start', item.Category); });
-                control.className += ' button-accent';
                 control.setAttribute('aria-label', 'Refresh ' + item.Name);
                 var actions = document.createElement('div');
                 actions.className = 'tuneInRefreshCategoryActions';

@@ -884,6 +884,29 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             await Assert.ThrowsAsync<ArgumentException>(() => service.Get(new GetTuneInSelectors { Category = "location", Parent = "r999" }));
         }
 
+        [Fact]
+        public async Task SelectorServiceReturnsPendingAndCachedResultsAsHostCompatibleTasks()
+        {
+            var upstream = new TaskCompletionSource<XDocument>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var calls = 0;
+            var config = Ready();
+            var directory = new TuneInDirectory(() => config, (_, __) =>
+            {
+                calls++;
+                return upstream.Task;
+            });
+            var service = new TuneInSelectorService(directory) { Request = Mock.Of<IRequest>() };
+            var request = new GetTuneInSelectors { Category = "location" };
+            var first = Assert.IsAssignableFrom<Task<object>>(service.Get(request));
+            Assert.False(first.IsCompleted);
+            upstream.SetResult(Opml("<outline type='link' text='Region' URL='https://opml.radiotime.com/Browse.ashx?id=r1'/>"));
+            var result = Assert.IsType<SelectorResult>(await first);
+            Assert.Equal("r1", Assert.Single(result.Items).Id);
+            var cached = Assert.IsAssignableFrom<Task<object>>(service.Get(request));
+            Assert.Same(result, await cached);
+            Assert.Equal(1, calls);
+        }
+
         [Theory]
         [InlineData("http://127.0.0.1/Browse.ashx?id=g1")]
         [InlineData("https://opml.radiotime.com:444/Browse.ashx?id=g1")]
