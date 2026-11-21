@@ -57,12 +57,21 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 else if (entry.Category == "music" || entry.Category == "language" || entry.Category == "location")
                 {
-                    foreach (var starting in StartingEntries(snapshot, entry.Category))
+                    if (snapshot.UsesSelectedSelections(entry.Category))
                     {
-                        var selection = snapshot.Selections(entry.Category).First(s => s.Id == starting.SelectionId);
-                        starting.Name = selection.Name ?? selection.Id;
-                        items.Add(Folder(snapshot, starting));
+                        foreach (var starting in StartingEntries(snapshot, entry.Category))
+                        {
+                            var selection = snapshot.Selections(entry.Category).First(s => s.Id == starting.SelectionId);
+                            starting.Name = selection.Name ?? selection.Id;
+                            items.Add(Folder(snapshot, starting));
+                        }
                     }
+                    else
+                    {
+                        foreach (var starting in StartingEntries(snapshot, entry.Category))
+                            items.AddRange(await BrowseAsync(snapshot, starting, token, session).ConfigureAwait(false));
+                    }
+                    items = Deduplicate(snapshot, items);
                 }
                 else
                 {
@@ -106,7 +115,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private async Task<List<ChannelItemInfo>> BrowseAsync(ConfigurationSnapshot snapshot, NavigationEntry entry,
             CancellationToken token, TuneInCatalogueSession session)
         {
-            if (IsLanguageMusicHub(entry))
+            if (IsLanguageMusicHub(entry) && snapshot.UsesSelectedSelections("music"))
                 return snapshot.Selections("music").Select(selection =>
                 {
                     var selected = new DirectoryRequest();
@@ -117,7 +126,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         MusicSelectionId = selection.Id, Request = selected, Name = selection.Name ?? selection.Id
                     });
                 }).ToList();
-            if (entry.Category == "language")
+            if (entry.Category == "language" && entry.SelectionId != null)
             {
                 var languages = await directory.SelectAsync("language", null, false, token, session).ConfigureAwait(false);
                 if (!languages.Items.Any(i => i.Id == entry.SelectionId))
@@ -298,12 +307,16 @@ namespace MediaBrowser.Plugins.TuneIn
                     request.Parameters.Remove("id");
                     request.Parameters["c"] = id == "c424724" ? "music" : id == "c424725" ? "talk" : "sports";
                 }
-                var tokens = (request.Parameters.GetValueOrDefault("filter") ?? "").Split(':')
-                    .Where(s => s.Length > 0 && !Regex.IsMatch(s, @"\Al[0-9]+\z")).ToList();
-                if (tokens.Any(s => !Regex.IsMatch(s,
-                    @"\A(s|p|topic|show|station|popular|topvoted|topclick|random|bit(32|64|128)[*-]?|up-(low|med|hi)|~[\p{L}\p{Nd}#])\z")))
-                    throw new InvalidDataException("TuneIn returned an unsupported language filter.");
-                request.Parameters["filter"] = string.Join(":", tokens.Concat(new[] { entry.SelectionId }));
+                if (entry.SelectionId != null)
+                {
+                    var tokens = (request.Parameters.GetValueOrDefault("filter") ?? "").Split(':')
+                        .Where(s => s.Length > 0 && !Regex.IsMatch(s, @"\Al[0-9]+\z")).ToList();
+                    if (tokens.Any(s => !Regex.IsMatch(s,
+                        @"\A(s|p|topic|show|station|popular|topvoted|topclick|random|bit(32|64|128)[*-]?|up-(low|med|hi)|~[\p{L}\p{Nd}#])\z")))
+                        throw new InvalidDataException("TuneIn returned an unsupported language filter.");
+                    tokens.Add(entry.SelectionId);
+                    request.Parameters["filter"] = string.Join(":", tokens);
+                }
             }
             else if (entry.Category == "local" && entry.SelectionId == "coordinates")
             {
@@ -357,7 +370,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 request.Parameters["c"] = "local";
                 entries.Add(new NavigationEntry { Category = category, SelectionId = "coordinates", Request = request });
             }
-            if (new[] { "local", "language", "location", "music" }.Contains(category))
+            else if (new[] { "local", "language", "location", "music" }.Contains(category)
+                && snapshot.UsesSelectedSelections(category))
             {
                 foreach (var selection in snapshot.Selections(category))
                 {
@@ -366,6 +380,14 @@ namespace MediaBrowser.Plugins.TuneIn
                     else request.Parameters["id"] = selection.Id;
                     entries.Add(new NavigationEntry { Category = category, SelectionId = selection.Id, Request = request });
                 }
+            }
+            else if (new[] { "local", "language", "location", "music" }.Contains(category))
+            {
+                var request = new DirectoryRequest();
+                if (category == "language") request.Parameters["c"] = "lang";
+                else if (category == "music") request.Parameters["c"] = "music";
+                else request.Parameters["id"] = "r0";
+                entries.Add(new NavigationEntry { Category = category, Request = request });
             }
             else
             {

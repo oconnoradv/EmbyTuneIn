@@ -320,6 +320,70 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public async Task AllSelectionCategoriesBrowseTheirFullProviderCategoryWithoutSavedChoices()
+        {
+            var config = Ready();
+            config.EnableLanguage = config.EnableLocation = config.EnableMusic = config.EnableLocalRadio = true;
+            config.LanguageMode = config.LocationMode = config.MusicMode = config.LocalMode = "all";
+            config.LocalRadioSource = "regions";
+            var requests = new List<DirectoryRequest>();
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                requests.Add(request);
+                if (request.Parameters.GetValueOrDefault("c") == "lang"
+                    && !request.Parameters.ContainsKey("filter"))
+                    return Task.FromResult(Opml("<outline type='link' text='English' URL='https://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=l1'/>"));
+                return Task.FromResult(Opml("<outline type='audio' text='All station' guide_id='s1'/>"));
+            });
+            var snapshot = directory.Snapshot();
+            var browser = new TuneInBrowsing(directory, _ => null);
+            foreach (var category in new[] { "language", "location", "music", "local" })
+            {
+                Assert.True(snapshot.Enabled(category));
+                var root = browser.CategoryRoot(snapshot, category);
+                var item = Assert.Single((await browser.GetItemsAsync(root.Id, Token)).Items);
+                var request = requests.Last();
+                if (category == "language") Assert.Equal("lang", request.Parameters["c"]);
+                else if (category == "music") Assert.Equal("music", request.Parameters["c"]);
+                else Assert.Equal("r0", request.Parameters["id"]);
+                if (category == "language")
+                {
+                    Assert.Equal("English", item.Name);
+                    var station = Assert.Single((await browser.GetItemsAsync(item.Id, Token)).Items);
+                    Assert.Equal("All station", station.Name);
+                    Assert.Equal("l1", requests.Last().Parameters["filter"]);
+                }
+                else Assert.Equal("All station", item.Name);
+            }
+            Assert.Empty(snapshot.Selections("language"));
+            Assert.Empty(snapshot.Selections("location"));
+            Assert.Empty(snapshot.Selections("music"));
+            Assert.Empty(snapshot.Selections("local"));
+        }
+
+        [Fact]
+        public void SelectedSelectionModeRequiresAValidSavedChoice()
+        {
+            var config = Ready();
+            config.EnableMusic = true;
+            config.MusicMode = "selected";
+            Assert.False(new ConfigurationSnapshot(config).Enabled("music"));
+            config.MusicMode = "invalid";
+            Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+        }
+
+        [Fact]
+        public void LegacyCoordinatesWithoutSavedRegionsRemainAvailable()
+        {
+            var config = Ready();
+            config.EnableLocalRadio = true;
+            config.UseCoordinates = true;
+            config.LatLon = "10,20";
+            ConfigurationSnapshot.Validate(config);
+            Assert.Equal("coordinates", new ConfigurationSnapshot(config).LocalSource);
+        }
+
+        [Fact]
         public void TopicScopesInvalidateOnlyRelatedCategoryRebindingAndKeepAllCompatible()
         {
             var config = Ready();
@@ -424,7 +488,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             config.EnableLanguage = true;
             config.EnableLocalRadio = true;
             var roots = (await channel.GetChannelItems(new InternalChannelItemQuery(), Token)).Items;
-            Assert.Equal("Talk", Assert.Single(roots).Name);
+            Assert.Equal(new[] { "By Language", "Talk" }, roots.Select(root => root.Name));
             Assert.Equal(0, calls);
             await Assert.ThrowsAsync<InvalidOperationException>(() => channel.GetChannelItemMediaInfo("stream_http://localhost", Token));
         }

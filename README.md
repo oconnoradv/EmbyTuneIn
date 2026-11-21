@@ -52,9 +52,7 @@ the files.
 Download the [music refresh resilience RC1](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.1).
 If you downloaded an earlier RC1, download the replacement assets: the release
 tag and assembly version are unchanged, but the source commit and checksums differ.
-The branch includes a later cleanup status update interval of 500 attempts;
-the currently published RC1 reports every 2,000 attempts instead. Check
-`build-info.json` when comparing a download with the branch.
+Check `build-info.json` when comparing a download with the branch.
 
 1. Stop Emby and back up the existing plugin DLL, TuneIn configuration,
    `TuneIn.refresh.xml` (including `.discovery` and `.recovery` sidecars), and
@@ -79,10 +77,8 @@ selections to expose, keep **Enable TuneIn Station Filtering** enabled, and **Sa
 
 | Category | Required configuration |
 | --- | --- |
-| Music | At least one enabled saved genre selection |
-| By Language | At least one enabled saved language selection |
-| By Location | At least one enabled saved location selection |
-| Local Radio | One source: saved cities/regions or coordinates |
+| Music, By Language, By Location | Each defaults to All, or can use Selected only with saved choices |
+| Local Radio | One source: all or selected cities/regions, or coordinates |
 | Talk, Sports, Podcasts | Enable each category independently |
 | My Favorites | A TuneIn username |
 
@@ -91,12 +87,15 @@ one. If its source is ambiguous, choose regions or coordinates and save.
 Other categories remain independent. Coordinates use decimal latitude and
 longitude separated by a comma, within -90..90 and -180..180.
 
-Open a category to load its first level of choices; expand a nested branch to
-load its choices. **Add**, at the right of a row,
-saves a selection without expanding it. Saved paths can be individually enabled
-or removed, with up to 100 selections per selector. Choices appear in a
-fixed-height scrolling panel. Temporary branch failures retry once; incomplete
-branches are marked, and saved choices are preserved.
+Music, By Language, By Location, and Local Cities and Regions use **All** when
+no existing choices are saved. Existing saved choices retain **Selected only**.
+Choose **Selected only** to browse choices from TuneIn; **Add** selects an
+option, with up to 100 per selector. To remove choices, check them in the
+Saved choices column, select **Delete Selected Items**, and confirm. Save
+persists the changes; start Catalog Refresh to update the library.
+Choices appear in a fixed-height scrolling panel. Temporary branch failures
+retry once; incomplete branches are marked, and saved choices are preserved.
+Talk, Sports, and Podcasts also default to **All** and support **Selected only**.
 By Language follows TuneIn's group links for each selected language; those
 groups are not additional language selections. The Music, Talk, and Sports
 groups still respect their corresponding saved category scopes.
@@ -105,6 +104,8 @@ The **Settings** switch, beside **Global TuneIn Settings**, prevents accidental
 edits and saves. The lock persists across browser sessions and server restarts.
 **Save** locks settings after a successful save; switch it off to edit again.
 The switch shows **Locked** in green or **Unlocked** in red.
+Saving a changed setting in **TuneIn Station Filtering** opens **Catalog Refresh**
+automatically.
 Global and filtering settings, including the lock switch, cannot be changed while
 a catalog refresh or cleanup is active, or while refresh status is unavailable.
 Locking does not save pending changes or stop a refresh. **Station Selections** groups Music Genres, Languages, Locations,
@@ -137,11 +138,10 @@ Both checkboxes default to checked when the settings are absent. Explicitly
 saved unchecked choices remain unchanged. Changing these options does not
 change existing navigation IDs.
 
-Talk, Sports, and Podcasts default to **All**. Choose **Selected only** in the
-corresponding selector to load options from TuneIn when the category is open.
-Saved choices stay below the browser controls.
-Only selected branches still offered by the provider are included. Empty or
-stale selections do not fall back to **All**.
+Talk, Sports, and Podcasts default to **All**. Choose **Selected only** to load
+options from TuneIn when the category is open. Saved choices appear beside the
+browser controls, or below them on a narrow screen. Empty or stale selections
+do not fall back to **All**.
 
 Browsing and playback enforce the saved category and selection scopes,
 including nested Music, Talk, and Sports items under By Language. Navigation

@@ -91,6 +91,12 @@
             background-color: var(--tunein-dialog-background, Canvas);
             color: var(--tunein-dialog-text, CanvasText);
         }
+        .tuneInSelectorDeleteDialog::backdrop {
+            background: rgb(0 0 0 / .55);
+        }
+        .tuneInSelectorDeleteDialog h3 {
+            margin-block-start: 0;
+        }
         .tuneInRecoveryActions {
             display: flex;
             flex-wrap: wrap;
@@ -102,7 +108,8 @@
         .tuneInPanelLayout {
             max-width: 80ch;
         }
-        .status[data-configuration-required="true"] {
+        .status[data-configuration-required="true"],
+        .status.stationDeletionNotice:not([hidden]) {
             padding: .65em .85em;
             border: 1px solid #b97820;
             border-radius: .35em;
@@ -312,57 +319,57 @@
             margin: .2em 0 0;
             font-weight: 600;
         }
-        @supports selector(details::details-content) {
-            .tuneInSelectors { container-type: inline-size; }
-            .tuneInSelectorCategory[open] {
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) auto auto;
-                align-items: baseline;
-                gap: .35em .6em;
-                border: 1px solid var(--tunein-neutral-border);
-                border-radius: .4em;
-                padding: .6em;
-            }
-            .tuneInSelectorCategory[open]::details-content,
-            .tuneInSelectorPicker:not([hidden]),
-            .tuneInSelectorRoot,
-            .tuneInSelectorRoot[open]::details-content {
-                display: contents;
-            }
-            .tuneInSelectorCategory > .tuneInSectionLabel {
-                grid-area: 1 / 1;
-                overflow-wrap: anywhere;
-            }
-            .tuneInSelectorMode { grid-area: 1 / 2; }
-            .tuneInSelectors .tuneInSelectorRoot > summary {
-                grid-area: 1 / 3;
-                justify-self: end;
-                padding: .25em;
-            }
-            .tuneInSelectorPicker > .fieldDescription,
-            .tuneInSelectorRoot > .tuneInSelectorWindow,
-            .tuneInSelectorSaved {
-                grid-column: 1 / -1;
-            }
-            @container (max-width: 35em) {
-                .tuneInSelectorCategory[open] {
-                    grid-template-columns: minmax(0, 1fr) auto;
-                }
-                .tuneInSelectors .tuneInSelectorRoot > summary { grid-column: 2; }
-                .tuneInSelectorMode { grid-area: 1 / 2; }
-                .tuneInSelectorMode + .tuneInSelectorPicker .tuneInSelectorRoot > summary { grid-row: 2; }
-            }
-            @container (max-width: 18em) {
-                .tuneInSelectorCategory[open] {
-                    grid-template-columns: minmax(0, 1fr);
-                }
-                .tuneInSelectorMode,
-                .tuneInSelectors .tuneInSelectorRoot > summary,
-                .tuneInSelectorMode + .tuneInSelectorPicker .tuneInSelectorRoot > summary {
-                    grid-area: auto / 1;
-                    justify-self: end;
-                    max-width: 100%;
-                }
+        .tuneInSelectors { container-type: inline-size; }
+        .tuneInSelectorCategory[open] {
+            border: 0;
+            padding: 0;
+        }
+        .tuneInSelectorCategory > summary {
+            overflow-wrap: anywhere;
+        }
+        .tuneInSelectorMode {
+            display: block;
+            max-inline-size: 100%;
+            margin-block: .5em;
+        }
+        .tuneInSelectorColumns {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: start;
+            gap: 1em;
+        }
+        .tuneInSelectorColumns[data-mode="all"] {
+            grid-template-columns: minmax(0, 1fr);
+        }
+        .tuneInSelectorPicker,
+        .tuneInSelectorSavedColumn {
+            min-inline-size: 0;
+        }
+        .tuneInSelectorSavedColumn h3 {
+            margin: .2em 0 .6em;
+        }
+        .tuneInSelectorSavedActions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: .5em;
+            margin-block-end: .5em;
+        }
+        .tuneInSelectorSavedChoice {
+            padding-block: .25em;
+            overflow-wrap: anywhere;
+        }
+        .tuneInSelectorRemovalChoice {
+            display: flex;
+            align-items: center;
+            gap: .5em;
+        }
+        .tuneInSelectorRemovalChoice span {
+            overflow-wrap: anywhere;
+        }
+        @container (max-width: 42em) {
+            .tuneInSelectorColumns {
+                grid-template-columns: minmax(0, 1fr);
+                gap: .5em;
             }
         }
         .tuneInSelectors .tuneInSelectorWindow {
@@ -423,6 +430,7 @@
         <div class="auto-center tuneInPanelLayout">
         <form>
             <p class="status" role="status" aria-live="polite"></p>
+            <p class="status stationDeletionNotice" role="status" aria-live="polite" hidden></p>
             <p class="status catalogRefreshPrompt" role="status" hidden></p>
             <div class="tuneInSection tuneInSectionBox tuneInGlobalPanel">
             <details class="tuneInSection tuneInGlobal" open>
@@ -494,7 +502,7 @@
             <details class="tuneInSection">
                 <summary class="stationSelectionsSummary">Station Selections</summary>
                 <div class="tuneInSectionBox">
-                <p>Music, By Language, and By Location require enabled saved selections. Open a selector to see its choices, then expand a branch or add a selection.</p>
+                <p>Choose All or Selected only for each browser category. Open a selector to browse TuneIn choices and add selections when Selected only is active.</p>
                 <div class="selectors tuneInSelectors"></div>
                 </div>
             </details>

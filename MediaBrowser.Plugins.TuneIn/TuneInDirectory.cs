@@ -21,6 +21,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private static readonly XmlSerializer Serializer = new XmlSerializer(typeof(PluginConfiguration));
         private static readonly XmlSerializer ScopeSerializer = CreateScopeSerializer();
         private static readonly string[] CategoryKeys = { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
+        private static readonly string[] SelectionCategories = { "local", "music", "language", "location" };
         private static readonly int[] ScheduleHours = { 6, 12, 24, 168, 720 };
         public PluginConfiguration Value { get; }
         public string Key { get; }
@@ -33,12 +34,28 @@ namespace MediaBrowser.Plugins.TuneIn
                 using (var reader = new StringReader(writer.ToString()))
                     Value = (PluginConfiguration)Serializer.Deserialize(reader);
                 writer.GetStringBuilder().Clear();
-                ScopeSerializer.Serialize(writer, Value);
+                var keyValue = (PluginConfiguration)Serializer.Deserialize(new StringReader(
+                    SerializeConfiguration(Value)));
+                foreach (var category in SelectionCategories.Where(category => !UsesSelectedSelections(keyValue, category)))
+                    SetSelections(keyValue, category, new List<CatalogSelection>());
+                ScopeSerializer.Serialize(writer, keyValue);
                 // All retains the exact legacy XML hash, including when inactive choices are saved.
                 foreach (var category in TopicCategories.Where(UsesSelectedTopics))
                     writer.Write("\n" + category + ":selected:" + string.Join(",", TopicIds(category)));
+                foreach (var category in SelectionCategories.Where(category =>
+                    UsesSelectedSelections(Value, category) && !ConfiguredSelections(Value, category).Any(s => s != null && s.Enabled)))
+                    writer.Write("\n" + category + ":selected");
                 using (var hash = SHA256.Create())
                     Key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(writer.ToString()))).Replace("-", "");
+            }
+        }
+
+        private static string SerializeConfiguration(PluginConfiguration value)
+        {
+            using (var writer = new StringWriter(CultureInfo.InvariantCulture))
+            {
+                Serializer.Serialize(writer, value);
+                return writer.ToString();
             }
         }
 
@@ -79,6 +96,32 @@ namespace MediaBrowser.Plugins.TuneIn
         private static List<string> ConfiguredTopicIds(PluginConfiguration value, string category) =>
             category == "talk" ? value.TalkIds : category == "sports" ? value.SportsIds : value.PodcastIds;
 
+        private static string SelectionMode(PluginConfiguration value, string category) =>
+            category == "language" ? value.LanguageMode : category == "location" ? value.LocationMode
+                : category == "music" ? value.MusicMode : value.LocalMode;
+
+        private static List<CatalogSelection> ConfiguredSelections(PluginConfiguration value, string category) =>
+            (category == "music" ? value.Music : category == "language" ? value.Languages
+                : category == "location" ? value.Locations : value.LocalCities) ?? new List<CatalogSelection>();
+
+        private static void SetSelections(PluginConfiguration value, string category, List<CatalogSelection> selections)
+        {
+            if (category == "music") value.Music = selections;
+            else if (category == "language") value.Languages = selections;
+            else if (category == "location") value.Locations = selections;
+            else value.LocalCities = selections;
+        }
+
+        private static bool UsesSelectedSelections(PluginConfiguration value, string category)
+        {
+            if (!SelectionCategories.Contains(category)) return false;
+            var mode = SelectionMode(value, category);
+            if (string.Equals(mode, "selected", StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(mode, "all", StringComparison.OrdinalIgnoreCase)) return false;
+            if (!string.IsNullOrEmpty(mode)) return true;
+            return ConfiguredSelections(value, category).Count > 0;
+        }
+
         internal bool UsesSelectedTopics(string category)
         {
             if (!IsTopicCategory(category)) return false;
@@ -93,8 +136,9 @@ namespace MediaBrowser.Plugins.TuneIn
                     .Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal)
                 : Enumerable.Empty<string>();
 
-        internal bool UsesSelections(string category) => UsesSelectedTopics(category)
-            || category == "local" || category == "music" || category == "language" || category == "location";
+        internal bool UsesSelectedSelections(string category) => UsesSelectedSelections(Value, category);
+
+        internal bool UsesSelections(string category) => UsesSelectedTopics(category) || UsesSelectedSelections(category);
 
         private void CopyTopicScope(PluginConfiguration scope, string category)
         {
@@ -153,7 +197,19 @@ namespace MediaBrowser.Plugins.TuneIn
                 default: throw new ArgumentException("Invalid TuneIn category.", nameof(category));
             }
             if (IsTopicCategory(category)) CopyTopicScope(scope, category);
+            if (SelectionCategories.Contains(category))
+                SetSelectionMode(scope, category, UsesSelectedSelections(category) ? "selected" : "all");
+            if (category == "language")
+                scope.MusicMode = UsesSelectedSelections("music") ? "selected" : "all";
             return new ConfigurationSnapshot(scope).Key;
+        }
+
+        private static void SetSelectionMode(PluginConfiguration value, string category, string mode)
+        {
+            if (category == "music") value.MusicMode = mode;
+            else if (category == "language") value.LanguageMode = mode;
+            else if (category == "location") value.LocationMode = mode;
+            else value.LocalMode = mode;
         }
         internal static bool ValidSchedule(CategoryRefreshSchedule schedule) =>
             schedule != null && CategoryKeys.Contains(schedule.Category) && ScheduleHours.Contains(schedule.IntervalHours);
@@ -164,9 +220,9 @@ namespace MediaBrowser.Plugins.TuneIn
             switch (category)
             {
                 case "local": return Value.EnableLocalRadio && LocalSource != null;
-                case "music": return Value.EnableMusic && Selections(category).Any();
-                case "language": return Value.EnableLanguage && Selections(category).Any();
-                case "location": return Value.EnableLocation && Selections(category).Any();
+                case "music": return Value.EnableMusic && (!UsesSelectedSelections(category) || Selections(category).Any());
+                case "language": return Value.EnableLanguage && (!UsesSelectedSelections(category) || Selections(category).Any());
+                case "location": return Value.EnableLocation && (!UsesSelectedSelections(category) || Selections(category).Any());
                 case "talk": return Value.EnableTalk;
                 case "sports": return Value.EnableSports;
                 case "podcast": return Value.EnablePodcasts;
@@ -177,17 +233,18 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public IEnumerable<CatalogSelection> Selections(string category)
         {
+            if (!UsesSelectedSelections(category)) return Enumerable.Empty<CatalogSelection>();
             if (category == "local" && LocalSource != "regions") return Enumerable.Empty<CatalogSelection>();
-            var items = category == "music" ? Value.Music : category == "language" ? Value.Languages
-                : category == "location" ? Value.Locations : category == "local" ? Value.LocalCities : null;
+            var items = ConfiguredSelections(Value, category);
             return (items ?? new List<CatalogSelection>()).Where(s => s != null && s.Enabled
                 && ValidId(s.Id, category)).GroupBy(s => s.Id).Select(g => g.First());
         }
 
         private static string ResolveLocalSource(PluginConfiguration value)
         {
-            var regions = value.LocalCities?.Any(s => s != null && s.Enabled && ValidId(s.Id, "local")) == true;
-            if (value.LocalRadioSource == "regions") return regions && !value.UseCoordinates ? "regions" : null;
+            var regions = ConfiguredSelections(value, "local").Any(s => s != null && s.Enabled && ValidId(s.Id, "local"));
+            var hasRegionSource = !UsesSelectedSelections(value, "local") || regions;
+            if (value.LocalRadioSource == "regions") return hasRegionSource && !value.UseCoordinates ? "regions" : null;
             if (value.LocalRadioSource == "coordinates")
                 return value.UseCoordinates && TryCoordinates(value.LatLon, out _) ? "coordinates" : null;
             if (!string.IsNullOrEmpty(value.LocalRadioSource)) return null;
@@ -227,7 +284,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 || schedules.Select(schedule => schedule.Category).Distinct(StringComparer.Ordinal).Count() != schedules.Count))
                 throw new ArgumentException("Invalid TuneIn category refresh schedule.");
             if (value.EnableLocalRadio && ResolveLocalSource(value) == null)
-                throw new ArgumentException("Choose one Local Radio source: enabled regions or valid coordinates.");
+                throw new ArgumentException("Choose one Local Radio source: all or selected regions, or valid coordinates.");
             if ((value.Username ?? "").Length > 128)
                 throw new ArgumentException("TuneIn username exceeds 128 characters.");
             foreach (var category in TopicCategories)
@@ -240,10 +297,13 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (ids != null && (ids.Count > 100 || ids.Any(id => !ValidId(id, category))))
                     throw new ArgumentException("Invalid or excessive TuneIn topic selections.");
             }
-            foreach (var category in new[] { "music", "language", "location", "local" })
+            foreach (var category in SelectionCategories)
             {
-                var items = category == "music" ? value.Music : category == "language" ? value.Languages
-                    : category == "location" ? value.Locations : value.LocalCities;
+                var mode = SelectionMode(value, category);
+                if (!string.IsNullOrEmpty(mode) && !string.Equals(mode, "all", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(mode, "selected", StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("Invalid TuneIn selection mode.");
+                var items = ConfiguredSelections(value, category);
                 if ((items?.Count ?? 0) > 100 || (items ?? new List<CatalogSelection>()).Any(s =>
                     s == null || !ValidId(s.Id, category) || (s.Name ?? "").Length > 256
                     || (s.Path ?? "").Length > 2048 || (s.AncestorIds?.Count ?? 0) > 20
@@ -522,7 +582,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 || !snapshot.UsesSelections(entry.Category)
                 : entry.SelectionId == "coordinates" ? entry.Category == "local" && snapshot.LocalSource == "coordinates"
                     : snapshot.UsesSelectedTopics(entry.Category) ? snapshot.TopicIds(entry.Category).Contains(entry.SelectionId)
-                        : snapshot.Selections(entry.Category).Any(s => s.Id == entry.SelectionId));
+                        : snapshot.UsesSelectedSelections(entry.Category)
+                            && snapshot.Selections(entry.Category).Any(s => s.Id == entry.SelectionId));
 
         internal static bool LanguageContentAllowed(ConfigurationSnapshot snapshot, NavigationEntry entry)
         {
@@ -534,7 +595,9 @@ namespace MediaBrowser.Plugins.TuneIn
             var group = TuneInBrowsing.LanguageGroup(entry, entry.Request);
             if (group != "language" && !snapshot.Enabled(group)) return false;
             if (group != "music") return entry.MusicSelectionId == null;
-            if (entry.MusicSelectionId == null) return TuneInBrowsing.IsLanguageMusicHub(entry);
+            if (entry.MusicSelectionId == null)
+                return !snapshot.UsesSelectedSelections("music") || TuneInBrowsing.IsLanguageMusicHub(entry);
+            if (!snapshot.UsesSelectedSelections("music")) return false;
             if (!snapshot.Selections("music").Any(s => s.Id == entry.MusicSelectionId)) return false;
             if (entry.StationId != null) return entry.Request == null;
             var id = entry.Request?.Parameters.GetValueOrDefault("id");

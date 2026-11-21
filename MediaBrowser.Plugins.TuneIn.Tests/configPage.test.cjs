@@ -49,7 +49,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.apiRequestIntervalSeconds': requestInterval };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
-        '.catalogRefreshPrompt',
+        '.catalogRefreshPrompt', '.stationDeletionNotice',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
         '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
@@ -178,6 +178,12 @@ function enableBrowsing(app) {
     control.handlers.change();
 }
 
+function selectOnly(app, index) {
+    const mode = app.elements['.selectors'].childNodes[index].childNodes[1];
+    mode.value = 'selected';
+    return mode.handlers.change();
+}
+
 test('all dashboard actions use native Emby buttons without plugin color overrides', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     const buttons = [...html.matchAll(/<button\b([^>]*)>/g)].map(match => match[1]);
@@ -202,6 +208,14 @@ test('main settings, refresh, and maintenance share one width container', () => 
     assert.match(html, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.tuneInActivity\s*\{\s*animation:\s*none/);
 });
 
+test('expanded station selectors use two responsive columns without a category outline', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const styles = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+    assert.match(styles, /\.tuneInSelectorCategory\[open\]\s*\{\s*border:\s*0;\s*padding:\s*0;/);
+    assert.match(styles, /\.tuneInSelectorColumns\s*\{\s*display:\s*grid;\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+    assert.match(styles, /@container \(max-width: 42em\)\s*\{\s*\.tuneInSelectorColumns\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+});
+
 test('first activation opens and loads Language and Location even when native click defaults are cancelled', async () => {
     const app = harness();
     const visit = app.instance.onResume();
@@ -210,6 +224,7 @@ test('first activation opens and loads Language and Location even when native cl
     enableBrowsing(app);
     for (const index of [0, 1]) {
         const section = app.elements['.selectors'].childNodes[index];
+        selectOnly(app, index);
         const root = section.descendants().find(node => node.tagName === 'details');
         const summary = root.childNodes[0];
         let prevented = false;
@@ -250,6 +265,7 @@ test('opening every selected category immediately loads its first level', async 
     for (const [index, category] of ['language', 'location', 'music', 'talk', 'sports', 'podcast', 'local'].entries()) {
         const section = app.elements['.selectors'].childNodes[index];
         section.open = false;
+        if ([0, 1, 2, 6].includes(index)) selectOnly(app, index);
         const root = section.descendants().find(node => node.tagName === 'details');
         const loading = section.childNodes[0].handlers.click({ preventDefault() {} });
         assert.equal(section.open, true);
@@ -287,6 +303,7 @@ test('closing a category cancels its scheduled automatic retry', async () => {
     await visit;
     enableBrowsing(app);
     const section = app.elements['.selectors'].childNodes[0];
+    selectOnly(app, 0);
     section.open = false;
     const loading = section.childNodes[0].handlers.click({ preventDefault() {} });
     app.selectors[0].reject({ status: 503 });
@@ -304,6 +321,7 @@ test('a selector authorization failure remains visible without an automatic retr
     await visit;
     enableBrowsing(app);
     const section = app.elements['.selectors'].childNodes[2];
+    selectOnly(app, 2);
     section.open = false;
     const loading = section.childNodes[0].handlers.click({ preventDefault() {} });
     app.selectors[0].reject({ status: 403 });
@@ -320,6 +338,7 @@ test('an open selector retries a transient first failure once without a second c
     app.reads[0].resolve({});
     await visit;
     enableBrowsing(app);
+    selectOnly(app, 1);
     const root = app.elements['.selectors'].childNodes[1].descendants().find(node => node.tagName === 'details');
     const loading = open(root);
     app.selectors[0].reject({ status: 503 });
@@ -346,6 +365,7 @@ test('selector retry is bounded and does not send requests after leaving setting
         app.reads[0].resolve({});
         await visit;
         enableBrowsing(app);
+        selectOnly(app, 0);
         const root = app.elements['.selectors'].childNodes[0].descendants().find(node => node.tagName === 'details');
         const loading = open(root);
         app.selectors[0].reject({ response: { status: 502 } });
@@ -558,6 +578,10 @@ test('only explicit selector actions fetch branches and save multiple local sele
     const section = app.elements['.selectors'].childNodes.find(node =>
         node.childNodes[0].textContent === 'Local Cities and Regions');
     assert.equal(section.tagName, 'details');
+    const mode = section.childNodes[1];
+    assert.equal(mode.value, 'all');
+    mode.value = 'selected';
+    mode.handlers.change();
     const root = section.descendants().find(node => node.tagName === 'details');
     const loading = open(root);
     assert.equal(open(root), loading);
@@ -583,8 +607,62 @@ test('only explicit selector actions fetch branches and save multiple local sele
     assert.equal(app.writes[0].config.ConfigurationCompleted, true);
     assert.equal(app.writes[0].config.EnableLocalRadio, true);
     assert.deepEqual(Array.from(app.writes[0].config.LocalCities, item => item.Id), ['r1', 'r2']);
-    assert.equal(app.writes[0].config.LocalCities[1].Enabled, false);
+    assert.equal(app.writes[0].config.LocalCities[1].Enabled, true);
     assert.equal(app.selectors.length, 1);
+});
+
+test('browser selectors use All or Selected only and save selected branches', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    enableBrowsing(app);
+    for (const [index, label, modeName, listName, id] of [
+        [0, 'By Language', 'LanguageMode', 'Languages', 'l1'],
+        [1, 'By Location', 'LocationMode', 'Locations', 'r1'],
+        [2, 'Music Genres', 'MusicMode', 'Music', 'g1'],
+        [6, 'Local Cities and Regions', 'LocalMode', 'LocalCities', 'r2']
+    ]) {
+        const section = app.elements['.selectors'].childNodes[index];
+        const [heading, mode, columns] = section.childNodes;
+        assert.equal(heading.textContent, label);
+        assert.equal(mode.value, 'all');
+        const [browseColumn, savedColumn] = columns.childNodes;
+        assert.equal(browseColumn.hidden, true);
+        mode.value = 'selected';
+        mode.handlers.change();
+        const root = browseColumn.childNodes.find(node => node.tagName === 'details');
+        const pending = open(root);
+        const request = app.selectors.at(-1);
+        assert.equal(request.options.url.params.Category,
+            index === 0 ? 'language' : index === 1 ? 'location' : index === 2 ? 'music' : 'local');
+        request.resolve({ Items: [{ Id: id, Name: label + ' choice', Path: label + ' choice',
+            AncestorIds: [], CanSelect: true }] });
+        await pending;
+        root.descendants().find(node => node.textContent === 'Add').handlers.click();
+        assert.match(savedColumn.childNodes.find(node => node.className === 'tuneInSelectorSaved').textContent, /choice/);
+        assert.equal(app.instance.config[modeName], 'selected');
+        assert.equal(app.instance.config[listName][0].Id, id);
+    }
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    for (const key of ['LanguageMode', 'LocationMode', 'MusicMode', 'LocalMode'])
+        assert.equal(app.writes[0].config[key], 'selected');
+});
+
+test('Local Radio All mode accepts the Regions source without saved regions', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    enableBrowsing(app);
+    app.instance.view.querySelector('[data-category="EnableLocalRadio"]').checked = true;
+    app.elements['.localSource'].value = 'regions';
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.writes.length, 1);
+    assert.equal(app.writes[0].config.LocalRadioSource, 'regions');
+    assert.deepEqual(Array.from(app.writes[0].config.LocalCities || []), []);
 });
 
 test('browsing options default checked and preserve saved choices without starting a refresh', async () => {
@@ -635,6 +713,7 @@ test('stale selector results do not overwrite a later visit', async () => {
     app.reads[0].resolve({});
     await first;
     enableBrowsing(app);
+    selectOnly(app, 0);
     const root = app.elements['.selectors'].childNodes[0].descendants().find(node => node.tagName === 'details');
     const loading = open(root);
     app.instance.onPause();
@@ -654,6 +733,7 @@ test('a language branch retries independently, caches on reopening, and offers o
     app.reads[0].resolve({});
     await visit;
     enableBrowsing(app);
+    selectOnly(app, 0);
     const section = app.elements['.selectors'].childNodes[0];
     const root = section.descendants().find(node => node.tagName === 'details');
     const first = open(root);
@@ -675,7 +755,7 @@ test('a language branch retries independently, caches on reopening, and offers o
     open(child);
     assert.equal(app.selectors.length, 3);
     section.descendants().find(node => node.textContent === 'Add' && node.tagName === 'button').handlers.click();
-    assert.match(section.childNodes[1].textContent, /Arabic/);
+    assert.match(section.childNodes[2].childNodes[1].childNodes.find(node => node.className === 'tuneInSelectorSaved').textContent, /Arabic/);
 });
 
 test('status polls once per visit, drains prior requests and updates only the current view', async () => {
@@ -875,7 +955,7 @@ test('In Emby keeps last known values and timestamps when the settings screen re
     }
 });
 
-test('collapsing browsing settings keeps choices; reopening categories loads their choices', async () => {
+test('collapsing browsing settings keeps choices without loading All-mode selectors', async () => {
     const app = harness();
     const visit = app.instance.onResume();
     app.reads[0].resolve({ EnableTalk: true, LatLon: '1,2', Music: [{ Id: 'g1', Name: 'Rock' }] });
@@ -893,12 +973,39 @@ test('collapsing browsing settings keeps choices; reopening categories loads the
         summary.handlers.click({ preventDefault() {} });
         assert.equal(summary.parentNode.open, true);
     }
-    assert.equal(app.selectors.length, 4);
-    app.selectors.forEach(request => request.resolve({ Items: [] }));
+    assert.equal(app.selectors.length, 0);
     await settle();
     assert.match(music.textContent, /Rock/);
     assert.equal(app.latLon.value, '1,2');
     assert.ok(app.elements['.categories'].descendants().some(item => item.checked));
+});
+
+test('saving opens Catalog Refresh only when Station Filtering settings changed', async () => {
+    const savedConfig = {
+        SchemaVersion: 1, ConfigurationCompleted: true,
+        EnableLocalRadio: false, EnableMusic: false, EnableLanguage: false, EnableLocation: false,
+        EnableTalk: false, EnableSports: false, EnablePodcasts: false, EnableFavorites: false,
+        Languages: [], Locations: [], Music: [], LocalCities: [],
+        LanguageMode: 'all', LocationMode: 'all', MusicMode: 'all', LocalMode: 'all',
+        TalkMode: 'all', TalkIds: [], SportsMode: 'all', SportsIds: [], PodcastsMode: 'all', PodcastIds: []
+    };
+    const unchanged = harness();
+    let visit = unchanged.instance.onResume();
+    unchanged.reads[0].resolve({ ...savedConfig });
+    await visit;
+    unchanged.username.value = 'listener';
+    unchanged.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(unchanged.elements['.tuneInRefresh'].open, false);
+
+    const changed = harness();
+    visit = changed.instance.onResume();
+    changed.reads[0].resolve({ ...savedConfig });
+    await visit;
+    changed.instance.view.querySelector('[data-category="EnableTalk"]').checked = true;
+    changed.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(changed.elements['.tuneInRefresh'].open, true);
 });
 
 test('maintenance previews before confirming and blocks settings and refresh until cleanup stops', async () => {
@@ -1363,7 +1470,7 @@ test('first save history is independent of the browsing checkbox and the setting
         .map(name => app.elements[name]);
     const categoryPickers = () => app.elements['.selectors'].childNodes;
     assert.ok(categorySections.every(section => section.open));
-    assert.ok(categoryPickers().some(section => section.open));
+    assert.ok(categoryPickers().every(section => !section.open));
     assert.equal(global.open, true);
     assert.equal(global.attributes['data-saved'], 'false');
     assert.equal(app.elements['.configurationCompleted'].checked, false);
@@ -1415,12 +1522,13 @@ test('topic filters load lazily and save independent modes and selected IDs', as
         [3, 'talk', 'Talk Topics', 'c1'], [4, 'sports', 'Sports & Leagues', 'c2'],
         [5, 'podcast', 'Podcast Topics', 'c3']
     ]) {
-        const [heading, mode, picker] = app.elements['.selectors'].childNodes[i].childNodes;
+        const [heading, mode, columns] = app.elements['.selectors'].childNodes[i].childNodes;
         assert.equal(heading.textContent, label);
         assert.equal(mode.value, 'all');
+        const [picker, savedColumn] = columns.childNodes;
         const root = picker.childNodes.find(node => node.tagName === 'details');
-        const savedChoices = picker.childNodes.find(node => node.className === 'tuneInSelectorSaved');
-        assert.ok(savedChoices && picker.childNodes.indexOf(root) < picker.childNodes.indexOf(savedChoices));
+        const savedChoices = savedColumn.childNodes.find(node => node.className === 'tuneInSelectorSaved');
+        assert.ok(savedChoices);
         await open(root);
         assert.equal(app.selectors.length, i - 3);
         mode.value = 'selected';
@@ -1441,6 +1549,49 @@ test('topic filters load lazily and save independent modes and selected IDs', as
         assert.equal(saved[mode], 'selected');
         assert.deepEqual(Array.from(saved[ids]), [id]);
     }
+});
+
+test('saved station choices require selection and a confirmation dialog before deletion', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, TalkMode: 'selected',
+        TalkIds: ['first', 'second'] });
+    await visit;
+    enableBrowsing(app);
+    const columns = app.elements['.selectors'].childNodes[3].childNodes[2];
+    const savedColumn = columns.childNodes[1];
+    const deleteChoices = savedColumn.descendants().find(node => node.tagName === 'button');
+    const dialog = savedColumn.descendants().find(node => node.tagName === 'dialog');
+    assert.ok(deleteChoices && dialog);
+    assert.equal(deleteChoices.textContent, 'Select Items for Delete');
+    assert.equal(deleteChoices.disabled, true);
+    const choices = savedColumn.descendants().filter(node => node.tagName === 'input');
+    assert.equal(choices.length, 2);
+    choices[1].checked = true;
+    choices[1].handlers.change();
+    assert.equal(deleteChoices.textContent, 'Delete Selected Items');
+    assert.equal(deleteChoices.disabled, false);
+    deleteChoices.handlers.click();
+    assert.equal(dialog.open, true);
+    assert.match(dialog.textContent, /Delete 1 selected choice from Talk Topics/);
+    assert.deepEqual(Array.from(app.instance.config.TalkIds), ['first', 'second']);
+    dialog.descendants().find(node => node.tagName === 'button' && node.textContent === 'Cancel').handlers.click();
+    assert.equal(dialog.open, false);
+    assert.deepEqual(Array.from(app.instance.config.TalkIds), ['first', 'second']);
+    deleteChoices.handlers.click();
+    dialog.descendants().find(node => node.tagName === 'button' && node.textContent === 'Delete Selected Items').handlers.click();
+    assert.deepEqual(Array.from(app.instance.config.TalkIds), ['first']);
+    assert.equal(dialog.open, false);
+    assert.equal(deleteChoices.textContent, 'Select Items for Delete');
+    assert.equal(deleteChoices.disabled, true);
+    assert.equal(savedColumn.descendants().filter(node => node.tagName === 'input').length, 1);
+    assert.equal(app.elements['.stationDeletionNotice'].hidden, true);
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.elements['.stationDeletionNotice'].hidden, false);
+    assert.match(app.elements['.stationDeletionNotice'].textContent, /Saved station selections are scheduled for deletion/);
+    assert.match(app.elements['.stationDeletionNotice'].textContent, /Catalog Refresh/);
+    assert.equal(app.elements['.tuneInRefresh'].open, true);
 });
 
 test('category outcomes keep their status text as well as color, and queued rows are neutral', async () => {
@@ -1529,7 +1680,10 @@ test('settings lock protects pending edits and saves without blocking catalog re
     assert.equal(save.disabled, false);
     assert.equal(app.elements['.loginFields'].disabled, false);
     const language = app.elements['.selectors'].childNodes[0];
-    const selection = language.childNodes[1];
+    const selection = language.childNodes[2];
+    const languageChoice = selection.descendants().find(item => item.tagName === 'input');
+    languageChoice.checked = true;
+    languageChoice.handlers.change();
     app.username.value = 'unsaved';
     toggle.checked = true;
     const locking = toggle.handlers.change();
@@ -1539,7 +1693,9 @@ test('settings lock protects pending edits and saves without blocking catalog re
     app.locks[0].resolve({ Locked: true });
     await locking;
     app.formHandlers.submit({ preventDefault() {} });
-    selection.descendants().find(item => item.textContent === 'Remove').handlers.click();
+    selection.descendants().find(item => item.className && item.className.includes('tuneInSelectorDeleteTrigger'))
+        .handlers.click();
+    assert.notEqual(selection.descendants().find(item => item.tagName === 'dialog').open, true);
     assert.equal(app.writes.length, 0);
     assert.match(selection.textContent, /English/);
     assert.equal(app.elements['.refreshStart'].disabled, false);
@@ -1547,9 +1703,11 @@ test('settings lock protects pending edits and saves without blocking catalog re
     app.refresh[1].resolve({ SettingsLocked: true, Categories: categories });
     await settle();
     toggle.checked = false;
+    assert.equal(app.elements['.browsingSection'].open, false);
     const unlocking = toggle.handlers.change();
     app.locks[1].resolve({ Locked: false });
     await unlocking;
+    assert.equal(app.elements['.browsingSection'].open, true);
     assert.equal(app.elements['.loginFields'].disabled, false);
     app.formHandlers.submit({ preventDefault() {} });
     assert.equal(app.writes[0].config.Username, 'unsaved');

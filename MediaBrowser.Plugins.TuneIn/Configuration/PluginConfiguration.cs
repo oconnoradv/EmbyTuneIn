@@ -43,6 +43,10 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public List<CatalogSelection> Locations { get; set; } = new List<CatalogSelection>();
         public List<CatalogSelection> Music { get; set; } = new List<CatalogSelection>();
         public List<CatalogSelection> LocalCities { get; set; } = new List<CatalogSelection>();
+        public string LanguageMode { get; set; }
+        public string LocationMode { get; set; }
+        public string MusicMode { get; set; }
+        public string LocalMode { get; set; }
         public string TalkMode { get; set; } = "all";
         public List<string> TalkIds { get; set; } = new List<string>();
         public string SportsMode { get; set; } = "all";

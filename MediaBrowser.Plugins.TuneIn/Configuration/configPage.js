@@ -8,13 +8,31 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         ['EnablePodcasts', 'Podcasts'], ['EnableFavorites', 'My Favorites']
     ];
     var selectors = [
-        ['language', 'Languages', 'By Language'], ['location', 'Locations', 'By Location'],
-        ['music', 'Music', 'Music Genres'],
+        ['language', 'Languages', 'By Language', 'LanguageMode', true],
+        ['location', 'Locations', 'By Location', 'LocationMode', true],
+        ['music', 'Music', 'Music Genres', 'MusicMode', true],
         ['talk', 'TalkIds', 'Talk Topics', 'TalkMode'],
         ['sports', 'SportsIds', 'Sports & Leagues', 'SportsMode'],
         ['podcast', 'PodcastIds', 'Podcast Topics', 'PodcastsMode'],
-        ['local', 'LocalCities', 'Local Cities and Regions']
+        ['local', 'LocalCities', 'Local Cities and Regions', 'LocalMode', true]
     ];
+    var filteringSettings = [
+        'EnableLocalRadio', 'EnableMusic', 'EnableLanguage', 'EnableLocation', 'EnableTalk',
+        'EnableSports', 'EnablePodcasts', 'EnableFavorites', 'Languages', 'Locations', 'Music',
+        'LocalCities', 'LanguageMode', 'LocationMode', 'MusicMode', 'TalkMode', 'TalkIds',
+        'SportsMode', 'SportsIds', 'PodcastsMode', 'PodcastIds', 'LocalMode'
+    ];
+
+    function filteringSnapshot(config) {
+        return filteringSettings.map(function (key) { return config[key]; });
+    }
+
+    function selectorMode(instance, spec) {
+        var mode = instance.config[spec[3]];
+        if (typeof mode === 'string' && /^(all|selected)$/i.test(mode)) return mode.toLowerCase();
+        if (spec[4] && mode) return 'selected';
+        return spec[4] && (instance.config[spec[1]] || []).length ? 'selected' : 'all';
+    }
 
     function message(instance, text, configurationRequired) {
         var status = instance.view.querySelector('.status');
@@ -77,27 +95,6 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             : '';
     }
 
-    function selected(instance, spec, container) {
-        var epoch = instance.viewEpoch;
-        container.textContent = '';
-        (instance.config[spec[1]] || []).forEach(function (item) {
-            var row = document.createElement('div');
-            var control = checkbox(item.Path || item.Name || item.Id, item.Enabled !== false,
-                function () {
-                    if (epoch === instance.viewEpoch && browsingSelected(instance) && !editingBlocked(instance)) item.Enabled = control.input.checked;
-                    else control.input.checked = item.Enabled !== false;
-                });
-            row.appendChild(control.label);
-            row.appendChild(button('Remove', function () {
-                if (epoch !== instance.viewEpoch || !browsingSelected(instance) || editingBlocked(instance)) return;
-                instance.config[spec[1]] = instance.config[spec[1]].filter(function (entry) { return entry !== item; });
-                selected(instance, spec, container);
-            }));
-            container.appendChild(row);
-        });
-        $(container).trigger('create');
-    }
-
     function selectorStatus(error) {
         if (!error) return undefined;
         var code = error.status;
@@ -117,7 +114,66 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         heading.className = 'tuneInSectionLabel';
         section.open = openByDefault && !spec[3];
         var picker = document.createElement('div');
-        picker.className = 'tuneInSectionBox tuneInSelectorPicker';
+        picker.className = 'tuneInSelectorPicker';
+        var columns = document.createElement('div');
+        columns.className = 'tuneInSelectorColumns';
+        columns.setAttribute('data-mode', spec[3] ? selectorMode(instance, spec) : 'selected');
+        var savedColumn = document.createElement('div');
+        savedColumn.className = 'tuneInSelectorSavedColumn';
+        var savedHeading = document.createElement('h3');
+        savedHeading.textContent = 'Saved choices';
+        savedColumn.appendChild(savedHeading);
+        var savedActions = document.createElement('div');
+        savedActions.className = 'tuneInSelectorSavedActions';
+        var choicesToRemove = new Set();
+        var deleteChoices = button('Select Items for Delete', function () {
+            if (epoch !== instance.viewEpoch || !choicesToRemove.size ||
+                !browsingSelected(instance) || editingBlocked(instance) || deleteDialog.open) return;
+            deleteDescription.textContent = 'Delete ' + choicesToRemove.size + ' selected ' +
+                (choicesToRemove.size === 1 ? 'choice' : 'choices') + ' from ' + spec[2] +
+                '? This change will be applied when you save the settings.';
+            deleteDialog.showModal();
+        });
+        deleteChoices.className += ' tuneInSelectorDeleteTrigger';
+        deleteChoices.disabled = true;
+        savedActions.appendChild(deleteChoices);
+        savedColumn.appendChild(savedActions);
+        var saved = document.createElement('div');
+        saved.className = 'tuneInSelectorSaved';
+        savedColumn.appendChild(saved);
+        var deleteDialog = document.createElement('dialog');
+        deleteDialog.className = 'tuneInRecoveryDialog tuneInSelectorDeleteDialog';
+        var deleteTitle = document.createElement('h3');
+        deleteTitle.id = 'tuneInSelectorDeleteTitle-' + spec[0];
+        deleteTitle.textContent = 'Delete selected choices?';
+        deleteDialog.setAttribute('aria-labelledby', deleteTitle.id);
+        var deleteDescription = document.createElement('p');
+        deleteDescription.id = 'tuneInSelectorDeleteDescription-' + spec[0];
+        deleteDialog.setAttribute('aria-describedby', deleteDescription.id);
+        var deleteActions = document.createElement('div');
+        deleteActions.className = 'tuneInRecoveryActions';
+        var confirmDeletion = button('Delete Selected Items', function () {
+            if (epoch !== instance.viewEpoch || !deleteDialog.open || !choicesToRemove.size ||
+                !browsingSelected(instance) || editingBlocked(instance)) return;
+            var removing = choicesToRemove;
+            instance.config[spec[1]] = (instance.config[spec[1]] || []).filter(function (choice) {
+                return !removing.has(choice);
+            });
+            choicesToRemove.clear();
+            instance.selectionDeletionPending = true;
+            deleteDialog.close();
+            renderSaved();
+        });
+        confirmDeletion.className += ' tuneInSelectorConfirmDeletion';
+        var cancelDeletion = button('Cancel', function () {
+            if (epoch === instance.viewEpoch) deleteDialog.close();
+        });
+        deleteActions.appendChild(confirmDeletion);
+        deleteActions.appendChild(cancelDeletion);
+        deleteDialog.appendChild(deleteTitle);
+        deleteDialog.appendChild(deleteDescription);
+        deleteDialog.appendChild(deleteActions);
+        savedColumn.appendChild(deleteDialog);
         var topicNames = new Map();
         var openRoot;
         function showChoices() {
@@ -131,66 +187,96 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             root.open = false;
         });
         if (spec[3]) {
-            var mode = document.createElement('select');
-            mode.setAttribute('is', 'emby-select');
-            mode.setAttribute('aria-label', spec[2] + ' coverage');
-            mode.className = 'tuneInSelectorMode';
+            var modeControl = document.createElement('select');
+            modeControl.setAttribute('is', 'emby-select');
+            modeControl.setAttribute('aria-label', spec[2] + ' coverage');
+            modeControl.className = 'tuneInSelectorMode';
             [['all', 'All'], ['selected', 'Selected only']].forEach(function (choice) {
                 var option = document.createElement('option');
                 option.value = choice[0];
                 option.textContent = choice[1];
-                mode.appendChild(option);
+                modeControl.appendChild(option);
             });
-            mode.value = instance.config[spec[3]] === 'selected' ? 'selected' : 'all';
+            modeControl.value = selectorMode(instance, spec);
             var hint = document.createElement('p');
             hint.className = 'fieldDescription';
-            hint.textContent = 'Choose at least one topic offered by TuneIn. If a saved choice is no longer available, review your selections before refreshing.';
-            section.appendChild(mode);
+            hint.textContent = 'Choose at least one option offered by TuneIn. If a saved choice is no longer available, review your selections before refreshing.';
+            section.appendChild(modeControl);
             picker.appendChild(hint);
-            mode.addEventListener('change', function () {
+            modeControl.addEventListener('change', function () {
                 if (epoch !== instance.viewEpoch || !browsingSelected(instance) || editingBlocked(instance)) {
-                    mode.value = instance.config[spec[3]] || 'all';
+                    modeControl.value = selectorMode(instance, spec);
                     return;
                 }
-                instance.config[spec[3]] = mode.value;
-                picker.hidden = mode.value !== 'selected';
+                instance.config[spec[3]] = modeControl.value;
+                picker.hidden = modeControl.value !== 'selected';
+                columns.setAttribute('data-mode', modeControl.value);
                 if (!picker.hidden) return showChoices();
                 root.open = false;
             });
-            picker.hidden = mode.value !== 'selected';
+            picker.hidden = modeControl.value !== 'selected';
         }
-        section.appendChild(picker);
-        var saved = document.createElement('div');
-        saved.className = 'tuneInSelectorSaved';
+        function savedCaption(choice) {
+            return spec[4] ? choice.Path || choice.Name || choice.Id : topicNames.get(choice) || choice;
+        }
+        function updateDeleteButton() {
+            var selectedCount = choicesToRemove.size;
+            deleteChoices.textContent = selectedCount ? 'Delete Selected Items' : 'Select Items for Delete';
+            deleteChoices.disabled = !selectedCount;
+            deleteChoices.setAttribute('aria-label', selectedCount
+                ? 'Delete selected items from ' + spec[2]
+                : 'Select items for deletion from ' + spec[2]);
+        }
         function renderSaved() {
-            if (!spec[3]) {
-                selected(instance, spec, saved);
+            saved.textContent = '';
+            var choices = instance.config[spec[1]] || [];
+            choicesToRemove.forEach(function (choice) {
+                if (!choices.includes(choice)) choicesToRemove.delete(choice);
+            });
+            updateDeleteButton();
+            if (!choices.length) {
+                var empty = document.createElement('p');
+                empty.textContent = 'No choices saved.';
+                saved.appendChild(empty);
+                $(savedColumn).trigger('create');
                 return;
             }
-            saved.textContent = '';
-            (instance.config[spec[1]] || []).forEach(function (id) {
+            choices.forEach(function (choice) {
                 var row = document.createElement('div');
-                var caption = document.createElement('span');
-                caption.textContent = topicNames.get(id) || id;
-                row.appendChild(caption);
-                var remove = button('Remove', function () {
+                row.className = 'tuneInSelectorSavedChoice';
+                var text = savedCaption(choice);
+                var control = checkbox(text, choicesToRemove.has(choice), function () {
                     if (epoch !== instance.viewEpoch || !browsingSelected(instance) || editingBlocked(instance)) return;
-                    instance.config[spec[1]] = instance.config[spec[1]].filter(function (choice) { return choice !== id; });
-                    renderSaved();
+                    if (control.input.checked) choicesToRemove.add(choice);
+                    else choicesToRemove.delete(choice);
+                    updateDeleteButton();
                 });
-                remove.setAttribute('aria-label', 'Remove ' + caption.textContent);
-                row.appendChild(remove);
+                control.input.setAttribute('aria-label', 'Select ' + text + ' for deletion');
+                control.label.className += ' tuneInSelectorRemovalChoice';
+                row.appendChild(control.label);
                 saved.appendChild(row);
             });
-            $(saved).trigger('create');
+            $(savedColumn).trigger('create');
         }
         var requests = new Map();
         function add(item, feedback) {
             if (epoch !== instance.viewEpoch || !browsingSelected(instance) || editingBlocked(instance)) return;
             var list = instance.config[spec[1]] || [];
             if (spec[3]) {
-                if (instance.config[spec[3]] !== 'selected') return;
-                if (!list.includes(item.Id)) {
+                if (selectorMode(instance, spec) !== 'selected') return;
+                if (spec[4]) {
+                    var existing = list.find(function (entry) { return entry && entry.Id === item.Id; });
+                    if (existing) existing.Enabled = true;
+                    else {
+                        if (list.length >= 100) {
+                            feedback.textContent = 'Remove a saved choice before adding another (limit: 100).';
+                            return;
+                        }
+                        list.push({ Id: item.Id, Name: item.Name, Path: item.Path,
+                            AncestorIds: item.AncestorIds, Enabled: true });
+                    }
+                    instance.config[spec[1]] = list;
+                } else if (!list.includes(item.Id)) {
                     if (list.length >= 100) {
                         feedback.textContent = 'Remove a saved choice before adding another (limit: 100).';
                         return;
@@ -318,7 +404,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var root = branch('', 'Browse ' + spec[2]);
         root.className = 'tuneInSelectorRoot';
         picker.appendChild(root);
-        picker.appendChild(saved);
+        columns.appendChild(picker);
+        columns.appendChild(savedColumn);
+        section.appendChild(columns);
         renderSaved();
         return section;
     }
@@ -385,7 +473,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
         editing(instance);
         return writeSettingsLock(instance.lockRequested).then(function (locked) {
-            if (epoch === instance.viewEpoch) instance.settingsLocked = locked;
+            if (epoch === instance.viewEpoch) {
+                instance.settingsLocked = locked;
+                if (!locked) instance.view.querySelector('.browsingSummary').parentNode.open = true;
+            }
         }).catch(function () {
             if (epoch !== instance.viewEpoch) return;
             instance.settingsLocked = undefined;
@@ -1003,10 +1094,13 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var browsing = browsingSelected(instance);
         var source = instance.view.querySelector('.localSource').value;
         var useCoordinates = localEnabled && source === 'coordinates';
-        if (browsing && localEnabled && source !== 'coordinates' && (source !== 'regions' || !(config.LocalCities || []).some(function (item) {
+        var localSelectionMode = selectorMode(instance, selectors[6]);
+        var hasSavedRegion = (config.LocalCities || []).some(function (item) {
             return item && item.Enabled !== false && /^r[1-9][0-9]{0,9}$/.test(item.Id);
-        }))) {
-            message(instance, 'Choose coordinates or enable at least one saved city or region for Local Radio.');
+        });
+        if (browsing && localEnabled && source !== 'coordinates' && (source !== 'regions' ||
+            localSelectionMode === 'selected' && !hasSavedRegion)) {
+            message(instance, 'Choose coordinates or regions for Local Radio; Selected only requires at least one saved city or region.');
             return false;
         }
         var parts = coordinates.split(',');
@@ -1031,13 +1125,27 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         categories.forEach(function (spec) {
             config[spec[0]] = instance.view.querySelector('[data-category="' + spec[0] + '"]').checked;
         });
+        var filteringChanged = JSON.stringify(filteringSnapshot(config)) !==
+            JSON.stringify(filteringSnapshot(instance.savedFilteringConfig || {}));
         instance.saving = true;
         instance.lockError = '';
         refreshControls(instance, instance.refreshAvailable);
         loading.show();
         ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
-            if (epoch === instance.viewEpoch)
+            if (epoch === instance.viewEpoch) {
                 showSaveHistory(instance, true, !configurationRequired(config));
+                instance.savedFilteringConfig = JSON.parse(JSON.stringify(config));
+                if (filteringChanged) {
+                    instance.refreshDefaultPending = false;
+                    instance.refreshSection.open = true;
+                }
+                if (filteringChanged && instance.selectionDeletionPending) {
+                    var deletionNotice = instance.view.querySelector('.stationDeletionNotice');
+                    deletionNotice.textContent = 'Saved station selections are scheduled for deletion. Start Catalog Refresh to update the Emby library with these changes.';
+                    deletionNotice.hidden = false;
+                }
+                instance.selectionDeletionPending = false;
+            }
             return writeSettingsLock(true).then(function () {
                 instance.settingsLocked = true;
                 if (epoch !== instance.viewEpoch) return;
@@ -1137,6 +1245,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshVisible = true;
         instance.refreshDefaultPending = true;
         instance.refreshSection.open = false;
+        instance.selectionDeletionPending = false;
         setRefreshOutcome(instance, '', 'status unavailable');
         clearCleanupPreview(instance);
         instance.view.querySelector('.cleanupError').textContent = '';
@@ -1144,6 +1253,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.refreshError').textContent = '';
         instance.view.querySelector('.catalogRefreshPrompt').hidden = true;
         instance.view.querySelector('.catalogRefreshPrompt').textContent = '';
+        instance.view.querySelector('.stationDeletionNotice').hidden = true;
+        instance.view.querySelector('.stationDeletionNotice').textContent = '';
         instance.view.querySelector('.refreshFailureLog').textContent = '';
         instance.view.querySelector('.refreshFailureLog').hidden = true;
         instance.view.querySelector('.refreshLogMessage').textContent = '';
@@ -1159,6 +1270,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
             if (epoch !== instance.viewEpoch) return;
             instance.config = config;
+            instance.savedFilteringConfig = JSON.parse(JSON.stringify(config));
             renderCatalogRefreshPrompt(instance);
             instance.refreshSchedules = new Map((config.RefreshSchedules || []).map(function (schedule) {
                 return [schedule.Category, schedule.IntervalHours];
