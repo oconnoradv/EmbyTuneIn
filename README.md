@@ -36,11 +36,23 @@ page or channel root does not recursively crawl the TuneIn catalog.
 - **Playback:** Direct playback and supported separate-introduction handoff
   include bounded resolution and stalled-read handling. See [Playback](#playback).
 
+## Future features
+
+### Native Emby language localization
+
+Planned, not implemented. The Control Panel will follow the user's Emby
+language preference for labels, buttons, descriptions, dialogs, and status
+messages, with English fallback for unsupported languages or missing
+translations. Configuration values and catalog identities will remain
+unchanged. Native-library folder localization is outside the initial scope,
+and compatibility with supported Emby versions still requires verification.
+
 ## Branch and release scope
 
 This branch combines configured browsing, partial refreshes, the Control Panel,
-playback improvements, and library maintenance. Discovery and import attempts
-have separate 60-minute deadlines and bounded retries. Restarting Emby alone
+playback improvements, and library maintenance. Discovery attempts have a
+60-minute deadline; import attempts have a separately configured 1-to-10-hour
+deadline (default: 4 hours). Both have bounded retries. Restarting Emby alone
 never starts a refresh.
 
 ## Requirements and installation
@@ -133,6 +145,11 @@ refresh become available after you save.
 - **API request interval** sets minimum request spacing from 1 to 30 seconds,
   defaulting to 1 second between request starts when unset. Previously saved
   intervals are preserved. TuneIn retry delays take precedence.
+- **Import deadline** sets the time allowed per import attempt from 1 to 10
+  whole hours, defaulting to 4 hours when absent from saved settings. It appears
+  below API request interval in Global TuneIn Settings. It covers preparation,
+  Emby traversal, and verification without changing discovery limits or import
+  concurrency. Changing it preserves compatible catalog and discovery snapshots.
 
 Both checkboxes default to checked when the settings are absent. Explicitly
 saved unchecked choices remain unchanged. Changing these options does not
@@ -357,7 +374,7 @@ category in settings if it should stay absent.
 | Limit | Behavior |
 | --- | --- |
 | Discovery attempt | Up to 60 minutes, independent of import time |
-| Import attempt | A fresh 60 minutes for staging, importing and verification/finalization |
+| Import attempt | A fresh configured deadline of 1 to 10 hours (default: 4) for staging, importing and verification/finalization |
 | Catalog cache | Up to 60,000 pages and 640 MiB per refresh |
 | Discovered category | Up to 1,000,000 items and 1 GiB estimated data |
 | Catalog HTTP response | 90 seconds including body reads, excluding pacing and provider cooldowns |
@@ -600,4 +617,9 @@ lifecycle, form validation, and stale asynchronous responses. Automated results
 do not establish compatibility with every Emby host or provider response.
 
 The project is based on [MediaBrowser/TuneIn](https://github.com/MediaBrowser/TuneIn)
-and is distributed under [LICENSE.md](LICENSE.md).
+and is distributed under [LICENSE.md](LICENSE.md), with bundled legacy
+HtmlAgilityPack code under the
+[Microsoft Public License](licenses/HtmlAgilityPack-MS-PL.txt).
+See [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) for attribution and verified
+source provenance. Release ZIPs include these license documents, and the
+standalone plugin DLL embeds them as resources. Preserve them when redistributing.

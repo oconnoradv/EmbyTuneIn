@@ -1215,7 +1215,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             }))
                             {
                                 var importToken = importCancellation.Token;
-                                importDeadline.CancelAfter(timeoutOverride ?? DefaultTimeout);
+                                importDeadline.CancelAfter(timeoutOverride ?? TimeSpan.FromHours(snapshot.Value.ImportDeadlineHours));
                                 try
                                 {
                                     directory.CheckCurrent(snapshot, importToken);

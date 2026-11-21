@@ -90,7 +90,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 + "<outline type='audio' text='Radio' guide_id='s1'/>")));
             var before = directory.Snapshot();
             var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
-            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "HideRegionalGenres",
+            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "ImportDeadlineHours", "HideRegionalGenres",
                 "AllowPartialCatalogImport", "HasStartedCatalogRefresh",
                 "SettingsSaved", "TalkMode", "TalkIds", "SportsMode", "SportsIds", "PodcastsMode", "PodcastIds" })
                 legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });
@@ -153,6 +153,33 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             using var reader = new StringReader("<PluginConfiguration>" + setting + "</PluginConfiguration>");
             var config = (PluginConfiguration)new XmlSerializer(typeof(PluginConfiguration)).Deserialize(reader);
             Assert.Equal(expected, config.ApiRequestIntervalSeconds);
+        }
+
+        [Theory]
+        [InlineData("", 4)]
+        [InlineData("<ImportDeadlineHours>1</ImportDeadlineHours>", 1)]
+        [InlineData("<ImportDeadlineHours>10</ImportDeadlineHours>", 10)]
+        public void ImportDeadlineSurvivesLegacyLoadingAndSnapshotsWithoutInvalidatingCatalog(string setting, int expected)
+        {
+            using var reader = new StringReader("<PluginConfiguration>" + setting + "</PluginConfiguration>");
+            var config = (PluginConfiguration)new XmlSerializer(typeof(PluginConfiguration)).Deserialize(reader);
+            ConfigurationSnapshot.Validate(config);
+            var snapshot = new ConfigurationSnapshot(config);
+            Assert.Equal(expected, snapshot.Value.ImportDeadlineHours);
+            config.ImportDeadlineHours = expected == 10 ? 1 : 10;
+            var changed = new ConfigurationSnapshot(config);
+            Assert.Equal(snapshot.Key, changed.Key);
+            Assert.Equal(snapshot.DiscoveryKey, changed.DiscoveryKey);
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(11)]
+        public void InvalidImportDeadlinesAreRejectedServerSide(int hours)
+        {
+            var config = Ready();
+            config.ImportDeadlineHours = hours;
+            Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
         }
 
         [Fact]
@@ -472,6 +499,19 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Contains("class=\"tuneInActivity maintenanceIndicator\"", html);
             Assert.Contains("class=\"tuneInActivity refreshIndicator\"", html);
             Assert.Contains("Please go to the Catalog Refresh section", script);
+        }
+
+        [Theory]
+        [InlineData("MIT.txt", "The above copyright notice and this permission notice shall be included")]
+        [InlineData("ThirdPartyNotices.txt", "Copyright (C) 2003-20012 Simon Mourier")]
+        [InlineData("HtmlAgilityPack-MS-PL.txt", "(E) The software is licensed \"as-is.\"")]
+        public void StandalonePluginIncludesRequiredLicenseDocuments(string resource, string notice)
+        {
+            using var stream = typeof(Plugin).Assembly.GetManifestResourceStream(
+                "MediaBrowser.Plugins.TuneIn.Licenses." + resource);
+            Assert.NotNull(stream);
+            using var reader = new StreamReader(stream);
+            Assert.Contains(notice, reader.ReadToEnd());
         }
 
         [Fact]

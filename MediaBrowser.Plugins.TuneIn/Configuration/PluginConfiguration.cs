@@ -12,11 +12,14 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
     {
         internal const int MinApiRequestIntervalSeconds = 1;
         internal const int MaxApiRequestIntervalSeconds = 30;
+        internal const int MinImportDeadlineHours = 1;
+        internal const int MaxImportDeadlineHours = 10;
 
         public String Username { get; set; }
         public String LatLon { get; set; }
         public string NavigationSecret { get; set; } = CreateSecret();
         public int ApiRequestIntervalSeconds { get; set; } = MinApiRequestIntervalSeconds;
+        public int ImportDeadlineHours { get; set; } = 4;
         public bool HideRegionalGenres { get; set; } = true;
         public bool AllowPartialCatalogImport { get; set; } = true;
         public List<CategoryRefreshSchedule> RefreshSchedules { get; set; } = new List<CategoryRefreshSchedule>();

@@ -443,6 +443,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.hideRegionalGenres').disabled = catalogDisabled;
         instance.view.querySelector('.allowPartialCatalogImport').disabled = catalogDisabled;
         instance.view.querySelector('.apiRequestIntervalSeconds').disabled = catalogDisabled;
+        instance.view.querySelector('.importDeadlineHours').disabled = catalogDisabled;
         instance.view.querySelector('.tuneInSettingsSave').disabled = disabled;
         instance.refreshCategoryRows.forEach(function (row) { row.schedule.disabled = catalogDisabled; });
         var toggle = instance.view.querySelector('.settingsLocked');
@@ -1090,6 +1091,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             message(instance, 'Use a whole number from 1 to 30 for the API request interval.');
             return false;
         }
+        var importDeadline = String(instance.view.querySelector('.importDeadlineHours').value || '').trim();
+        if (!/^[0-9]+$/.test(importDeadline) || Number(importDeadline) < 1 || Number(importDeadline) > 10) {
+            message(instance, 'Use a whole number from 1 to 10 for the import deadline.');
+            return false;
+        }
         var localEnabled = instance.view.querySelector('[data-category="EnableLocalRadio"]').checked;
         var browsing = browsingSelected(instance);
         var source = instance.view.querySelector('.localSource').value;
@@ -1115,6 +1121,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         config.Username = instance.view.querySelector('.txtUsername').value.trim() || null;
         config.LatLon = coordinates || null;
         config.ApiRequestIntervalSeconds = Number(requestInterval);
+        config.ImportDeadlineHours = Number(importDeadline);
         config.HideRegionalGenres = instance.view.querySelector('.hideRegionalGenres').checked;
         config.AllowPartialCatalogImport = instance.view.querySelector('.allowPartialCatalogImport').checked;
         config.RefreshSchedules = Array.from(instance.refreshSchedules)
@@ -1283,6 +1290,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.txtLatLon').value = config.LatLon || '';
             view.querySelector('.apiRequestIntervalSeconds').value =
                 config.ApiRequestIntervalSeconds == null ? 1 : Math.min(config.ApiRequestIntervalSeconds, 30);
+            view.querySelector('.importDeadlineHours').value =
+                config.ImportDeadlineHours == null ? 4 : config.ImportDeadlineHours;
             view.querySelector('.hideRegionalGenres').checked = config.HideRegionalGenres !== false;
             view.querySelector('.allowPartialCatalogImport').checked = config.AllowPartialCatalogImport !== false;
             var hasRegions = (config.LocalCities || []).some(function (item) {

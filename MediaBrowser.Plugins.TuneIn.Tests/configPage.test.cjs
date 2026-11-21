@@ -46,7 +46,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     const requestInterval = new Element('input');
     const form = { addEventListener: (event, handler) => { formHandlers[event] = handler; } };
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon,
-        '.apiRequestIntervalSeconds': requestInterval };
+        '.apiRequestIntervalSeconds': requestInterval, '.importDeadlineHours': new Element('input') };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.stationDeletionNotice',
@@ -443,6 +443,7 @@ test('save retains unrelated configuration and converts empty fields to null', a
     assert.equal(app.writes[0].config.SchemaVersion, 1);
     assert.equal(app.writes[0].config.ConfigurationCompleted, true);
     assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 1);
+    assert.equal(app.writes[0].config.ImportDeadlineHours, 4);
     assert.deepEqual(app.notices, ['saved']);
 });
 
@@ -468,6 +469,34 @@ test('API request interval validates and saves the shared catalog pacing setting
         app.formHandlers.submit({ preventDefault() {} });
         assert.equal(app.writes.at(-1).config.ApiRequestIntervalSeconds, value);
         await settle();
+    }
+    assert.equal(app.writes.length, 2);
+});
+
+test('import deadline loads saved values, validates whole hours, and saves both bounds', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ ImportDeadlineHours: 7 });
+    await visit;
+    const deadline = app.elements['.importDeadlineHours'];
+    assert.equal(deadline.value, 7);
+    for (const value of ['', '0', '11', '1.5', 'abc']) {
+        deadline.value = value;
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes.length, 0);
+        assert.match(app.elements['.status'].textContent, /whole number from 1 to 10/);
+    }
+    for (const value of [1, 10]) {
+        const toggle = app.elements['.settingsLocked'];
+        if (toggle.checked) {
+            toggle.checked = false;
+            await toggle.handlers.change();
+        }
+        deadline.value = String(value);
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes.at(-1).config.ImportDeadlineHours, value);
+        await settle();
+        assert.equal(deadline.disabled, true);
     }
     assert.equal(app.writes.length, 2);
 });
@@ -1494,12 +1523,14 @@ test('first save history is independent of the browsing checkbox and the setting
     assert.equal(app.elements['.configurationFields'].disabled, true);
     assert.equal(app.elements['.hideRegionalGenres'].disabled, true);
     assert.equal(app.requestInterval.disabled, true);
+    assert.equal(app.elements['.importDeadlineHours'].disabled, true);
     await open(app.elements['.selectors'].childNodes[0].descendants().find(node => node.tagName === 'details'));
     assert.equal(app.selectors.length, 0);
     enableBrowsing(app);
     assert.equal(app.elements['.configurationFields'].disabled, false);
     assert.equal(app.elements['.hideRegionalGenres'].disabled, false);
     assert.equal(app.requestInterval.disabled, false);
+    assert.equal(app.elements['.importDeadlineHours'].disabled, false);
     assert.equal(app.elements['.refreshStart'].disabled, true);
     app.formHandlers.submit({ preventDefault() {} });
     app.writes[0].reject(new Error('save failed'));

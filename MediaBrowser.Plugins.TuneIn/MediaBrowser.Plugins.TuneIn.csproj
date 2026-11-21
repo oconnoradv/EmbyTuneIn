@@ -24,6 +24,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="..\LICENSE.md" LogicalName="MediaBrowser.Plugins.TuneIn.Licenses.MIT.txt" />
+    <EmbeddedResource Include="..\THIRD-PARTY-NOTICES.txt" LogicalName="MediaBrowser.Plugins.TuneIn.Licenses.ThirdPartyNotices.txt" />
+    <EmbeddedResource Include="..\licenses\HtmlAgilityPack-MS-PL.txt" LogicalName="MediaBrowser.Plugins.TuneIn.Licenses.HtmlAgilityPack-MS-PL.txt" />
     <EmbeddedResource Include="Configuration\configPage.html" />
     <EmbeddedResource Include="Configuration\configPage.js" />
     <EmbeddedResource Include="Images\backdrop.png" />

@@ -1,0 +1,46 @@
+TuneIn for Emby - license and third-party notices
+
+TuneIn plugin
+-------------
+Based on MediaBrowser/TuneIn: https://github.com/MediaBrowser/TuneIn
+Copyright (c) Media Browser http://mediabrowser.tv
+License: MIT; see LICENSE.md for the complete license.
+
+Bundled HtmlAgilityPack source
+-----------------------------
+The source files in MediaBrowser.Plugins.TuneIn\HtmlAgilityPack are compiled
+into MediaBrowser.Plugins.TuneIn.dll.
+
+Original source attribution:
+HtmlAgilityPack V1.0 - Simon Mourier <simon underscore mourier at hotmail dot com>
+Copyright (C) 2003-20012 Simon Mourier <simon underscore mourier at hotmail dot com> All rights reserved.
+The year range above reproduces the upstream notice verbatim.
+
+License: Microsoft Public License (Ms-PL).
+Complete license: licenses\HtmlAgilityPack-MS-PL.txt.
+
+Provenance: all 34 bundled .cs files match the Git blob hashes in the archived
+legacy HtmlAgilityPack tree at:
+https://github.com/tomap/HtmlAgilityPack/tree/db70b9a8151e12539dbee7a6360c2fd551a501ce
+That tree identifies the source as Ms-PL and contains the original attribution.
+This is not a claim that the modern HtmlAgilityPack project's MIT license
+applies to these legacy files.
+
+External runtime components
+---------------------------
+Emby assemblies, System.Memory dependencies, and FFmpeg executables are not
+included in this release package. Their licenses remain applicable to those
+separately supplied components. Do not copy dependency DLLs into Emby's plugin
+folder. FFmpeg handoff playback uses Emby's configured executable.
+
+Distribution
+------------
+The ZIP includes LICENSE.md, THIRD-PARTY-NOTICES.txt, and the complete Ms-PL
+license. The standalone DLL also embeds all three documents as resources:
+MediaBrowser.Plugins.TuneIn.Licenses.MIT.txt
+MediaBrowser.Plugins.TuneIn.Licenses.ThirdPartyNotices.txt
+MediaBrowser.Plugins.TuneIn.Licenses.HtmlAgilityPack-MS-PL.txt
+
+Preserve these notices and licenses when redistributing the plugin.
+These documents do not grant rights to third-party trademarks or source data
+and do not constitute Emby catalog approval.

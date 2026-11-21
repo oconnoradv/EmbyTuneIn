@@ -77,7 +77,7 @@
             flex-wrap: wrap;
             gap: .5em;
         }
-        .tuneInApiIntervalRow .apiRequestIntervalSeconds {
+        .tuneInApiIntervalRow input {
             box-sizing: content-box;
             inline-size: 4ch;
             text-align: center;
@@ -483,6 +483,13 @@
                             <input id="tuneInApiInterval" type="number" class="apiRequestIntervalSeconds" min="1" max="30" step="1" aria-describedby="tuneInApiIntervalHint" required disabled />
                         </div>
                         <div class="fieldDescription" id="tuneInApiIntervalHint">Minimum delay between TuneIn API request starts: 1 to 30 seconds (default: 1). TuneIn retry delays are always honored.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <div class="tuneInApiIntervalRow">
+                            <label for="tuneInImportDeadline">Import deadline (hours):</label>
+                            <input id="tuneInImportDeadline" type="number" class="importDeadlineHours" min="1" max="10" step="1" aria-describedby="tuneInImportDeadlineHint" required disabled />
+                        </div>
+                        <div class="fieldDescription" id="tuneInImportDeadlineHint">Time allowed per import attempt: 1 to 10 hours (default: 4), including preparation and verification. Does not change discovery limits. Timed-out imports drain before retrying the complete traversal.</div>
                     </div>
                 </fieldset>
             </details>
