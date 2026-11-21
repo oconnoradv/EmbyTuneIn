@@ -11,6 +11,20 @@
             grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
             gap: 1em;
         }
+        .tuneInAdvancedSettings {
+            border: 2px solid #c23e46;
+            border-radius: .5em;
+            background: rgba(194, 62, 70, .08);
+            padding: 1em;
+            margin-block: 1em;
+        }
+        .tuneInAdvancedSettings > summary {
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .tuneInAdvancedSettings[open] > summary {
+            margin-block-end: 1em;
+        }
         .tuneInLoginRow > div {
             min-width: 0;
         }
@@ -477,20 +491,28 @@
                         <span>Hide the Individual Genre Folders</span>
                     </label>
                     <p class="fieldDescription">Hides genre shortcuts in Local Radio, By Location, Talk, Sports and Podcasts. The By Genre folder stays available where TuneIn provides it.</p>
-                    <div class="inputContainer">
-                        <div class="tuneInApiIntervalRow">
-                            <label for="tuneInApiInterval">API request interval (seconds):</label>
-                            <input id="tuneInApiInterval" type="number" class="apiRequestIntervalSeconds" min="1" max="30" step="1" aria-describedby="tuneInApiIntervalHint" required disabled />
+                    <details class="tuneInAdvancedSettings">
+                        <summary>Advanced Settings</summary>
+                        <div class="inputContainer">
+                            <div class="tuneInApiIntervalRow">
+                                <label for="tuneInApiInterval">API request interval (seconds):</label>
+                                <input id="tuneInApiInterval" type="number" class="apiRequestIntervalSeconds" min="1" max="30" step="1" aria-describedby="tuneInApiIntervalHint" required disabled />
+                            </div>
+                            <div class="fieldDescription" id="tuneInApiIntervalHint">Minimum delay between TuneIn API request starts: 1 to 30 seconds (default: 1). TuneIn retry delays are always honored.</div>
                         </div>
-                        <div class="fieldDescription" id="tuneInApiIntervalHint">Minimum delay between TuneIn API request starts: 1 to 30 seconds (default: 1). TuneIn retry delays are always honored.</div>
-                    </div>
-                    <div class="inputContainer">
-                        <div class="tuneInApiIntervalRow">
-                            <label for="tuneInImportDeadline">Import deadline (hours):</label>
-                            <input id="tuneInImportDeadline" type="number" class="importDeadlineHours" min="1" max="10" step="1" aria-describedby="tuneInImportDeadlineHint" required disabled />
+                        <div class="inputContainer">
+                            <div class="tuneInApiIntervalRow">
+                                <label for="tuneInImportDeadline">Import deadline (hours):</label>
+                                <input id="tuneInImportDeadline" type="number" class="importDeadlineHours" min="1" max="10" step="1" aria-describedby="tuneInImportDeadlineHint" required disabled />
+                            </div>
+                            <div class="fieldDescription" id="tuneInImportDeadlineHint">Time allowed per import attempt: 1 to 10 hours (default: 4), including preparation and verification. Does not change discovery limits. Timed-out imports drain before retrying the complete traversal.</div>
                         </div>
-                        <div class="fieldDescription" id="tuneInImportDeadlineHint">Time allowed per import attempt: 1 to 10 hours (default: 4), including preparation and verification. Does not change discovery limits. Timed-out imports drain before retrying the complete traversal.</div>
-                    </div>
+                        <label class="emby-checkbox-label">
+                            <input type="checkbox" is="emby-checkbox" class="enableCatalogIdentityDiagnostics" aria-describedby="tuneInIdentityDiagnosticsHint" disabled />
+                            <span>Enable catalog identity diagnostics</span>
+                        </label>
+                        <p class="fieldDescription" id="tuneInIdentityDiagnosticsHint">Off by default. Enable temporarily when refreshes unexpectedly delete/recreate stations or are unusually slow. Logs one saved/fresh catalog comparison per category without names, URLs or signed IDs. Adds processing and memory overhead; disable after troubleshooting. Does not change imports or normal error logging.</p>
+                    </details>
                 </fieldset>
             </details>
                 <label class="tuneInLockToggle">

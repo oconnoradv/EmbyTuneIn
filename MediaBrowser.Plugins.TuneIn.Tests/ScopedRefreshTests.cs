@@ -3,7 +3,9 @@ using MediaBrowser.Controller.Channels;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
+using MediaBrowser.Model.Logging;
 using MediaBrowser.Plugins.TuneIn.Configuration;
+using Moq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -20,6 +22,139 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 {
     public sealed class ScopedRefreshTests
     {
+        [Fact]
+        public void IdentityDiagnosticsSeparateStationChangesFromFolderMembershipChanges()
+        {
+            var ids = new Dictionary<string, string>
+            {
+                ["old-name-id"] = "s1", ["new-name-id"] = "s1",
+                ["stable-id"] = "s2", ["removed-id"] = "s3", ["added-id"] = "s4"
+            };
+            TuneInItemSnapshot Item(string id, string name, string type = "Song") =>
+                new TuneInItemSnapshot
+                {
+                    Id = id, Name = name, Type = "Media", ContentType = type, MediaType = "Audio"
+                };
+            TuneInCategorySnapshot Catalog(params TuneInFolderSnapshot[] folders) =>
+                new TuneInCategorySnapshot { Folders = folders.ToList() };
+            var saved = Catalog(
+                new TuneInFolderSnapshot
+                {
+                    Id = "parent-a",
+                    Items = new List<TuneInItemSnapshot>
+                    {
+                        Item("old-name-id", "private old label"),
+                        Item("stable-id", "unchanged"), Item("removed-id", "removed")
+                    }
+                },
+                new TuneInFolderSnapshot
+                {
+                    Id = "parent-b", Items = new List<TuneInItemSnapshot> { Item("stable-id", "unchanged") }
+                });
+            var fresh = Catalog(
+                new TuneInFolderSnapshot
+                {
+                    Id = "parent-a",
+                    Items = new List<TuneInItemSnapshot>
+                    {
+                        Item("new-name-id", "private new label", "Podcast"),
+                        Item("added-id", "https://private.example/secret")
+                    }
+                },
+                new TuneInFolderSnapshot
+                {
+                    Id = "parent-b",
+                    Items = new List<TuneInItemSnapshot> { Item("stable-id", "unchanged") }
+                });
+            var result = TuneInIdentityDiagnostics.Compare(saved, fresh, id => ids[id], CancellationToken.None);
+            Assert.True(result.HasSavedBaseline);
+            Assert.Equal(3, result.SavedStations);
+            Assert.Equal(3, result.FreshStations);
+            Assert.Equal(2, result.RetainedStations);
+            Assert.Equal(1, result.AddedStations);
+            Assert.Equal(1, result.RemovedStations);
+            Assert.Equal(1, result.ChangedIdentities);
+            Assert.Equal(1, result.ChangedNames);
+            Assert.Equal(1, result.ChangedTypes);
+            Assert.Equal(1, result.ChangedParents);
+            Assert.Equal(2, result.AddedMemberships);
+            Assert.Equal(3, result.RemovedMemberships);
+            Assert.DoesNotContain("private", result.ToString());
+            Assert.DoesNotContain("old-name-id", result.ToString());
+            Assert.DoesNotContain("parent-a", result.ToString());
+        }
+
+        [Fact]
+        public void IdentityDiagnosticsTreatUnchangedListingsAsRetainedAndLabelMissingBaseline()
+        {
+            var catalog = new TuneInCategorySnapshot
+            {
+                Folders = new List<TuneInFolderSnapshot>
+                {
+                    new TuneInFolderSnapshot
+                    {
+                        Id = "folder",
+                        Items = new List<TuneInItemSnapshot>
+                        {
+                            new TuneInItemSnapshot { Id = "child", Type = "Folder" },
+                            new TuneInItemSnapshot { Id = "signed-id", Type = "Media", Name = "Radio" }
+                        }
+                    }
+                }
+            };
+            var retained = TuneInIdentityDiagnostics.Compare(catalog, catalog, _ => "s1", CancellationToken.None);
+            Assert.Equal(1, retained.RetainedStations);
+            Assert.Equal(0, retained.ChangedIdentities);
+            Assert.Equal(0, retained.ChangedParents);
+            Assert.Equal(0, retained.AddedMemberships);
+            Assert.Equal(0, retained.RemovedMemberships);
+            var initial = TuneInIdentityDiagnostics.Compare(null, catalog, _ => "s1", CancellationToken.None);
+            Assert.False(initial.HasSavedBaseline);
+            Assert.Equal(1, initial.AddedStations);
+            Assert.Equal(0, initial.RemovedStations);
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            Assert.Throws<OperationCanceledException>(() =>
+                TuneInIdentityDiagnostics.Compare(null, catalog, _ => "s1", cancelled.Token));
+        }
+
+        [Fact]
+        public async Task CatalogIdentityLoggingRunsOncePerCategoryWithoutForcingUnchangedImports()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            fixture.Config.EnableCatalogIdentityDiagnostics = true;
+            var logger = new Mock<ILogger>();
+            using var refresh = fixture.Create(allowScoped: true, logger: logger.Object);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            var imports = fixture.Manager.Restrictions.Count;
+            logger.Invocations.Clear();
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Equal(imports, fixture.Manager.Restrictions.Count);
+            var call = Assert.Single(logger.Invocations, invocation =>
+                invocation.Method.Name == nameof(ILogger.Info)
+                && ((string)invocation.Arguments[0]).StartsWith("TuneIn catalog identity comparison", StringComparison.Ordinal));
+            var arguments = (object[])call.Arguments[1];
+            Assert.Equal("talk", arguments[0]);
+            var comparison = Assert.IsType<TuneInIdentityDiagnostics>(arguments[1]);
+            Assert.True(comparison.HasSavedBaseline);
+            Assert.Equal(1, comparison.RetainedStations);
+            Assert.Equal(0, comparison.ChangedIdentities);
+            Assert.Equal(0, comparison.RemovedMemberships);
+            fixture.Config.EnableCatalogIdentityDiagnostics = false;
+            logger.Invocations.Clear();
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Equal(imports, fixture.Manager.Restrictions.Count);
+            Assert.DoesNotContain(logger.Invocations, invocation =>
+                invocation.Method.Name == nameof(ILogger.Info)
+                && ((string)invocation.Arguments[0]).StartsWith("TuneIn catalog identity comparison", StringComparison.Ordinal));
+        }
+
         [Theory]
         [InlineData(true)]
         [InlineData(false)]
@@ -462,10 +597,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 return new TuneInLibraryCleanup(api, () => root, null);
             }
 
-            internal TuneInRefresh Create(bool allowScoped = false, TimeSpan? timeout = null, TuneInLibraryCleanup cleanup = null) => new TuneInRefresh(directory, Store, () => channel,
+            internal TuneInRefresh Create(bool allowScoped = false, TimeSpan? timeout = null,
+                TuneInLibraryCleanup cleanup = null, ILogger logger = null) => new TuneInRefresh(directory, Store, () => channel,
                 (source, folder, session, strict, token) => source.GetRefreshChannelItems(folder, session, strict, token),
                 (source, staged, restriction, token) => TuneInRefreshService.ImportChannel(manager, source, staged, restriction, token),
-                null, timeoutOverride: timeout ?? TimeSpan.FromSeconds(10), allowScopedImport: allowScoped, libraryCleanup: cleanup,
+                logger, timeoutOverride: timeout ?? TimeSpan.FromSeconds(10), allowScopedImport: allowScoped, libraryCleanup: cleanup,
                 updateArtwork: (_, folder, token) => Artwork.Add(directory.Resolve(directory.Snapshot(), folder).Category),
                 countStations: (_, folder, token) =>
                 {

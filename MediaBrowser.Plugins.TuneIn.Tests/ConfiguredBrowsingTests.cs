@@ -90,7 +90,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 + "<outline type='audio' text='Radio' guide_id='s1'/>")));
             var before = directory.Snapshot();
             var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
-            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "ImportDeadlineHours", "HideRegionalGenres",
+            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "ImportDeadlineHours", "EnableCatalogIdentityDiagnostics", "HideRegionalGenres",
                 "AllowPartialCatalogImport", "HasStartedCatalogRefresh",
                 "SettingsSaved", "TalkMode", "TalkIds", "SportsMode", "SportsIds", "PodcastsMode", "PodcastIds" })
                 legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });
@@ -167,6 +167,21 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var snapshot = new ConfigurationSnapshot(config);
             Assert.Equal(expected, snapshot.Value.ImportDeadlineHours);
             config.ImportDeadlineHours = expected == 10 ? 1 : 10;
+            var changed = new ConfigurationSnapshot(config);
+            Assert.Equal(snapshot.Key, changed.Key);
+            Assert.Equal(snapshot.DiscoveryKey, changed.DiscoveryKey);
+        }
+
+        [Theory]
+        [InlineData("", false)]
+        [InlineData("<EnableCatalogIdentityDiagnostics>true</EnableCatalogIdentityDiagnostics>", true)]
+        public void IdentityDiagnosticsDefaultOffAndPersistWithoutInvalidatingCatalog(string setting, bool expected)
+        {
+            using var reader = new StringReader("<PluginConfiguration>" + setting + "</PluginConfiguration>");
+            var config = (PluginConfiguration)new XmlSerializer(typeof(PluginConfiguration)).Deserialize(reader);
+            var snapshot = new ConfigurationSnapshot(config);
+            Assert.Equal(expected, snapshot.Value.EnableCatalogIdentityDiagnostics);
+            config.EnableCatalogIdentityDiagnostics = !expected;
             var changed = new ConfigurationSnapshot(config);
             Assert.Equal(snapshot.Key, changed.Key);
             Assert.Equal(snapshot.DiscoveryKey, changed.DiscoveryKey);

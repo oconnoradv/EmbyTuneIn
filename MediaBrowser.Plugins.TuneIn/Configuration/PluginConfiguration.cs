@@ -20,6 +20,7 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public string NavigationSecret { get; set; } = CreateSecret();
         public int ApiRequestIntervalSeconds { get; set; } = MinApiRequestIntervalSeconds;
         public int ImportDeadlineHours { get; set; } = 4;
+        public bool EnableCatalogIdentityDiagnostics { get; set; }
         public bool HideRegionalGenres { get; set; } = true;
         public bool AllowPartialCatalogImport { get; set; } = true;
         public List<CategoryRefreshSchedule> RefreshSchedules { get; set; } = new List<CategoryRefreshSchedule>();

@@ -1124,6 +1124,17 @@ namespace MediaBrowser.Plugins.TuneIn
                             }
                             lock (gate) categorySnapshot.StationCounts = categoryCounts[category].Copy();
 
+                            if (snapshot.Value.EnableCatalogIdentityDiagnostics && logger != null)
+                            {
+                                var identities = TuneInIdentityDiagnostics.Compare(previous, categorySnapshot,
+                                    id => directory.Resolve(snapshot, id).StationId, linked.Token);
+                                logger.Info("TuneIn catalog identity comparison for {0}: {1}; saved discovery partial={2}; "
+                                    + "fresh discovery partial={3}; prior import interrupted={4}. "
+                                    + "Saved/fresh catalogs only, not Emby database deletions; change counters may overlap.",
+                                    category, identities, previous?.DiscoveryPartial == true,
+                                    categorySnapshot.DiscoveryPartial, dirtyAtStart == category);
+                            }
+
                             if (previous == null || previous.Fingerprint != categorySnapshot.Fingerprint
                                 || previous.DiscoveryPartial != categorySnapshot.DiscoveryPartial)
                                 changed.Add(category);

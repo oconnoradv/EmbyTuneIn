@@ -486,6 +486,24 @@ The server log records automatic retries and per-attempt timings for discovery,
 HTTP fetching, pacing, backoff, cached parsing, and import. Rate adaptation
 does not guarantee provider acceptance or bypass TuneIn limits.
 
+Global TuneIn Settings has a red-highlighted **Advanced Settings** subsection,
+collapsed by default, containing API Request Interval, Import Deadline and
+**Enable catalog identity diagnostics**. Diagnostics default to disabled.
+Enable temporarily to investigate unexpected station replacement or slow imports,
+then disable to avoid the additional comparison processing and memory overhead.
+Normal timeout and error logging is unaffected.
+
+When enabled, after discovery produces a usable category listing, one aggregate identity
+comparison is logged against its saved catalog (when available). It counts
+unique retained, added and removed station IDs, retained stations with changed
+external-ID, name, type or parent-folder sets, and added/removed
+folder/external-ID memberships. Change counters can overlap; a station appearing
+in several folders counts once in the station totals but has multiple memberships.
+The log contains no station names, URLs or signed navigation IDs. It also labels
+partial discovery and interrupted imports. This compares catalogs, not Emby's
+database or individual deletion events, and does not change import behavior.
+There is no per-station logging or periodic comparison during import.
+
 ### Saved catalog and artwork
 
 The saved catalog is the plugin's last successfully imported listing, not a

@@ -47,7 +47,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     const form = { addEventListener: (event, handler) => { formHandlers[event] = handler; } };
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon,
         '.apiRequestIntervalSeconds': requestInterval, '.importDeadlineHours': new Element('input') };
-    for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.categories', '.selectors',
+    for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.stationDeletionNotice',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
@@ -444,6 +444,7 @@ test('save retains unrelated configuration and converts empty fields to null', a
     assert.equal(app.writes[0].config.ConfigurationCompleted, true);
     assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 1);
     assert.equal(app.writes[0].config.ImportDeadlineHours, 4);
+    assert.equal(app.writes[0].config.EnableCatalogIdentityDiagnostics, false);
     assert.deepEqual(app.notices, ['saved']);
 });
 
@@ -499,6 +500,39 @@ test('import deadline loads saved values, validates whole hours, and saves both 
         assert.equal(deadline.disabled, true);
     }
     assert.equal(app.writes.length, 2);
+});
+
+test('identity diagnostics load, save and lock with the advanced catalog settings', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ EnableCatalogIdentityDiagnostics: true });
+    await visit;
+    const diagnostics = app.elements['.enableCatalogIdentityDiagnostics'];
+    assert.equal(diagnostics.checked, true);
+    assert.equal(diagnostics.disabled, false);
+    diagnostics.checked = false;
+    app.formHandlers.submit({ preventDefault() {} });
+    assert.equal(app.writes[0].config.EnableCatalogIdentityDiagnostics, false);
+    await settle();
+    assert.equal(diagnostics.disabled, true);
+    const toggle = app.elements['.settingsLocked'];
+    toggle.checked = false;
+    await toggle.handlers.change();
+    diagnostics.checked = true;
+    app.formHandlers.submit({ preventDefault() {} });
+    assert.equal(app.writes[1].config.EnableCatalogIdentityDiagnostics, true);
+    await settle();
+    assert.equal(diagnostics.disabled, true);
+});
+
+test('advanced settings start collapsed and group the three controls in order', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const advanced = html.match(/<details class="tuneInAdvancedSettings">([\s\S]*?)<\/details>/);
+    assert.ok(advanced);
+    assert.match(advanced[1], /<summary>Advanced Settings<\/summary>/);
+    assert.ok(advanced[1].indexOf('id="tuneInApiInterval"') < advanced[1].indexOf('id="tuneInImportDeadline"'));
+    assert.ok(advanced[1].indexOf('id="tuneInImportDeadline"') < advanced[1].indexOf('class="enableCatalogIdentityDiagnostics"'));
+    assert.match(advanced[1], /Off by default/);
 });
 
 test('navigation discards stale loads without hiding the next visit loader', async () => {
