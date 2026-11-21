@@ -127,6 +127,9 @@
             border-radius: .35em;
             padding: 0 1em;
         }
+        .tuneInRefresh {
+            color: inherit;
+        }
         .tuneInGlobalPanel:has(> .tuneInGlobal[open]), .tuneInNeutralPanel[open] { padding-block-end: 1em; }
         .tuneInGlobalPanel:has(> .tuneInGlobal[data-saved="true"]), .tuneInRefresh[data-outcome="Completed"],
         .tuneInRefreshCategories [data-outcome="Completed"] {
@@ -523,9 +526,9 @@
                     <div><dt>Last progress</dt><dd class="refreshLastProgress">-</dd></div>
                 </dl>
                 <div class="tuneInRefreshActions">
-                    <button is="emby-button" type="button" class="raised refreshStart" disabled>Refresh all enabled categories</button>
-                    <button is="emby-button" type="button" class="raised refreshCancel" disabled>Cancel refresh</button>
-                    <button is="emby-button" type="button" class="raised refreshLogButton" disabled>Retrieve refresh log</button>
+                    <button is="emby-button" type="button" class="raised button-accent refreshStart" disabled>Refresh all enabled categories</button>
+                    <button is="emby-button" type="button" class="raised button-accent refreshCancel" disabled>Cancel refresh</button>
+                    <button is="emby-button" type="button" class="raised button-accent refreshLogButton" disabled>Retrieve refresh log</button>
                 </div>
                 <p class="refreshQueueNote" role="status" hidden></p>
                 <p class="refreshError" role="alert"></p>
@@ -544,9 +547,9 @@
                 <h3 id="tuneInRecoveryTitle">Choose which refresh runs first</h3>
                 <p id="tuneInRecoveryText" class="refreshRecoveryText"></p>
                 <form method="dialog" class="tuneInRecoveryActions">
-                    <button is="emby-button" type="button" class="raised refreshResumeFirst">Retry previous first</button>
-                    <button is="emby-button" type="button" class="raised refreshNewFirst">Prioritize new refresh</button>
-                    <button is="emby-button" type="submit" class="raised refreshDismiss" autofocus>Back</button>
+                    <button is="emby-button" type="button" class="raised button-accent refreshResumeFirst">Retry previous first</button>
+                    <button is="emby-button" type="button" class="raised button-accent refreshNewFirst">Prioritize new refresh</button>
+                    <button is="emby-button" type="submit" class="raised button-accent refreshDismiss" autofocus>Back</button>
                 </form>
             </dialog>
         </details>

@@ -197,6 +197,16 @@ test('all dashboard actions use native Emby buttons without plugin color overrid
     assert.doesNotMatch(styles, /[^{}]*(?:button|refreshCancel|refreshStart|refreshLogButton|refreshDismiss)[^{}]*\{/);
 });
 
+test('Catalog Refresh uses the native theme accent for its actions and inherits text color', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    for (const action of ['refreshStart', 'refreshCancel', 'refreshLogButton',
+        'refreshResumeFirst', 'refreshNewFirst', 'refreshDismiss']) {
+        const tag = html.match(new RegExp('<button\\b[^>]*\\b' + action + '\\b[^>]*>'))[0];
+        assert.match(tag, /\bbutton-accent\b/);
+    }
+    assert.match(html, /\.tuneInRefresh\s*\{\s*color:\s*inherit;\s*\}/);
+});
+
 test('main settings, refresh, and maintenance share one width container', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /<div class="auto-center tuneInPanelLayout">\s*<form>[\s\S]*?<\/form>\s*<details class="tuneInSection tuneInNeutralPanel tuneInRefresh"/);
@@ -905,6 +915,7 @@ test('category counts show only filtered availability and Emby inventory left of
     assert.equal(rows[0].childNodes[1].childNodes[1].textContent, 'Refresh');
     assert.equal(rows[0].childNodes[1].childNodes[1].attributes.is, 'emby-button');
     assert.match(rows[0].childNodes[1].childNodes[1].className, /\braised\b/);
+    assert.match(rows[0].childNodes[1].childNodes[1].className, /\bbutton-accent\b/);
     assert.deepEqual(values(rows[0]).map(value => value.textContent), ['123 (partial)', '145']);
     assert.match(values(rows[0])[0].attributes.title, /lower bound/);
     assert.deepEqual(values(rows[1]).map(value => value.textContent), ['0', '0']);

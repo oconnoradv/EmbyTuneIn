@@ -694,6 +694,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 var row = document.createElement('li');
                 var caption = document.createElement('span');
                 var control = button('Refresh', function () { return doRefresh(instance, 'Start', item.Category); });
+                control.className += ' button-accent';
                 control.setAttribute('aria-label', 'Refresh ' + item.Name);
                 var actions = document.createElement('div');
                 actions.className = 'tuneInRefreshCategoryActions';
