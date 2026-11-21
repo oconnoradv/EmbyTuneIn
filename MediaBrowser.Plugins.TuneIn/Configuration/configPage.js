@@ -1030,7 +1030,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     }
 
     function showRecoveryChoice(instance, status, category) {
-        var dialog = instance.view.querySelector('.tuneInRecoveryDialog');
+        var dialog = instance.view.querySelector('.tuneInRefreshRecoveryDialog');
         var previous = refreshName(status, status.RecoveryCategory);
         var requested = refreshName(status, category);
         instance.refreshRecovery = { category: category, id: status.RecoveryId };
@@ -1197,7 +1197,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         bindDisclosure(view.querySelector('.refreshSummary'), function () { instance.refreshDefaultPending = false; });
         view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });
         view.querySelector('.configurationCompleted').addEventListener('change', function () { editing(instance); });
-        var dialog = view.querySelector('.tuneInRecoveryDialog');
+        var dialog = view.querySelector('.tuneInRefreshRecoveryDialog');
         instance.refreshSection.addEventListener('toggle', function () {
             if (!instance.refreshSection.open && dialog.open) dialog.close();
             if (!instance.refreshSection.open || !instance.refreshVisible) return;
@@ -1345,7 +1345,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         this.backupStarting = false;
         clearCleanupPreview(this);
         this.refreshRecovery = null;
-        var dialog = this.view.querySelector('.tuneInRecoveryDialog');
+        var dialog = this.view.querySelector('.tuneInRefreshRecoveryDialog');
         if (dialog.open) dialog.close();
         clearTimeout(this.refreshTimer);
         this.view.querySelector('.refreshFailureLog').textContent = '';

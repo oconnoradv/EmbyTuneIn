@@ -53,7 +53,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
         '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
-        '.settingsLockState', '.settingsLockStatus', '.refreshQueueNote', '.tuneInRecoveryDialog', '.refreshRecoveryText',
+        '.settingsLockState', '.settingsLockStatus', '.refreshQueueNote', '.tuneInRefreshRecoveryDialog', '.refreshRecoveryText',
         '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
         '.cleanupConfirm', '.cleanupCancel', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.cleanupScope', '.backupStart',
         '.backupStatus', '.cleanupBackupVerified', '#tuneInReportHint']) elements[name] = new Element();
@@ -88,6 +88,11 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         addEventListener(event, handler) { handlers[event] = handler; },
         querySelector(selector) {
             const category = /^\[data-category="(.+)"\]$/.exec(selector);
+            if (selector === '.tuneInRecoveryDialog') {
+                return elements['.selectors'].descendants().find(item =>
+                    (item.className || '').split(/\s+/).includes('tuneInRecoveryDialog'))
+                    || elements['.tuneInRefreshRecoveryDialog'];
+            }
             return category ? elements['.categories'].descendants().find(item => item.attributes['data-category'] === category[1])
                 : elements[selector];
         }
@@ -1469,7 +1474,11 @@ for (const resume of [true, false]) {
         assert.equal(app.refresh[1].options.url.params.Category, 'presets');
         app.refresh[1].resolve({ ...failure, RecoveryChoiceRequired: true });
         await action;
-        const dialog = app.elements['.tuneInRecoveryDialog'];
+        const dialog = app.elements['.tuneInRefreshRecoveryDialog'];
+        const deletionDialog = app.elements['.selectors'].descendants().find(item =>
+            (item.className || '').split(/\s+/).includes('tuneInSelectorDeleteDialog'));
+        assert.ok(deletionDialog);
+        assert.notEqual(deletionDialog.open, true);
         assert.equal(dialog.open, true);
         assert.match(app.elements['.refreshRecoveryText'].textContent, /Local Radio.*My Favorites/);
         assert.equal(app.refresh.filter(request => request.options.type === 'POST').length, 1);
