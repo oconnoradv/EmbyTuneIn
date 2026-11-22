@@ -144,6 +144,9 @@
         .tuneInRefresh {
             color: inherit;
         }
+        .tuneInRefresh:not([open]) > .refreshSummary .refreshSummaryDetails {
+            display: none;
+        }
         .tuneInGlobalPanel:has(> .tuneInGlobal[open]), .tuneInNeutralPanel[open] { padding-block-end: 1em; }
         /* Expanded Settings, Station Filtering and Catalog Refresh panels use the theme surface; state colors show when collapsed. */
         .tuneInGlobalPanel:has(> .tuneInGlobal[data-saved="true"]:not([open])), .tuneInRefresh[data-outcome="Completed"]:not([open]),
@@ -477,7 +480,7 @@
         }
         .tuneInHero {            position: relative;
             max-width: 40rem;
-            aspect-ratio: 16 / 9;
+            aspect-ratio: 32 / 9;
             margin: 0 auto 1.5em;
             border-radius: .75em;
             overflow: hidden;
@@ -494,7 +497,7 @@
         }
         .tuneInHeroWave {
             position: absolute;
-            left: 32.8%;
+            left: 37.2%;
             top: 41.7%;
             width: 12%;
             aspect-ratio: 1;
@@ -509,10 +512,10 @@
         }
         .tuneInHeroPanel {
             position: absolute;
-            left: 56.25%;
-            top: 23.33%;
-            width: 36.72%;
-            height: 41.67%;
+            left: 56%;
+            top: 21.5%;
+            width: 23.3%;
+            height: 45%;
             border-radius: 5.5% / 8.7%;
             overflow: hidden;
             pointer-events: none;
@@ -563,7 +566,7 @@
 
         <div class="auto-center tuneInPanelLayout">
         <div class="tuneInHero" hidden>
-            <img class="tuneInHeroArt" alt="TuneIn library artwork, Powered by TuneIn" width="1280" height="720" decoding="async">
+            <img class="tuneInHeroArt" alt="TuneIn Control Panel artwork, Powered by TuneIn" width="1280" height="360" decoding="async">
             <span class="tuneInHeroWave" aria-hidden="true"></span>
             <span class="tuneInHeroWave" aria-hidden="true"></span>
             <span class="tuneInHeroPanel" aria-hidden="true"></span>
@@ -695,7 +698,7 @@
             </div>
         </form>
         <details class="tuneInSection tuneInNeutralPanel tuneInRefresh">
-            <summary class="refreshSummary"><span>Catalog Refresh</span> <span class="tuneInActivity refreshIndicator" role="status" hidden>Refreshing</span><span class="refreshSummaryDetails"></span><span class="refreshOverall"></span></summary>
+            <summary class="refreshSummary"><span>Catalog Refresh</span> <span class="tuneInActivity refreshIndicator" role="status" hidden>Refreshing</span><span class="refreshSummaryState"></span><span class="refreshSummaryDetails"></span><span class="refreshOverall"></span></summary>
             <p>Checks the saved TuneIn categories and updates the Emby library when needed.</p>
                 <p class="refreshStatus" role="status">Reading refresh status...</p>
                 <dl class="refreshMetrics" aria-label="Current refresh metrics">

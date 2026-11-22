@@ -30,6 +30,12 @@ namespace MediaBrowser.Plugins.TuneIn
     {
     }
 
+    [Route("/TuneIn/PanelArtwork", "GET")]
+    [Authenticated(Roles = "Admin")]
+    public sealed class GetTuneInPanelArtwork
+    {
+    }
+
     public sealed class TuneInCategoryArtworkService : IService, IRequiresRequest
     {
         private readonly IHttpResultFactory resultFactory;
@@ -52,6 +58,9 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public object Get(GetTuneInLibraryArtwork request) =>
             Respond(() => TuneInCategoryArtwork.Open(TuneInCategoryArtwork.ChannelArtwork), "image/png", false);
+
+        public object Get(GetTuneInPanelArtwork request) =>
+            Respond(TuneInCategoryArtwork.OpenPanel, "image/png", false);
 
         private object Respond(Func<Stream> open, string contentType, bool loopbackOnly = true)
         {
@@ -137,6 +146,10 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static Stream Open(string category) =>
             typeof(TuneInCategoryArtwork).Assembly.GetManifestResourceStream(ResourceName(category))
             ?? throw new InvalidOperationException("Bundled TuneIn category artwork is missing.");
+
+        internal static Stream OpenPanel() =>
+            typeof(TuneInCategoryArtwork).Assembly.GetManifestResourceStream("MediaBrowser.Plugins.TuneIn.Images.tunein-panel.png")
+            ?? throw new InvalidOperationException("Bundled TuneIn panel artwork is missing.");
 
         private static string ResourceName(string category)
         {

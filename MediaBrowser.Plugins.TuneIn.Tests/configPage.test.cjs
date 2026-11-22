@@ -86,6 +86,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     }
     elements['.refreshIndicator'].textContent = 'Refreshing';
     elements['.maintenanceIndicator'].textContent = 'Maintenance is active';
+    elements['.refreshSummaryState'] = elements['.refreshSummary'].appendChild(new Element('span'));
     elements['.refreshSummaryDetails'] = elements['.refreshSummary'].appendChild(new Element('span'));
     elements['.refreshOverall'] = elements['.refreshSummary'].appendChild(new Element('span'));
     const enhanced = [];
@@ -2070,7 +2071,7 @@ for (const phase of ['discovery', 'import']) test('refresh status identifies the
     app.instance.onPause();
 });
 
-test('collapsed refresh summary and diagnostics expose live discovery metrics', async () => {
+test('refresh summary keeps the state separate from expanded live discovery details', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
@@ -2087,8 +2088,11 @@ test('collapsed refresh summary and diagnostics expose live discovery metrics', 
     await visit;
     app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
     assert.equal(app.elements['.tuneInRefresh'].open, false);
-    assert.match(app.elements['.refreshSummary'].textContent,
-        /Catalog Refresh Refreshing - Running - Discovering - Music - 1(?:,|\.|\s)?842 pages - progress \d+ sec ago/);
+    assert.equal(app.elements['.refreshSummaryState'].textContent, ' - Running');
+    assert.match(app.elements['.refreshSummaryDetails'].textContent,
+        / - Discovering - Music - 1(?:,|\.|\s)?842 pages - progress \d+ sec ago/);
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /\.tuneInRefresh:not\(\[open\]\)\s*>\s*\.refreshSummary\s+\.refreshSummaryDetails\s*\{\s*display:\s*none/);
     assert.match(app.elements['.refreshElapsed'].textContent, /sec/);
     assert.match(app.elements['.refreshWork'].textContent,
         /1(?:,|\.|\s)?842 catalog pages \(limit 5(?:,|\.|\s)?000\); 2 \/ 8 categories checked/);

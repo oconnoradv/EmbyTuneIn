@@ -643,7 +643,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var pages = typeof status.CatalogPagesCached === 'number' ? status.CatalogPagesCached.toLocaleString() : null;
         var pageLimit = typeof status.CatalogPagesLimit === 'number' ? status.CatalogPagesLimit.toLocaleString() : null;
         var summary = [];
-        if (status.State !== 'NeverRun') summary.push(status.State);
+        instance.view.querySelector('.refreshSummaryState').textContent =
+            status.State && status.State !== 'NeverRun' ? ' - ' + status.State : '';
         if (status.Busy && status.Phase) summary.push(status.Phase);
         if (category) summary.push(category);
         if (status.Busy && status.Phase === 'Importing' && status.ImportFoldersTotal)
@@ -1480,7 +1481,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         art.onload = function () { hero.hidden = false; };
         art.onerror = function () { hero.hidden = true; };
         // An img request cannot send Emby's auth header, so pass the session token like Emby's own image URLs.
-        art.src = ApiClient.getUrl('TuneIn/LibraryArtwork', { v: '2', api_key: ApiClient.accessToken() });
+        art.src = ApiClient.getUrl('TuneIn/PanelArtwork', { v: '1', api_key: ApiClient.accessToken() });
     }
 
     Object.assign(View.prototype, BaseView.prototype);

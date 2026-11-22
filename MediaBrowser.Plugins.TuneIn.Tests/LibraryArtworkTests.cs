@@ -105,6 +105,27 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public void SettingsPagePanelArtworkIsSeparateAndServedToRemoteAdministrators()
+        {
+            var request = new Moq.Mock<IRequest>();
+            request.SetupGet(value => value.RemoteIp).Returns(IPAddress.Parse("192.168.1.20"));
+            using var panel = TuneInCategoryArtwork.OpenPanel();
+            using var buffer = new System.IO.MemoryStream();
+            panel.CopyTo(buffer);
+            var png = buffer.ToArray();
+            Assert.Equal(1280, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(16, 4)));
+            Assert.Equal(360, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(20, 4)));
+            var results = new Moq.Mock<IHttpResultFactory>();
+            results.Setup(value => value.GetResult(request.Object, Moq.It.Is<ReadOnlyMemory<byte>>(bytes => bytes.ToArray().SequenceEqual(png)), "image/png", null))
+                .Returns("ok");
+            var service = new TuneInCategoryArtworkService(results.Object) { Request = request.Object };
+
+            Assert.Equal("ok", service.Get(new GetTuneInPanelArtwork()));
+            var auth = Assert.IsType<AuthenticatedAttribute>(Assert.Single(typeof(GetTuneInPanelArtwork).GetCustomAttributes(typeof(AuthenticatedAttribute), false)));
+            Assert.Equal("Admin", auth.Roles);
+        }
+
+        [Fact]
         public void MigrationUpdatesOnlyValidFoldersInTheRequestedCategoryAndIsIdempotent()
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true };
