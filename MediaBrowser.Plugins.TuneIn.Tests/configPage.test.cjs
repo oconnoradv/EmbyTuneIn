@@ -49,7 +49,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.apiRequestIntervalSeconds': requestInterval, '.importDeadlineHours': new Element('input'),
         '.discoveryDeadlineHours': new Element('input'), '.maxStationCount': new Element('input'),
         '.traversalDepthLimit': new Element('input') };
-    for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.categories', '.selectors',
+    for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.allowDirectHlsPlayback', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
         '.channelScheduleConfirm', '.channelScheduleAdjust', '.tuneInPluginVersion',
@@ -695,6 +695,23 @@ test('identity diagnostics load, save and lock with the advanced catalog setting
     assert.equal(app.writes[1].config.EnableCatalogIdentityDiagnostics, true);
     await settle();
     assert.equal(diagnostics.disabled, true);
+});
+
+test('direct HLS playback is off by default and loads, saves and locks with advanced settings', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ AllowDirectHlsPlayback: true });
+    await visit;
+    const hls = app.elements['.allowDirectHlsPlayback'];
+    assert.equal(hls.checked, true);
+    assert.equal(hls.disabled, false);
+    hls.checked = false;
+    app.formHandlers.submit({ preventDefault() {} });
+    assert.equal(app.writes[0].config.AllowDirectHlsPlayback, false);
+    await settle();
+    assert.equal(hls.disabled, true);
+    const html = fs.readFileSync(path.join(__dirname, '..', 'MediaBrowser.Plugins.TuneIn', 'Configuration', 'configPage.html'), 'utf8');
+    assert.match(html, /class="allowDirectHlsPlayback"[^>]*disabled/);
 });
 
 test('advanced settings start collapsed and group the controls in order', () => {

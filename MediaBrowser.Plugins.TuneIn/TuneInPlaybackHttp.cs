@@ -3,9 +3,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,19 +21,16 @@ namespace MediaBrowser.Plugins.TuneIn
             + typeof(TuneInPlaybackHttp).Assembly.GetName().Version.ToString(3);
         private const int MaxIcyHeaderBytes = 16 * 1024;
 
-        private static readonly HttpClient Client = new HttpClient(new HttpClientHandler
-        {
-            AllowAutoRedirect = false,
-            UseCookies = false,
-            UseDefaultCredentials = false
-        }) { Timeout = Timeout.InfiniteTimeSpan };
+        private const string AllowAddressProperty = "TuneIn.AllowAddress";
+        internal static readonly bool PinnedConnections;
+        private static readonly HttpClient Client = CreateClient(out PinnedConnections);
 
         internal static Task<HttpResponseInfo> SendAsync(HttpRequestOptions options) =>
             SendAsync(options, TuneInPlayback.IsPublicAddress);
 
         internal static async Task<HttpResponseInfo> SendAsync(HttpRequestOptions options, Func<IPAddress, bool> allowAddress)
         {
-            try { return await SendHttpAsync(options).ConfigureAwait(false); }
+            try { return await SendHttpAsync(options, allowAddress).ConfigureAwait(false); }
             catch (HttpRequestException) when (!options.CancellationToken.IsCancellationRequested
                 && Uri.TryCreate(options.Url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttp)
             {
@@ -40,10 +39,107 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
-        private static async Task<HttpResponseInfo> SendHttpAsync(HttpRequestOptions options)
+        // Station playlists are untrusted, so every connection is resolved, checked and pinned to a permitted
+        // address. A connect hook closes the DNS-rebinding gap that a separate resolve-then-check would leave.
+        private static HttpClient CreateClient(out bool pinned)
         {
+            var handler = CreatePinnedHandler();
+            pinned = handler != null;
+            return new HttpClient(handler ?? new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                UseProxy = false,
+                UseDefaultCredentials = false
+            }) { Timeout = Timeout.InfiniteTimeSpan };
+        }
+
+        // The plugin targets netstandard2.0, so SocketsHttpHandler.ConnectCallback is bound at runtime.
+        private static HttpMessageHandler CreatePinnedHandler()
+        {
+            try
+            {
+                var type = Type.GetType("System.Net.Http.SocketsHttpHandler, System.Net.Http", false);
+                var property = type?.GetProperty("ConnectCallback");
+                if (property == null) return null;
+                var signature = property.PropertyType.GetGenericArguments();
+                var context = Expression.Parameter(signature[0], "context");
+                var token = Expression.Parameter(typeof(CancellationToken), "token");
+                var connect = Expression.Call(typeof(TuneInPlaybackHttp).GetMethod(nameof(ConnectPinnedAsync),
+                        BindingFlags.NonPublic | BindingFlags.Static),
+                    Expression.Property(context, "DnsEndPoint"), Expression.Property(context, "InitialRequestMessage"), token);
+                var callback = Expression.Lambda(property.PropertyType,
+                    Expression.New(signature[2].GetConstructor(new[] { typeof(Task<Stream>) }), connect), context, token).Compile();
+                var handler = (HttpMessageHandler)Activator.CreateInstance(type);
+                type.GetProperty("AllowAutoRedirect").SetValue(handler, false);
+                type.GetProperty("UseCookies").SetValue(handler, false);
+                // A proxy would make the hook validate the proxy instead of the station host.
+                type.GetProperty("UseProxy").SetValue(handler, false);
+                property.SetValue(handler, callback);
+                return handler;
+            }
+            catch (Exception error) when (error is ReflectionTypeLoadException || error is TargetInvocationException
+                || error is InvalidOperationException || error is ArgumentException || error is NotSupportedException
+                || error is MemberAccessException || error is TypeLoadException)
+            {
+                return null;
+            }
+        }
+
+        private static async Task<Stream> ConnectPinnedAsync(DnsEndPoint endpoint, HttpRequestMessage request,
+            CancellationToken token)
+        {
+            var allowAddress = request != null && request.Properties.TryGetValue(AllowAddressProperty, out var value)
+                ? value as Func<IPAddress, bool> : null;
+            var client = await ConnectAsync(endpoint.Host, endpoint.Port, allowAddress ?? TuneInPlayback.IsPublicAddress,
+                token).ConfigureAwait(false);
+            return new OwnedNetworkStream(client);
+        }
+
+        internal static async Task<TcpClient> ConnectAsync(string host, int port, Func<IPAddress, bool> allowAddress,
+            CancellationToken token)
+        {
+            host = host.Trim('[', ']');
+            var addresses = IPAddress.TryParse(host, out var literal) ? new[] { literal }
+                : await Dns.GetHostAddressesAsync(host).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            var targets = addresses.Where(allowAddress).ToArray();
+            if (targets.Length == 0) throw new HttpRequestException("The stream host has no permitted address.");
+            Exception failure = null;
+            foreach (var target in targets)
+            {
+                var client = new TcpClient(target.AddressFamily);
+                try
+                {
+                    using (token.Register(client.Dispose))
+                        await client.ConnectAsync(target, port).ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    return client;
+                }
+                catch (Exception error)
+                {
+                    client.Dispose();
+                    token.ThrowIfCancellationRequested();
+                    failure = error;
+                }
+            }
+            throw failure;
+        }
+
+        private static async Task<HttpResponseInfo> SendHttpAsync(HttpRequestOptions options, Func<IPAddress, bool> allowAddress)
+        {
+            if (!PinnedConnections && Uri.TryCreate(options.Url, UriKind.Absolute, out var target))
+            {
+                // Best effort when the runtime has no connect hook: the address may still change before connecting.
+                var host = target.IdnHost.Trim('[', ']');
+                var addresses = IPAddress.TryParse(host, out var literal) ? new[] { literal }
+                    : await Dns.GetHostAddressesAsync(host).ConfigureAwait(false);
+                if (addresses.Length == 0 || !addresses.All(allowAddress))
+                    throw new HttpRequestException("The stream host has no permitted address.");
+            }
             using (var request = new HttpRequestMessage(HttpMethod.Get, options.Url))
             {
+                request.Properties[AllowAddressProperty] = allowAddress;
                 request.Headers.TryAddWithoutValidation("User-Agent", UserAgent);
                 var response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
                     options.CancellationToken).ConfigureAwait(false);
@@ -69,20 +165,13 @@ namespace MediaBrowser.Plugins.TuneIn
         private static async Task<HttpResponseInfo> SendIcyAsync(Uri uri, Func<IPAddress, bool> allowAddress,
             CancellationToken token)
         {
-            var host = uri.IdnHost.Trim('[', ']');
-            var addresses = IPAddress.TryParse(host, out var literal) ? new[] { literal }
-                : await Dns.GetHostAddressesAsync(host).ConfigureAwait(false);
-            token.ThrowIfCancellationRequested();
-            var targets = addresses.Where(allowAddress).ToArray();
-            if (targets.Length == 0) throw new HttpRequestException("The stream host has no permitted address.");
-            var client = new TcpClient(targets[0].AddressFamily);
+            TcpClient client = null;
             try
             {
+                client = await ConnectAsync(uri.IdnHost, uri.Port, allowAddress, token).ConfigureAwait(false);
                 var registration = token.Register(client.Dispose);
                 try
                 {
-                    await client.ConnectAsync(targets.Where(address => address.AddressFamily == targets[0].AddressFamily)
-                        .ToArray(), uri.Port).ConfigureAwait(false);
                     var stream = client.GetStream();
                     var request = Encoding.ASCII.GetBytes("GET " + uri.PathAndQuery + " HTTP/1.0\r\n"
                         + "Host: " + uri.IdnHost + (uri.IsDefaultPort ? "" : ":" + uri.Port) + "\r\n"
@@ -108,7 +197,7 @@ namespace MediaBrowser.Plugins.TuneIn
             }
             catch (Exception error)
             {
-                client.Dispose();
+                client?.Dispose();
                 token.ThrowIfCancellationRequested();
                 if (error is SocketException || error is IOException || error is ObjectDisposedException)
                     throw new HttpRequestException("The stream connection failed.", error);
@@ -166,6 +255,19 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 if (disposing) Interlocked.Exchange(ref response, null)?.Dispose();
                 base.Dispose(disposing);
+            }
+        }
+
+        private sealed class OwnedNetworkStream : NetworkStream
+        {
+            private TcpClient client;
+
+            internal OwnedNetworkStream(TcpClient client) : base(client.Client, true) { this.client = client; }
+
+            protected override void Dispose(bool disposing)
+            {
+                base.Dispose(disposing);
+                if (disposing) Interlocked.Exchange(ref client, null)?.Dispose();
             }
         }
 

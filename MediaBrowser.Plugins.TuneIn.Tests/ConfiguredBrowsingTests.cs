@@ -119,7 +119,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 + "<outline type='audio' text='Radio' guide_id='s1'/>")));
             var before = directory.Snapshot();
             var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
-            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "DiscoveryDeadlineHours", "ImportDeadlineHours", "MaxStationCount", "TraversalDepthLimit", "EnableCatalogIdentityDiagnostics", "HideRegionalGenres",
+            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "DiscoveryDeadlineHours", "ImportDeadlineHours", "MaxStationCount", "TraversalDepthLimit", "EnableCatalogIdentityDiagnostics", "AllowDirectHlsPlayback", "HideRegionalGenres",
                 "AllowPartialCatalogImport", "HasStartedCatalogRefresh",
                 "SettingsSaved", "TalkMode", "TalkIds", "SportsMode", "SportsIds", "PodcastsMode", "PodcastIds" })
                 legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });
@@ -835,9 +835,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 .Callback<HttpRequestOptions, string>((request, method) => requested = request.Url)
                 .ReturnsAsync(new HttpResponseInfo { StatusCode = System.Net.HttpStatusCode.OK,
                     Content = new MemoryStream(Encoding.UTF8.GetBytes("https://example.com/live.mp3\n")) });
-            var source = Assert.Single(await new TuneInChannel(directory, client.Object, Mock.Of<ILogger>())
+            var host = new Mock<MediaBrowser.Controller.IServerApplicationHost>();
+            host.Setup(value => value.GetLocalApiUrl(System.Net.IPAddress.Loopback)).Returns("http://127.0.0.1:8096/emby");
+            var source = Assert.Single(await new TuneInChannel(directory, client.Object, Mock.Of<ILogger>(), host.Object)
                 .GetChannelItemMediaInfo(id, Token));
-            Assert.Equal("https://example.com/live.mp3", source.Path);
+            Assert.StartsWith("http://127.0.0.1:8096/emby/TuneIn/Playback/", source.Path);
+            Assert.StartsWith("tunein-relay-v1-", source.Id);
             Assert.StartsWith("https://opml.radiotime.com/Tune.ashx?", requested);
             Assert.Contains("id=s1", requested);
             client.VerifyAll();

@@ -110,6 +110,69 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public async Task HttpClientPathRefusesHostnamesResolvingToNonPublicAddressesBeforeConnecting()
+        {
+            var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            try
+            {
+                var url = "http://localhost:" + ((IPEndPoint)listener.LocalEndpoint).Port + "/";
+                Assert.True(TuneInPlaybackHttp.PinnedConnections);
+                var error = await Assert.ThrowsAsync<System.Net.Http.HttpRequestException>(() => TuneInPlaybackHttp.SendAsync(
+                    new HttpRequestOptions { Url = url, CancellationToken = CancellationToken.None }));
+                Assert.Contains("no permitted address", error.ToString());
+                Assert.False(listener.Pending());
+            }
+            finally { listener.Stop(); }
+        }
+
+        [Fact]
+        public async Task HttpClientPathConnectsToPermittedAddressesAndReturnsRedirectsUnfollowed()
+        {
+            var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            var server = Task.Run(async () =>
+            {
+                using var client = await listener.AcceptTcpClientAsync();
+                var stream = client.GetStream();
+                var buffer = new byte[4096];
+                var request = "";
+                while (!request.Contains("\r\n\r\n"))
+                {
+                    var count = await stream.ReadAsync(buffer, 0, buffer.Length);
+                    if (count == 0) break;
+                    request += Encoding.ASCII.GetString(buffer, 0, count);
+                }
+                var reply = Encoding.ASCII.GetBytes(
+                    "HTTP/1.1 302 Found\r\nLocation: http://10.0.0.1/secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                await stream.WriteAsync(reply, 0, reply.Length);
+            });
+            try
+            {
+                var url = "http://localhost:" + ((IPEndPoint)listener.LocalEndpoint).Port + "/";
+                var response = await TuneInPlaybackHttp.SendAsync(new HttpRequestOptions
+                    { Url = url, CancellationToken = CancellationToken.None }, address => IPAddress.IsLoopback(address));
+                using (response.Content)
+                {
+                    Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+                    Assert.Equal("http://10.0.0.1/secret", response.Headers["Location"]);
+                }
+                await server.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            finally { listener.Stop(); }
+        }
+
+        [Theory]
+        [InlineData("192.0.2.1")]
+        [InlineData("198.18.0.1")]
+        [InlineData("203.0.113.9")]
+        [InlineData("2001:db8::1")]
+        [InlineData("2002:0a00:0001::1")]
+        [InlineData("::ffff:127.0.0.1")]
+        public void ReservedAndEmbeddedPrivateAddressesAreNotPublic(string address) =>
+            Assert.False(TuneInPlayback.IsPublicAddress(IPAddress.Parse(address)));
+
+        [Fact]
         public void IcyHeadersParseRedirectsAndRejectInvalidStatusLines()
         {
             var redirect = TuneInPlaybackHttp.ParseIcyHeaders("HTTP/1.0 302 Found\nLocation: http://radio.example/live\n");
@@ -219,14 +282,47 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task OrdinaryStationsRetainDirectSourcesAndDoNotOpenAudio()
+        public async Task OrdinaryStationsUseTheValidatedRelayAndDoNotOpenAudio()
         {
             var fixture = new Fixture(Live + "\nhttps://radio.example/Other.mp3");
-            var sources = (await fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None)).ToArray();
-            Assert.Equal(new[] { Live, "https://radio.example/Other.mp3" }, sources.Select(source => source.Path));
-            Assert.All(sources, source => Assert.True(source.SupportsDirectPlay));
-            Assert.Equal("aac", sources[0].Container);
-            Assert.Single(fixture.Requests);
+            var source = Assert.Single(await fixture.Playback.GetSourcesAsync(fixture.Id, Host().Object, CancellationToken.None));
+            Assert.StartsWith("http://127.0.0.1:8096/emby/TuneIn/Playback/", source.Path);
+            Assert.StartsWith("tunein-relay-v1-", source.Id);
+            Assert.False(source.SupportsDirectPlay);
+            Assert.True(source.SupportsTranscoding);
+            Assert.Equal(new[] { Live, "https://radio.example/Other.mp3" },
+                await fixture.Playback.ResolveStreamsAsync(fixture.Id, CancellationToken.None));
+            Assert.DoesNotContain(fixture.Requests, request => request.Url == Live);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task HlsOnlyStationsRequireTheDirectHlsSetting(bool allow)
+        {
+            var fixture = new Fixture("https://radio.example/live.m3u8");
+            fixture.Config.AllowDirectHlsPlayback = allow;
+            if (!allow)
+            {
+                var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                    fixture.Playback.GetSourcesAsync(fixture.Id, Host().Object, CancellationToken.None));
+                Assert.Contains("Allow direct HLS playback", error.Message);
+                return;
+            }
+            var source = Assert.Single(await fixture.Playback.GetSourcesAsync(fixture.Id, Host().Object, CancellationToken.None));
+            Assert.Equal("https://radio.example/live.m3u8", source.Path);
+            Assert.Equal("hls", source.Container);
+        }
+
+        [Fact]
+        public async Task MixedHlsStationsRelayOnlyTheNonHlsStreams()
+        {
+            var fixture = new Fixture("https://radio.example/live.m3u8\n" + Live);
+            var source = Assert.Single(await fixture.Playback.GetSourcesAsync(fixture.Id, Host().Object, CancellationToken.None));
+            Assert.StartsWith("tunein-relay-v1-", source.Id);
+            using var audio = await fixture.Playback.OpenAsync(fixture.Id, null, CancellationToken.None,
+                new Uri(source.Path).Segments.Last());
+            Assert.Equal(Live, fixture.Requests.Last().Url);
         }
 
         [Theory]
@@ -237,8 +333,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var fixture = new Fixture("https://radio.example/broken.pls\n" + Live);
             fixture.Reply = _ => unavailable ? Text("", status: HttpStatusCode.BadGateway)
                 : Text("[playlist]\nFile1=ftp://private.example/secret");
-            var source = Assert.Single(await fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None));
-            Assert.Equal(Live, source.Path);
+            var source = Assert.Single(await fixture.Playback.ResolveStreamsAsync(fixture.Id, CancellationToken.None));
+            Assert.Equal(Live, source);
             Assert.DoesNotContain("private.example", Assert.Single(fixture.Warnings));
             Assert.Equal(2, fixture.Requests.Count);
         }
@@ -293,8 +389,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 StatusCode = HttpStatusCode.Redirect, Content = Stream.Null,
                 Headers = new Dictionary<string, string> { ["Location"] = "http://127.0.0.1/secret" }
             };
-            var source = Assert.Single(await fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None));
-            Assert.Equal(Live, source.Path);
+            var source = Assert.Single(await fixture.Playback.ResolveStreamsAsync(fixture.Id, CancellationToken.None));
+            Assert.Equal(Live, source);
             Assert.Equal(2, fixture.Requests.Count);
         }
 
@@ -309,8 +405,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     Headers = new Dictionary<string, string> { ["Location"] = "https://mirror.example/other/list.m3u" }
                 }
                 : Text("live.mp3");
-            var source = Assert.Single(await fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None));
-            Assert.Equal("https://mirror.example/other/live.mp3", source.Path);
+            var source = Assert.Single(await fixture.Playback.ResolveStreamsAsync(fixture.Id, CancellationToken.None));
+            Assert.Equal("https://mirror.example/other/live.mp3", source);
         }
 
         [Fact]
@@ -528,8 +624,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public async Task ArbitraryFiniteAudioIsNotClassifiedAsPreRoll(string url)
         {
             var fixture = new Fixture(url + "\n" + Live);
-            var sources = await fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None);
-            Assert.Equal(new[] { url, Live }, sources.Select(source => source.Path));
+            var sources = await fixture.Playback.ResolveStreamsAsync(fixture.Id, CancellationToken.None);
+            Assert.Equal(new[] { url, Live }, sources);
         }
 
         [Fact]
@@ -550,12 +646,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         {
             var fixture = new Fixture("https://radio.example/Path/list.m3u");
             fixture.Reply = _ => Text("#EXTM3U\n#EXTINF:-1,Radio\nLive.AAC?Signature=AbC\n", "audio/x-mpegurl");
-            var source = Assert.Single(await fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None));
-            Assert.Equal("https://radio.example/Path/Live.AAC?Signature=AbC", source.Path);
+            var source = Assert.Single(await fixture.Playback.ResolveStreamsAsync(fixture.Id, CancellationToken.None));
+            Assert.Equal("https://radio.example/Path/Live.AAC?Signature=AbC", source);
             fixture.Metadata = "https://radio.example/live.m3u8";
-            source = Assert.Single(await fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None));
-            Assert.Equal("https://radio.example/live.m3u8", source.Path);
-            Assert.Equal("hls", source.Container);
+            fixture.Config.AllowDirectHlsPlayback = true;
+            var hls = Assert.Single(await fixture.Playback.GetSourcesAsync(fixture.Id, null, CancellationToken.None));
+            Assert.Equal("https://radio.example/live.m3u8", hls.Path);
+            Assert.Equal("hls", hls.Container);
             Assert.Equal(3, fixture.Requests.Count);
         }
 

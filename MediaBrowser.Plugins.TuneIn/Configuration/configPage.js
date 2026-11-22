@@ -448,6 +448,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.maxStationCount').disabled = catalogDisabled;
         instance.view.querySelector('.traversalDepthLimit').disabled = catalogDisabled;
         instance.view.querySelector('.enableCatalogIdentityDiagnostics').disabled = catalogDisabled;
+        instance.view.querySelector('.allowDirectHlsPlayback').disabled = catalogDisabled;
         instance.view.querySelector('.tuneInSettingsSave').disabled = disabled;
         instance.refreshCategoryRows.forEach(function (row) { row.schedule.disabled = catalogDisabled; });
         var toggle = instance.view.querySelector('.settingsLocked');
@@ -1326,6 +1327,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         config.MaxStationCount = maxStationCount === '' ? null : Number(maxStationCount);
         config.TraversalDepthLimit = Number(traversalDepth);
         config.EnableCatalogIdentityDiagnostics = instance.view.querySelector('.enableCatalogIdentityDiagnostics').checked;
+        config.AllowDirectHlsPlayback = instance.view.querySelector('.allowDirectHlsPlayback').checked;
         config.HideRegionalGenres = instance.view.querySelector('.hideRegionalGenres').checked;
         config.AllowPartialCatalogImport = instance.view.querySelector('.allowPartialCatalogImport').checked;
         config.RefreshSchedules = Array.from(instance.refreshSchedules)
@@ -1539,6 +1541,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.traversalDepthLimit').value =
                 config.TraversalDepthLimit == null ? 10 : config.TraversalDepthLimit;
             view.querySelector('.enableCatalogIdentityDiagnostics').checked = config.EnableCatalogIdentityDiagnostics === true;
+            view.querySelector('.allowDirectHlsPlayback').checked = config.AllowDirectHlsPlayback === true;
             view.querySelector('.hideRegionalGenres').checked = config.HideRegionalGenres !== false;
             view.querySelector('.allowPartialCatalogImport').checked = config.AllowPartialCatalogImport !== false;
             var hasRegions = (config.LocalCities || []).some(function (item) {

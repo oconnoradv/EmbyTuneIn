@@ -656,6 +656,11 @@
                             <span>Enable catalog identity diagnostics</span>
                         </label>
                         <p class="fieldDescription" id="tuneInIdentityDiagnosticsHint">Off by default. Enable temporarily when refreshes unexpectedly delete/recreate stations or are unusually slow. Logs aggregate saved/fresh catalog comparisons and enables unserved folder names, paths and content counts in the dashboard, stall warnings and stopped-import reports. Folder details are limited to 50 per snapshot; URLs and signed IDs are omitted. Folder labels may be private; review before sharing. Adds processing and memory overhead; disable after troubleshooting. Does not change imports or normal error logging.</p>
+                        <label class="emby-checkbox-label">
+                            <input type="checkbox" is="emby-checkbox" class="allowDirectHlsPlayback" aria-describedby="tuneInDirectHlsHint" disabled />
+                            <span>Allow direct HLS playback</span>
+                        </label>
+                        <p class="fieldDescription" id="tuneInDirectHlsHint">Off by default. Stations are played through the plugin's relay, which only connects to public internet addresses. A few stations offer only HLS (.m3u8) streams, which the relay cannot carry. Enabling this lets Emby fetch those streams directly, without the relay's address checks. Enable only if you need such a station and trust your network.</p>
                     </details>
                 </fieldset>
             </details>

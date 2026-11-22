@@ -50,21 +50,26 @@ namespace MediaBrowser.Plugins.TuneIn
             CancellationToken token)
         {
             var snapshot = directory.Snapshot();
-            PlaybackPlan plan;
-            using (var scope = new PlaybackScope(directory, snapshot, token))
-                plan = await ResolveAsync(snapshot, id, scope.Token).ConfigureAwait(false);
+            var plan = await ResolveScopedAsync(snapshot, id, token).ConfigureAwait(false);
             directory.CheckCurrent(snapshot, token);
-            if (!plan.HasPreRoll)
-                return plan.Leaves.Select(DirectSource).ToArray();
+            var relay = plan.HasPreRoll ? plan : plan.WithoutHls();
+            if (relay == null)
+            {
+                if (snapshot.Value.AllowDirectHlsPlayback) return plan.Leaves.Select(DirectSource).ToArray();
+                warning?.Invoke("TuneIn station offers only HLS streams; direct HLS playback is disabled in settings.");
+                throw new InvalidDataException("This station only offers HLS streams. Enable Allow direct HLS playback "
+                    + "in the TuneIn advanced settings to play it.");
+            }
             if (host == null) throw new InvalidOperationException("The Emby playback host is unavailable.");
             var local = new Uri(host.GetLocalApiUrl(IPAddress.Loopback));
             if (!IPAddress.TryParse(local.Host, out var address) || !IPAddress.IsLoopback(address))
                 throw new InvalidOperationException("TuneIn playback requires a server-loopback URL.");
-            var attempt = Attempts.Add(directory, snapshot.Key, id, plan);
+            var attempt = Attempts.Add(directory, snapshot.Key, id, relay);
             using (var hash = SHA256.Create())
                 return new[] { new MediaSourceInfo
                 {
-                    Id = "tunein-preroll-v1-" + BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(id))).Replace("-", ""),
+                    Id = (relay.HasPreRoll ? "tunein-preroll-v1-" : "tunein-relay-v1-")
+                        + BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(id))).Replace("-", ""),
                     Name = "TuneIn",
                     Path = local.AbsoluteUri.TrimEnd('/') + "/TuneIn/Playback/" + Uri.EscapeDataString(id) + "/" + attempt,
                     Protocol = MediaProtocol.Http,
@@ -73,6 +78,19 @@ namespace MediaBrowser.Plugins.TuneIn
                     SupportsDirectStream = false,
                     SupportsTranscoding = true
                 } };
+        }
+
+        // Resolution without the relay handoff, so playlist expansion can be verified directly.
+        internal async Task<string[]> ResolveStreamsAsync(string id, CancellationToken token)
+        {
+            var snapshot = directory.Snapshot();
+            return (await ResolveScopedAsync(snapshot, id, token).ConfigureAwait(false)).Leaves.ToArray();
+        }
+
+        private async Task<PlaybackPlan> ResolveScopedAsync(ConfigurationSnapshot snapshot, string id, CancellationToken token)
+        {
+            using (var scope = new PlaybackScope(directory, snapshot, token))
+                return await ResolveAsync(snapshot, id, scope.Token).ConfigureAwait(false);
         }
 
         internal async Task<TuneInAudioSource> OpenAsync(string id,
@@ -86,9 +104,12 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 scope.Check();
                 var plan = attempt == null ? null : Attempts.Take(directory, snapshot.Key, id, attempt);
-                plan = plan ?? await ResolveAsync(snapshot, id, scope.Token).ConfigureAwait(false);
-                if (attempt != null && !plan.HasPreRoll)
-                    throw new PlaybackFailure("TuneIn no longer advertises the required pre-roll for this handoff.");
+                if (plan == null)
+                {
+                    var resolved = await ResolveAsync(snapshot, id, scope.Token).ConfigureAwait(false);
+                    plan = (resolved.HasPreRoll ? resolved : resolved.WithoutHls())
+                        ?? throw new InvalidDataException("TuneIn offers only HLS streams for this station, which the relay does not open.");
+                }
                 source = await OpenPlanAsync(plan, snapshot, scope, decode, scope.Token).ConfigureAwait(false);
                 scope.Check();
                 return new TuneInAudioSource(new ScopedStream(source, scope, warning), source.ContentType);
@@ -180,7 +201,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             {
                                 // Leave native HLS handling intact, but never delegate a known TuneIn pre-roll.
                                 if (playlist.Text.Contains("#EXT-X-") && !MentionsPreRoll(playlist.Text))
-                                    plan.Alternatives.Add(new PlaybackPlan { Url = playlist.Url.AbsoluteUri });
+                                    plan.Alternatives.Add(new PlaybackPlan { Url = playlist.Url.AbsoluteUri, Hls = true });
                                 else
                                 {
                                     List<string> nested;
@@ -360,9 +381,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 scope.ConsumeOpening();
                 var source = await FetchAsync(plan.Url, snapshot, token).ConfigureAwait(false);
-                if (source.ContentType == "audio/mpeg" || source.ContentType == "audio/mp3"
-                    || source.ContentType == "audio/aac" || source.ContentType == "audio/aacp"
-                    || source.ContentType == "application/octet-stream")
+                if (IsRelayableAudio(source.ContentType))
                     return source;
                 source.Dispose();
                 throw new InvalidDataException("Unsupported TuneIn pre-roll/live audio format.");
@@ -398,6 +417,13 @@ namespace MediaBrowser.Plugins.TuneIn
             if (failure != null) throw failure;
             throw new PlaybackFailure("No TuneIn live alternative could be opened.");
         }
+
+        // Playlists and web pages are never relayed as audio; ffmpeg probes the actual codec.
+        private static bool IsRelayableAudio(string contentType) =>
+            contentType == "application/octet-stream" || contentType == "application/ogg"
+            || (contentType != null && contentType.StartsWith("audio/", StringComparison.Ordinal)
+                && contentType.IndexOf("mpegurl", StringComparison.Ordinal) < 0
+                && contentType.IndexOf("scpls", StringComparison.Ordinal) < 0);
 
         internal static bool IsPreRoll(string value)
         {
@@ -436,10 +462,21 @@ namespace MediaBrowser.Plugins.TuneIn
             if (IPAddress.IsLoopback(address)) return false;
             var bytes = address.GetAddressBytes();
             if (bytes.Length == 16)
-                return (bytes[0] & 0xe0) == 0x20 && !address.IsIPv6Teredo;
+            {
+                // Global unicast only, excluding Teredo, documentation and 6to4 wrappers around non-public IPv4.
+                if ((bytes[0] & 0xe0) != 0x20 || address.IsIPv6Teredo) return false;
+                if (bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] == 0x0d && bytes[3] == 0xb8) return false;
+                if (bytes[0] == 0x20 && bytes[1] == 0x02)
+                    return IsPublicAddress(new IPAddress(new[] { bytes[2], bytes[3], bytes[4], bytes[5] }));
+                return true;
+            }
             return bytes[0] != 0 && bytes[0] != 10 && bytes[0] != 127 && bytes[0] < 224
                 && !(bytes[0] == 169 && bytes[1] == 254) && !(bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
-                && !(bytes[0] == 192 && bytes[1] == 168) && !(bytes[0] == 100 && (bytes[1] & 0xc0) == 64);
+                && !(bytes[0] == 192 && bytes[1] == 168) && !(bytes[0] == 100 && (bytes[1] & 0xc0) == 64)
+                && !(bytes[0] == 192 && bytes[1] == 0 && (bytes[2] == 0 || bytes[2] == 2))
+                && !(bytes[0] == 198 && (bytes[1] & 0xfe) == 18)
+                && !(bytes[0] == 198 && bytes[1] == 51 && bytes[2] == 100)
+                && !(bytes[0] == 203 && bytes[1] == 0 && bytes[2] == 113);
         }
 
         private static List<string> ParseUrls(string text, Uri parent, bool provider = false)
@@ -538,10 +575,23 @@ namespace MediaBrowser.Plugins.TuneIn
         private sealed class PlaybackPlan
         {
             internal string Url;
+            internal bool Hls;
             internal readonly List<string> PreRolls = new List<string>();
             internal readonly List<PlaybackPlan> Alternatives = new List<PlaybackPlan>();
             internal bool HasPreRoll => PreRolls.Count != 0 || Alternatives.Any(plan => plan.HasPreRoll);
             internal IEnumerable<string> Leaves => Url == null ? Alternatives.SelectMany(plan => plan.Leaves) : new[] { Url };
+            internal bool IsHls => Url != null
+                && (Hls || new Uri(Url).AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase));
+
+            // The relay validates every connection itself; HLS would hand segment fetching to Emby unchecked.
+            internal PlaybackPlan WithoutHls()
+            {
+                if (Url != null) return IsHls ? null : this;
+                var copy = new PlaybackPlan();
+                copy.PreRolls.AddRange(PreRolls);
+                copy.Alternatives.AddRange(Alternatives.Select(plan => plan.WithoutHls()).Where(plan => plan != null));
+                return copy.Alternatives.Count == 0 ? null : copy;
+            }
         }
 
         private sealed class HttpOwner : IDisposable
