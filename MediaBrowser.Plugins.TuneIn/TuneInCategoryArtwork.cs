@@ -62,7 +62,7 @@ namespace MediaBrowser.Plugins.TuneIn
         internal const string ChannelArtwork = "channel";
         private const string GenrePrefix = "MediaBrowser.Plugins.TuneIn.Images.genres.";
         private static readonly string[] Categories = { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
-        // Original genre cards are built offline by Build-GenreArtwork.ps1 (oconnoradv/EmbyLogoTool) and bundled here.
+        // Original genre cards are built offline by Build-GenreArtwork.ps1 (oconnoradv/TuneInArtGen) and bundled here.
         private static readonly HashSet<string> Genres = new HashSet<string>(
             typeof(TuneInCategoryArtwork).Assembly.GetManifestResourceNames()
                 .Where(name => name.StartsWith(GenrePrefix, StringComparison.Ordinal) && name.EndsWith(".jpg", StringComparison.Ordinal))

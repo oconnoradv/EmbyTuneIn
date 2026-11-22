@@ -611,7 +611,7 @@ Music genre folders, including music genres shown under **By Language**, use
 bundled original 1280×720 neon artwork. Each card's typography, palette, and
 line art depend on the genre's parent. The cards contain no TuneIn logos.
 Maintainers rebuild them offline on Windows 11 with `Build-GenreArtwork.ps1`
-from the private oconnoradv/EmbyLogoTool repository; the plugin does not
+from the private oconnoradv/TuneInArtGen repository; the plugin does not
 download or generate them. Genres without a card use the Music category artwork.
 
 ## Playback
