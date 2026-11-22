@@ -490,7 +490,7 @@ test('API request interval validates and saves the shared catalog pacing setting
 });
 
 test('discovery controls distinguish legacy defaults from Not set and preserve saved limits', async () => {
-    for (const [config, maximum, depth] of [[{}, 200, 7], [{ MaxStationCount: null }, '', 7],
+    for (const [config, maximum, depth] of [[{}, 200, 10], [{ MaxStationCount: null }, '', 10],
         [{ MaxStationCount: 4000, TraversalDepthLimit: 50 }, 4000, 50]]) {
         const app = harness();
         const visit = app.instance.onResume();
@@ -614,7 +614,7 @@ test('station maintenance finds entries by name and previews the chosen placemen
     assert.equal(app.elements['.cleanupPreview'].disabled, true);
 });
 
-test('limited discovery is not displayed as confirmed full success', async () => {
+test('limited discovery completes per design and shares the success color', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();
     app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true });
@@ -622,11 +622,11 @@ test('limited discovery is not displayed as confirmed full success', async () =>
         Categories: [{ Category: 'talk', Name: 'Talk', State: 'Limited (imported)' }] });
     await visit;
     await settle();
-    assert.equal(app.elements['.tuneInRefresh'].attributes['data-outcome'], 'Partial');
-    assert.match(app.elements['.refreshOverall'].textContent, /limited discovery/);
+    assert.equal(app.elements['.tuneInRefresh'].attributes['data-outcome'], 'Completed');
+    assert.match(app.elements['.refreshOverall'].textContent, /successful \(limited by discovery settings\)/);
 });
 
-test('limited category rows are orange and explain which discovery limit was reached', async () => {
+test('limited category rows are green and explain which discovery limit was reached', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();
     app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
@@ -639,7 +639,7 @@ test('limited category rows are orange and explain which discovery limit was rea
     assert.equal(row.childNodes[0].textContent,
         'Music: Limited (imported) - TuneIn traversal depth limit 7 reached (including pagination)');
     const html = fs.readFileSync(path.join(__dirname, '..', 'MediaBrowser.Plugins.TuneIn', 'Configuration', 'configPage.html'), 'utf8');
-    assert.ok(html.includes('.tuneInRefreshCategories [data-outcome="Limited"]'));
+    assert.ok(html.includes('.tuneInRefreshCategories [data-outcome="Completed"], .tuneInRefreshCategories [data-outcome="Limited"] {'));
 });
 
 for (const setting of ['Import', 'Discovery']) {

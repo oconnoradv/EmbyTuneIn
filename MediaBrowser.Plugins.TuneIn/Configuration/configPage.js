@@ -613,8 +613,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         else if (!status.Busy && /^(Completed|NeverRun)$/.test(status.State) &&
             outcomes.length && outcomes.every(function (outcome) { return outcome === 'Completed'; })) overall = 'Completed';
         else overall = '';
-        setRefreshOutcome(instance, overall === 'Limited' ? 'Partial' : overall, overall === 'Error' ? 'error'
-            : overall === 'Limited' ? 'limited discovery'
+        // Reaching a configured discovery limit completes per design, so it shares the success color.
+        setRefreshOutcome(instance, overall === 'Limited' ? 'Completed' : overall, overall === 'Error' ? 'error'
+            : overall === 'Limited' ? 'successful (limited by discovery settings)'
             : overall === 'Partial' ? 'partial' : overall === 'Completed' ? 'successful'
             : 'not all categories confirmed successful');
         instance.view.querySelector('.refreshIndicator').hidden = !instance.refreshBusy;
@@ -1517,7 +1518,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.maxStationCount').value =
                 config.MaxStationCount === undefined ? 200 : config.MaxStationCount == null ? '' : config.MaxStationCount;
             view.querySelector('.traversalDepthLimit').value =
-                config.TraversalDepthLimit == null ? 7 : config.TraversalDepthLimit;
+                config.TraversalDepthLimit == null ? 10 : config.TraversalDepthLimit;
             view.querySelector('.enableCatalogIdentityDiagnostics').checked = config.EnableCatalogIdentityDiagnostics === true;
             view.querySelector('.hideRegionalGenres').checked = config.HideRegionalGenres !== false;
             view.querySelector('.allowPartialCatalogImport').checked = config.AllowPartialCatalogImport !== false;

@@ -20,7 +20,7 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         internal const int MaxMaxStationCount = 4000;
         internal const int MinTraversalDepthLimit = 3;
         internal const int MaxTraversalDepthLimit = 50;
-        internal const int DefaultTraversalDepthLimit = 7;
+        internal const int DefaultTraversalDepthLimit = 10;
 
         public String Username { get; set; }
         public String LatLon { get; set; }

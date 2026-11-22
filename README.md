@@ -314,6 +314,8 @@ and saved; otherwise it stays open for configuration. **Audio Categories** and
 refresh is active. You can expand or collapse it independently; its
 heading keeps the current refresh state visible.
 Its background is green when all enabled categories have successful results,
+including results limited by Max Station Count or the traversal depth (those
+complete per design; the row text names the limit reached),
 orange if any result is partial, and red if any has an error; errors take
 precedence over partial results. The latest refresh's partial or error state is
 also reflected, even if it did not reach a category. Unconfirmed or unavailable
@@ -460,7 +462,7 @@ category in settings if it should stay absent.
 | Timeout handling | Drains active work and stops without automatic discovery or import retries |
 | Manual Cancel | Drains active work and stops; never triggers an automatic recovery retry |
 | Checkpoint resume window | 48 hours from discovery start, with matching settings and requested category scope |
-| TuneIn traversal depth | 3-50 (default: 7), category root at level 0; every folder and More Stations transition counts; limited results can be imported |
+| TuneIn traversal depth | 3-50 (default: 10), category root at level 0; every folder and More Stations transition counts; limited results can be imported |
 
 Discovery can overlap up to four independent requests without reducing shared spacing
 between request starts. HTTP 429 responses have a run-wide budget of three
