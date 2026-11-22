@@ -317,7 +317,8 @@ namespace MediaBrowser.Plugins.TuneIn
         private string FolderImage(NavigationEntry entry)
         {
             var genre = TuneInCategoryArtwork.GenreId(entry);
-            return genre == null ? null : TuneInCategoryArtwork.GenreUrl(genre);
+            return genre == null || serverHost == null ? null
+                : TuneInCategoryArtwork.GenreUrl(serverHost.GetLocalApiUrl(System.Net.IPAddress.Loopback), genre);
         }
 
         private string CategoryArtworkUrl(string category) =>

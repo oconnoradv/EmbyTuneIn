@@ -1,4 +1,4 @@
-using MediaBrowser.Controller;
+﻿using MediaBrowser.Controller;
 using MediaBrowser.Controller.Channels;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
@@ -155,7 +155,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public void MusicGenreFoldersUseTuneInGenreLogos()
+        public void MusicGenreFoldersUseBundledGenreArtwork()
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true };
             var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("Unexpected provider request."));
@@ -166,24 +166,33 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Category = category, Name = id, Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=" + id)
             };
             Assert.Equal("c57951", TuneInCategoryArtwork.GenreId(Genre("c57951")));
-            Assert.Null(TuneInCategoryArtwork.GenreId(Genre("g2801")));
+            Assert.Null(TuneInCategoryArtwork.GenreId(Genre("g99999999")));
             Assert.Null(TuneInCategoryArtwork.GenreId(Genre("c57951", "talk")));
             var languageGenre = Genre("c57951", "language");
             languageGenre.ContentCategory = "music";
             Assert.Equal("c57951", TuneInCategoryArtwork.GenreId(languageGenre));
-            Assert.Throws<ArgumentException>(() => TuneInCategoryArtwork.GenreUrl("../music"));
+            using (var stream = TuneInCategoryArtwork.OpenGenre("c57951"))
+            {
+                var header = new byte[3];
+                Assert.Equal(3, stream.Read(header, 0, 3));
+                Assert.Equal(new byte[] { 0xFF, 0xD8, 0xFF }, header);
+            }
+            Assert.Throws<ArgumentException>(() => TuneInCategoryArtwork.OpenGenre("../music"));
+            Assert.Throws<UnauthorizedAccessException>(() => new TuneInCategoryArtworkService(Moq.Mock.Of<IHttpResultFactory>())
+                .Get(new GetTuneInGenreArtwork { GenreId = "c57951" }));
+            Assert.Single(typeof(GetTuneInGenreArtwork).GetCustomAttributes(typeof(AuthenticatedAttribute), false));
 
             var library = DispatchProxy.Create<ILibraryManager, LibraryProxy>();
             var proxy = (LibraryProxy)library;
             proxy.Root = Folder(1, rootId);
             var rock = Folder(2, directory.Register(snapshot, Genre("c57951")));
             rock.SetProviderId("TuneInCategoryArtwork", "1:music:c57951:1");
-            var dubstep = Folder(3, directory.Register(snapshot, Genre("g2801")));
+            var dubstep = Folder(3, directory.Register(snapshot, Genre("g99999999")));
             proxy.Descendants = new BaseItem[] { rock, dubstep };
             var channel = new TuneInChannel(directory, serverHost: DispatchProxy.Create<IServerApplicationHost, HostProxy>(), library: library);
             channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
-            Assert.Equal("https://cdn-profiles.tunein.com/c57951/images/logoq.png", rock.GetImagePath(ImageType.Primary, 0));
-            Assert.Equal("1:music:c57951:2", rock.GetProviderId("TuneInCategoryArtwork"));
+            Assert.Equal("http://127.0.0.1:8096/emby/TuneIn/GenreArtwork/c57951?v=3", rock.GetImagePath(ImageType.Primary, 0));
+            Assert.Equal("1:music:c57951:3", rock.GetProviderId("TuneInCategoryArtwork"));
             Assert.EndsWith("/TuneIn/CategoryArtwork/music?v=1", dubstep.GetImagePath(ImageType.Primary, 0));
             Assert.Equal("1:music", dubstep.GetProviderId("TuneInCategoryArtwork"));
         }

@@ -607,10 +607,12 @@ folder artwork even when the catalog is unchanged. Refresh also updates the
 top-level TuneIn library item's Primary, Thumb, and first Backdrop images to
 the **Powered by TuneIn** artwork.
 
-Music genre folders, including music genres shown under **By Language**, link
-to TuneIn's own genre logo, the same way station logos link to TuneIn. The
-plugin does not bundle or modify those logos. TuneIn publishes a logo for only
-some genres; the others use the Music category artwork.
+Music genre folders, including music genres shown under **By Language**, use
+bundled original 1280×720 neon artwork. Each card's typography, palette, and
+line art depend on the genre's parent. The cards contain no TuneIn logos.
+Maintainers rebuild them offline on Windows 11 with `Build-GenreArtwork.ps1`
+from the private oconnoradv/EmbyLogoTool repository; the plugin does not
+download or generate them. Genres without a card use the Music category artwork.
 
 ## Playback
 
