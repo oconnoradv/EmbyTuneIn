@@ -162,6 +162,10 @@ namespace MediaBrowser.Plugins.TuneIn
             { ParentIds = roots.Select(item => item.InternalId).ToArray(), Recursive = true, Limit = TuneInStagedImport.MaxItems + 1 }, token);
             if (items.Length > TuneInStagedImport.MaxItems)
                 throw new InvalidOperationException("Existing TuneIn category exceeds its inventory limit.");
+            // Recursive queries over several roots can repeat items reachable through more than one root.
+            var rootIds = new HashSet<long>(roots.Select(item => item.InternalId));
+            items = items.Where(item => !rootIds.Contains(item.InternalId))
+                .GroupBy(item => item.InternalId).Select(group => group.First()).ToArray();
             var inventory = roots.Concat(items).ToDictionary(item => item.InternalId);
             var reachable = new HashSet<long>(roots.Select(item => item.InternalId));
             foreach (var item in items)

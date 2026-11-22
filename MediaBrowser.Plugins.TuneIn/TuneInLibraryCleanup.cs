@@ -133,6 +133,7 @@ namespace MediaBrowser.Plugins.TuneIn
             }, CancellationToken.None);
             if (items.Length > TuneInStagedImport.MaxItems)
                 throw new InvalidOperationException("The TuneIn station search exceeds its library item limit.");
+            items = items.GroupBy(item => item.InternalId).Select(group => group.First()).ToArray();
             var byId = new Dictionary<long, BaseItem>();
             foreach (var item in items) byId[item.InternalId] = item;
             string PathOf(BaseItem item)
@@ -201,6 +202,7 @@ namespace MediaBrowser.Plugins.TuneIn
             }, CancellationToken.None);
             if (items.Length > TuneInStagedImport.MaxItems)
                 throw new InvalidOperationException("The TuneIn cleanup preview exceeds its library item limit.");
+            items = items.GroupBy(item => item.InternalId).Select(group => group.First()).ToArray();
 
             var children = items.ToLookup(item => item.ParentId);
             var seen = new HashSet<long> { root.InternalId };

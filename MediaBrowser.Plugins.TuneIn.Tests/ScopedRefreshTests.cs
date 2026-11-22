@@ -94,6 +94,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     : new BaseItem[] { new Folder { InternalId = 2, ParentId = 1, ExternalId = root.Id } });
             var retained = channel.ReadCategorySnapshot(snapshot, "talk", CancellationToken.None);
             Assert.Equal(stationId, Assert.Single(Assert.Single(retained.Folders).Items).Id);
+            var rootFolder = new Folder { InternalId = 2, ParentId = 1, ExternalId = root.Id };
+            library.Setup(api => api.GetItemList(It.Is<InternalItemsQuery>(query => query.Recursive), It.IsAny<CancellationToken>()))
+                .Returns(new BaseItem[] { station, rootFolder, station });
+            retained = channel.ReadCategorySnapshot(snapshot, "talk", CancellationToken.None);
+            Assert.Equal(stationId, Assert.Single(Assert.Single(retained.Folders).Items).Id);
             station.ExternalId = "unverified";
             Assert.Throws<InvalidOperationException>(() => channel.ReadCategorySnapshot(snapshot, "talk", CancellationToken.None));
         }
