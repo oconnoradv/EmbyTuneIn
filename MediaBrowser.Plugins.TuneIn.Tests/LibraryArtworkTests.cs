@@ -4,6 +4,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Services;
 using MediaBrowser.Plugins.TuneIn.Configuration;
 using System;
 using System.Collections.Generic;
@@ -84,6 +85,23 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Throws<UnauthorizedAccessException>(() =>
                 new TuneInCategoryArtworkService(Moq.Mock.Of<IHttpResultFactory>()).Get(new GetTuneInCategoryArtwork { Category = "talk" }));
             Assert.Single(typeof(GetTuneInCategoryArtwork).GetCustomAttributes(typeof(AuthenticatedAttribute), false));
+        }
+
+        [Fact]
+        public void SettingsPageLibraryArtworkIsServedToRemoteAdministrators()
+        {
+            var request = new Moq.Mock<IRequest>();
+            request.SetupGet(value => value.RemoteIp).Returns(IPAddress.Parse("192.168.1.20"));
+            request.SetupGet(value => value.IsSocketConnectionLocal).Returns(false);
+            var results = new Moq.Mock<IHttpResultFactory>();
+            results.Setup(value => value.GetResult(request.Object, Moq.It.Is<ReadOnlyMemory<byte>>(bytes => bytes.Length > 0), "image/png", null))
+                .Returns("ok");
+            var service = new TuneInCategoryArtworkService(results.Object) { Request = request.Object };
+
+            Assert.Equal("ok", service.Get(new GetTuneInLibraryArtwork()));
+            Assert.Throws<UnauthorizedAccessException>(() => service.Get(new GetTuneInCategoryArtwork { Category = "channel" }));
+            var auth = Assert.IsType<AuthenticatedAttribute>(Assert.Single(typeof(GetTuneInLibraryArtwork).GetCustomAttributes(typeof(AuthenticatedAttribute), false)));
+            Assert.Equal("Admin", auth.Roles);
         }
 
         [Fact]

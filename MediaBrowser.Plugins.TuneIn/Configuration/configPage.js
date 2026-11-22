@@ -1478,7 +1478,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         art.onload = function () { hero.hidden = false; };
         art.onerror = function () { hero.hidden = true; };
         // An img request cannot send Emby's auth header, so pass the session token like Emby's own image URLs.
-        art.src = ApiClient.getUrl('TuneIn/CategoryArtwork/channel', { v: '2', api_key: ApiClient.accessToken() });
+        art.src = ApiClient.getUrl('TuneIn/LibraryArtwork', { v: '2', api_key: ApiClient.accessToken() });
     }
 
     Object.assign(View.prototype, BaseView.prototype);

@@ -23,6 +23,13 @@ namespace MediaBrowser.Plugins.TuneIn
         public string GenreId { get; set; }
     }
 
+    // The settings page loads this from the administrator's browser, so it cannot be loopback-only.
+    [Route("/TuneIn/LibraryArtwork", "GET")]
+    [Authenticated(Roles = "Admin")]
+    public sealed class GetTuneInLibraryArtwork
+    {
+    }
+
     public sealed class TuneInCategoryArtworkService : IService, IRequiresRequest
     {
         private readonly IHttpResultFactory resultFactory;
@@ -43,11 +50,15 @@ namespace MediaBrowser.Plugins.TuneIn
             return Respond(() => File.OpenRead(path), path.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "image/jpeg");
         }
 
-        private object Respond(Func<Stream> open, string contentType)
+        public object Get(GetTuneInLibraryArtwork request) =>
+            Respond(() => TuneInCategoryArtwork.Open(TuneInCategoryArtwork.ChannelArtwork), "image/png", false);
+
+        private object Respond(Func<Stream> open, string contentType, bool loopbackOnly = true)
         {
+            if (Request == null) throw new UnauthorizedAccessException("TuneIn artwork requires an Emby request.");
             var remote = Request?.RemoteIp;
             if (remote?.IsIPv4MappedToIPv6 == true) remote = remote.MapToIPv4();
-            if (Request == null || !Request.IsSocketConnectionLocal || remote == null || !IPAddress.IsLoopback(remote))
+            if (loopbackOnly && (!Request.IsSocketConnectionLocal || remote == null || !IPAddress.IsLoopback(remote)))
                 throw new UnauthorizedAccessException("TuneIn category artwork is available only to this Emby server.");
             Request.CancellationToken.ThrowIfCancellationRequested();
             using (var stream = open())
