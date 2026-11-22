@@ -467,8 +467,15 @@
             font-size: .85em;
             opacity: .7;
         }
-        .tuneInHero {
-            position: relative;
+        .tuneInArtworkPacks {
+            margin: 0 0 .75em;
+            font-size: .9em;
+            opacity: .85;
+        }
+        .tuneInArtworkPacks code {
+            word-break: break-all;
+        }
+        .tuneInHero {            position: relative;
             max-width: 40rem;
             aspect-ratio: 16 / 9;
             margin: 0 auto 1.5em;
@@ -563,7 +570,11 @@
         </div>
         <form>
             <p class="tuneInPluginVersion" hidden></p>
-            <p class="status" role="status" aria-live="polite"></p>
+            <p class="tuneInArtworkPacks">
+                Optional genre artwork packs:
+                <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt/releases" target="_blank" rel="noopener noreferrer">download from EmbyTuneInArt</a>.
+                <span class="tuneInArtworkInstall" hidden>Extract the images into <code class="tuneInArtworkFolder"></code>, then refresh Music in Catalog Refresh. <span class="tuneInArtworkCount"></span></span>
+            </p>            <p class="status" role="status" aria-live="polite"></p>
             <p class="status stationDeletionNotice" role="status" aria-live="polite" hidden></p>
             <p class="status catalogRefreshPrompt" role="status" hidden></p>
             <div class="tuneInSection tuneInSectionBox tuneInGlobalPanel">

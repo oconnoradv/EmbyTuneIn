@@ -600,7 +600,15 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             version.textContent = 'TuneIn plugin ' + status.PluginVersion;
             version.hidden = false;
         }
-        if (instance.refreshDefaultPending) {
+        var artworkInstall = instance.view.querySelector('.tuneInArtworkInstall');
+        if (artworkInstall && status.ArtworkFolder) {
+            instance.view.querySelector('.tuneInArtworkFolder').textContent = status.ArtworkFolder;
+            var cards = status.ArtworkCards || 0;
+            instance.view.querySelector('.tuneInArtworkCount').textContent = cards
+                ? cards + (cards === 1 ? ' genre image installed.' : ' genre images installed.')
+                : 'No genre images installed; Music folders use the default icon.';
+            artworkInstall.hidden = false;
+        }        if (instance.refreshDefaultPending) {
             instance.refreshDefaultPending = false;
             instance.refreshSection.open = instance.refreshBusy ||
                 status.State === 'NeverRun' && status.HasRefreshBeenStarted === false && !status.StartedUtc;

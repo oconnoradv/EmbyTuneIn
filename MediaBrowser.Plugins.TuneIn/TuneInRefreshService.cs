@@ -91,6 +91,8 @@ namespace MediaBrowser.Plugins.TuneIn
             EnsureAdmin();
             var status = refresh.Status();
             status.SettingsLocked = Plugin.Instance.SettingsLock.TryReadStatus();
+            status.ArtworkFolder = TuneInCategoryArtwork.GenreFolder;
+            status.ArtworkCards = TuneInCategoryArtwork.CountGenreFiles();
             status.HasRefreshBeenStarted = Plugin.Instance.Configuration.HasStartedCatalogRefresh
                 || status.State != "NeverRun"
                 || (status.Categories ?? Array.Empty<TuneInCategoryRefreshStatus>())

@@ -65,6 +65,8 @@ namespace MediaBrowser.Plugins.TuneIn
         public DateTime? LastProgressUtc { get; set; }
         public string Activity { get; set; }
         public string PluginVersion { get; set; } = PluginBuild.Display;
+        public string ArtworkFolder { get; set; }
+        public int ArtworkCards { get; set; }
         internal TuneInRefreshStatus Copy() => (TuneInRefreshStatus)MemberwiseClone();
     }
 

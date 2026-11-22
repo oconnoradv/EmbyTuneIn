@@ -53,6 +53,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
         '.channelScheduleConfirm', '.channelScheduleAdjust', '.tuneInPluginVersion',
+        '.tuneInArtworkInstall', '.tuneInArtworkFolder', '.tuneInArtworkCount',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshImportContents', '.refreshPendingFolders', '.refreshPendingFolderText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
@@ -2090,6 +2091,26 @@ test('plugin version label shows the running build reported by refresh status', 
     await visit;
     assert.equal(label.hidden, false);
     assert.equal(label.textContent, 'TuneIn plugin v1.2.8.0 (e045a80)');
+    app.instance.onPause();
+});
+
+test('artwork pack help shows the server folder and installed genre image count', async () => {
+    const app = harness(true);
+    const install = app.elements['.tuneInArtworkInstall'];
+    install.hidden = true;
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', ArtworkFolder: 'C:\\Emby\\plugins\\configurations\\TuneInArtwork\\genres', ArtworkCards: 0 });
+    await visit;
+    assert.equal(install.hidden, false);
+    assert.equal(app.elements['.tuneInArtworkFolder'].textContent, 'C:\\Emby\\plugins\\configurations\\TuneInArtwork\\genres');
+    assert.match(app.elements['.tuneInArtworkCount'].textContent, /No genre images installed/);
+    app.instance.onPause();
+    const again = app.instance.onResume();
+    app.reads[1].resolve({});
+    app.refresh[1].resolve({ State: 'NeverRun', ArtworkFolder: 'C:\\art', ArtworkCards: 123 });
+    await again;
+    assert.equal(app.elements['.tuneInArtworkCount'].textContent, '123 genre images installed.');
     app.instance.onPause();
 });
 

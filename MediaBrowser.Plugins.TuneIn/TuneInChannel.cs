@@ -277,7 +277,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (entry.Category != rootEntry.Category || entry.StationId != null) return;
                 var genre = TuneInCategoryArtwork.GenreId(entry);
                 var version = TuneInCategoryArtwork.Revision + ":" + entry.Category
-                    + (genre == null ? "" : ":" + genre + ":" + TuneInCategoryArtwork.GenreRevision);
+                    + (genre == null ? "" : ":" + genre + ":" + TuneInCategoryArtwork.GenreRevision(genre));
                 var previousVersion = folder.GetProviderId("TuneInCategoryArtwork");
                 if (previousVersion == version && folder.HasImage(ImageType.Primary, 0)) return;
                 folder.SetImage(new ItemImageInfo

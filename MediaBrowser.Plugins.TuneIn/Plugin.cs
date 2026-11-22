@@ -22,6 +22,8 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             SettingsLock = new TuneInSettingsLockStore(string.IsNullOrEmpty(applicationPaths.DataPath)
                 ? null : Path.Combine(applicationPaths.DataPath, "tunein-fork-settings-lock.xml"));
+            if (!string.IsNullOrEmpty(applicationPaths.PluginConfigurationsPath))
+                TuneInCategoryArtwork.GenreFolder = Path.Combine(applicationPaths.PluginConfigurationsPath, "TuneInArtwork", "genres");
             Instance = this;
         }
 

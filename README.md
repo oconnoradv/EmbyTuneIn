@@ -609,11 +609,16 @@ bundled original neon broadcast artwork that includes the unaltered
 **Powered by TuneIn** mark.
 
 Music genre folders, including music genres shown under **By Language**, use
-bundled original 1280×720 neon artwork. Each card's typography, palette, and
-line art depend on the genre's parent. The cards contain no TuneIn logos.
-Maintainers rebuild them offline on Windows 11 with `Build-GenreArtwork.ps1`
-from the private oconnoradv/TuneInArtGen repository; the plugin does not
-download or generate them. Genres without a card use the Music category artwork.
+the Music category artwork by default. Optional genre artwork packs are
+published in the [EmbyTuneInArt](https://github.com/oconnoradv/EmbyTuneInArt/releases)
+repository, which also contains the tool that builds them. To install a pack,
+extract its `<guide id>.jpg` or `.png` images into
+`<Emby data>\plugins\configurations\TuneInArtwork\genres`, then refresh Music
+from **Catalog Refresh**. The TuneIn settings page links to the packs and shows
+the exact folder and the number of installed images. The plugin does not
+download packs. Only files named like `c57943.jpg` or `g79.png` are used;
+genres without an image keep the Music artwork. Replacing or deleting an image
+updates the folder artwork on the next Music refresh.
 
 ## Playback
 
