@@ -1,5 +1,7 @@
 # TuneIn for Emby
 
+![TuneIn library artwork, Powered by TuneIn](MediaBrowser.Plugins.TuneIn/Images/tunein-library.png)
+
 TuneIn adds an audio channel to Emby with administrator-configured browsing,
 scheduled category refreshes, station counts and live playback. Opening the
 settings page or the channel root never crawls the TuneIn catalog by itself.
