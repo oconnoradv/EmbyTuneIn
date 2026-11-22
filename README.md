@@ -298,3 +298,6 @@ Based on [MediaBrowser/TuneIn](https://github.com/MediaBrowser/TuneIn) and
 distributed under [LICENSE.md](LICENSE.md).
 See [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt). Release ZIPs include
 these documents and the DLL embeds them; keep them when redistributing.
+
+Earlier builds bundled an unused legacy copy of HtmlAgilityPack (Ms-PL). It has
+been removed; the plugin reads TuneIn's OPML/XML responses directly.
