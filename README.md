@@ -110,8 +110,11 @@ Choices appear in a fixed-height scrolling panel. Temporary branch failures
 retry once; incomplete branches are marked, and saved choices are preserved.
 Talk, Sports, and Podcasts also default to **All** and support **Selected only**.
 By Language follows TuneIn's group links for each selected language; those
-groups are not additional language selections. The Music, Talk, and Sports
-groups still respect their corresponding saved category scopes.
+groups are not additional language selections. Its Music, Talk, and Sports
+groups are included even when those top-level categories are disabled. When
+Music is enabled with **Selected only** genres, the language Music group is
+narrowed to those genres. If TuneIn lists no stations for the selected
+languages, Catalog Refresh says so beside the By Language count.
 
 The **Settings** switch, beside **Global TuneIn Settings**, prevents accidental
 edits and saves. The lock persists across browser sessions and server restarts.

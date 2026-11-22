@@ -1085,11 +1085,15 @@ test('category counts show only filtered availability and Emby inventory left of
             StationCounts: { AvailableStations: 0, EmbyStations: 0 } },
         { Category: 'local', Name: 'Local Radio', State: 'No recorded refresh' },
         { Category: 'presets', Name: 'Favorites', State: 'Imported',
-            StationCounts: { AvailableStations: 4, EmbyCountError: '<unsafe> inventory read failed' } }
+            StationCounts: { AvailableStations: 4, EmbyCountError: '<unsafe> inventory read failed' } },
+        { Category: 'language', Name: 'By Language', State: 'Imported',
+            StationCounts: { AvailableStations: 0, EmbyStations: 0 } }
     ] });
     await visit;
     await settle();
     const rows = app.elements['.tuneInRefreshCategories'].childNodes;
+    assert.equal(rows[4].childNodes[0].textContent, 'By Language: Imported (TuneIn lists no stations for the selected languages)');
+    assert.equal(rows[1].childNodes[0].textContent, 'Sports: Imported');
     const values = row => row.childNodes[1].childNodes[0].childNodes.map(group => group.childNodes[1]);
     assert.equal(rows[0].childNodes[1].childNodes[1].textContent, 'Refresh');
     assert.equal(rows[0].childNodes[1].childNodes[1].attributes.is, 'emby-button');

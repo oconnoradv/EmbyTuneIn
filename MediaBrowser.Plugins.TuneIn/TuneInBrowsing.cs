@@ -115,7 +115,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private async Task<List<ChannelItemInfo>> BrowseAsync(ConfigurationSnapshot snapshot, NavigationEntry entry,
             CancellationToken token, TuneInCatalogueSession session)
         {
-            if (IsLanguageMusicHub(entry) && snapshot.UsesSelectedSelections("music"))
+            if (IsLanguageMusicHub(entry) && snapshot.LanguageUsesMusicGenres)
                 return snapshot.Selections("music").Select(selection =>
                 {
                     var selected = new DirectoryRequest();
@@ -193,7 +193,6 @@ namespace MediaBrowser.Plugins.TuneIn
                             continue;
                     }
                     var contentCategory = entry.Category == "language" ? LanguageGroup(entry, next) : null;
-                    if (contentCategory != null && contentCategory != "language" && !snapshot.Enabled(contentCategory)) continue;
                     if (entry.ContentCategory != null && entry.ContentCategory != "language" && contentCategory != entry.ContentCategory) continue;
                     if (entry.MusicSelectionId != null && next.Parameters.ContainsKey("c")) continue;
                     var classifier = next.Parameters.GetValueOrDefault("c");

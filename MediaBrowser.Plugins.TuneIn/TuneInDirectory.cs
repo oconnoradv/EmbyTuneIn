@@ -142,6 +142,10 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal bool UsesSelections(string category) => UsesSelectedTopics(category) || UsesSelectedSelections(category);
 
+        // Language includes its Music, Talk and Sports branches regardless of those categories;
+        // saved Music genres narrow Language only while the Music category is actively using them.
+        internal bool LanguageUsesMusicGenres => Enabled("music") && UsesSelectedSelections("music");
+
         private void CopyTopicScope(PluginConfiguration scope, string category)
         {
             if (!UsesSelectedTopics(category)) return;
@@ -176,10 +180,11 @@ namespace MediaBrowser.Plugins.TuneIn
                 case "language":
                     scope.EnableLanguage = Value.EnableLanguage;
                     scope.Languages = Selections("language").ToList();
-                    scope.EnableTalk = Value.EnableTalk;
-                    scope.EnableSports = Value.EnableSports;
-                    scope.EnableMusic = Value.EnableMusic;
-                    scope.Music = Selections("music").ToList();
+                    if (LanguageUsesMusicGenres)
+                    {
+                        scope.EnableMusic = true;
+                        scope.Music = Selections("music").ToList();
+                    }
                     break;
                 case "music":
                     scope.EnableMusic = Value.EnableMusic;
@@ -202,7 +207,7 @@ namespace MediaBrowser.Plugins.TuneIn
             if (SelectionCategories.Contains(category))
                 SetSelectionMode(scope, category, UsesSelectedSelections(category) ? "selected" : "all");
             if (category == "language")
-                scope.MusicMode = UsesSelectedSelections("music") ? "selected" : "all";
+                scope.MusicMode = LanguageUsesMusicGenres ? "selected" : "all";
             return new ConfigurationSnapshot(scope).Key;
         }
 
@@ -647,15 +652,13 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             if (entry.ContentCategory != null && !new[] { "language", "music", "talk", "sports" }.Contains(entry.ContentCategory))
                 return false;
-            if (entry.ContentCategory != null && entry.ContentCategory != "language" && !snapshot.Enabled(entry.ContentCategory))
-                return false;
             if (entry.StationId != null && entry.ContentCategory == null) return false;
             var group = TuneInBrowsing.LanguageGroup(entry, entry.Request);
-            if (group != "language" && !snapshot.Enabled(group)) return false;
+            if (group != "language" && group != "music" && group != "talk" && group != "sports") return false;
             if (group != "music") return entry.MusicSelectionId == null;
             if (entry.MusicSelectionId == null)
-                return !snapshot.UsesSelectedSelections("music") || TuneInBrowsing.IsLanguageMusicHub(entry);
-            if (!snapshot.UsesSelectedSelections("music")) return false;
+                return !snapshot.LanguageUsesMusicGenres || TuneInBrowsing.IsLanguageMusicHub(entry);
+            if (!snapshot.LanguageUsesMusicGenres) return false;
             if (!snapshot.Selections("music").Any(s => s.Id == entry.MusicSelectionId)) return false;
             if (entry.StationId != null) return entry.Request == null;
             var id = entry.Request?.Parameters.GetValueOrDefault("id");

@@ -798,9 +798,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             row.row.setAttribute('data-outcome', categoryOutcome(state));
             var text = item.Name + ': ' + state;
             if (!status.Busy && item.Category === status.DirtyCategory) text += ' (reconciliation needed)';
+            var metrics = item.StationCounts || {};
+            if (item.Category === 'language' && state === 'Imported' && metrics.AvailableStations === 0 && !metrics.AvailablePartial)
+                text += ' (TuneIn lists no stations for the selected languages)';
             var caption = rows.get(item.Category).caption;
             if (caption.textContent !== text) caption.textContent = text;
-            var metrics = item.StationCounts || {};
             var values = rows.get(item.Category).counts;
             function count(value) {
                 return typeof value === 'number' && Number.isInteger(value) && value >= 0

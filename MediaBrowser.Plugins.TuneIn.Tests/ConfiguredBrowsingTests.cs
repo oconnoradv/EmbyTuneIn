@@ -896,8 +896,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var channel = new TuneInChannel(directory);
             var snapshot = directory.Snapshot();
             var language = directory.Register(snapshot, TuneInBrowsing.StartingEntries(snapshot, "language").Single());
-            var hub = Assert.Single((await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = language }, Token)).Items);
-            Assert.Equal("Music", hub.Name);
+            var hubs = (await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = language }, Token)).Items;
+            Assert.Equal(new[] { "Music", "Talk", "Sports" }, hubs.Select(h => h.Name).ToArray());
+            var hub = hubs[0];
             var calls = requests.Count;
             var genre = Assert.Single((await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = hub.Id }, Token)).Items);
             Assert.Equal("g19", genre.Name);
@@ -914,6 +915,41 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal(2, nested.Count);
             config.EnableMusic = false;
             await Assert.ThrowsAsync<InvalidOperationException>(() => channel.GetChannelItemMediaInfo(station.Id, Token));
+        }
+
+        [Fact]
+        public async Task LanguageIncludesMusicAndTalkBranchesWhileThoseCategoriesAreDisabled()
+        {
+            var config = Ready();
+            config.EnableLanguage = true;
+            config.EnableMusic = config.EnableTalk = config.EnableSports = false;
+            config.Languages.Add(Selection("l178", "lang"));
+            config.Music.Add(Selection("g19", "music", "c4"));
+            config.MusicMode = "selected";
+            var directory = new TuneInDirectory(() => config, (request, token) =>
+            {
+                if (!request.Parameters.ContainsKey("filter"))
+                    return Task.FromResult(Opml("<outline type='link' text='Japanese' URL='https://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=l178'/>"));
+                if (request.Parameters.GetValueOrDefault("c") == "music")
+                    return Task.FromResult(Opml("<outline type='audio' text='J-Pop' guide_id='s1'/>"));
+                if (request.Parameters.GetValueOrDefault("c") == "talk")
+                    return Task.FromResult(Opml("<outline type='audio' text='J-Talk' guide_id='s2'/>"));
+                return Task.FromResult(Opml(Link("c424724", "Music") + Link("c424725", "Talk")));
+            });
+            var channel = new TuneInChannel(directory);
+            var key = directory.Snapshot().CategoryScopeKey("language");
+            config.EnableTalk = true;
+            Assert.Equal(key, directory.Snapshot().CategoryScopeKey("language"));
+            config.EnableTalk = false;
+            var snapshot = directory.Snapshot();
+            var language = directory.Register(snapshot, TuneInBrowsing.StartingEntries(snapshot, "language").Single());
+            var groups = (await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = language }, Token)).Items;
+            Assert.Equal(new[] { "Music", "Talk" }, groups.Select(g => g.Name).ToArray());
+            var stations = new List<string>();
+            foreach (var group in groups)
+                stations.AddRange((await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = group.Id }, Token)).Items
+                    .Where(i => i.Type == ChannelItemType.Media).Select(i => i.Name));
+            Assert.Equal(new[] { "J-Pop", "J-Talk" }, stations.ToArray());
         }
 
         [Fact]
