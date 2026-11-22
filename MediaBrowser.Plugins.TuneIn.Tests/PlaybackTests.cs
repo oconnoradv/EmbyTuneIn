@@ -42,6 +42,83 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public async Task LegacyShoutcastStreamOpensWithUserAgentAfterHttpClientRejectsIcyStatus()
+        {
+            var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            var requests = new List<string>();
+            var server = Task.Run(async () =>
+            {
+                for (var connection = 0; connection < 2; connection++)
+                {
+                    using var client = await listener.AcceptTcpClientAsync();
+                    var stream = client.GetStream();
+                    var buffer = new byte[4096];
+                    var request = "";
+                    while (!request.Contains("\r\n\r\n"))
+                    {
+                        var count = await stream.ReadAsync(buffer, 0, buffer.Length);
+                        if (count == 0) break;
+                        request += Encoding.ASCII.GetString(buffer, 0, count);
+                    }
+                    lock (requests) requests.Add(request);
+                    var reply = Encoding.ASCII.GetBytes("ICY 200 OK\r\nicy-name:Radio\r\ncontent-type:audio/mpeg\r\n\r\nAUDIO");
+                    await stream.WriteAsync(reply, 0, reply.Length);
+                }
+            });
+            try
+            {
+                var url = "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port + "/stream?x=1";
+                var response = await TuneInPlaybackHttp.SendAsync(new HttpRequestOptions
+                    { Url = url, CancellationToken = CancellationToken.None }, address => IPAddress.IsLoopback(address));
+                using (response.Content)
+                {
+                    Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                    Assert.Equal("audio/mpeg", response.ContentType);
+                    var body = new MemoryStream();
+                    await response.Content.CopyToAsync(body).WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.Equal("AUDIO", Encoding.ASCII.GetString(body.ToArray()));
+                }
+                await server.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Equal(2, requests.Count);
+                Assert.All(requests, request => Assert.Contains("User-Agent: " + TuneInPlaybackHttp.UserAgent, request));
+                Assert.StartsWith("GET /stream?x=1 HTTP/1.0\r\n", requests[1]);
+                Assert.Contains("Icy-MetaData: 0", requests[1]);
+            }
+            finally { listener.Stop(); }
+        }
+
+        [Fact]
+        public async Task LegacyShoutcastFallbackRefusesNonPublicAddresses()
+        {
+            var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            var server = Task.Run(async () =>
+            {
+                using var client = await listener.AcceptTcpClientAsync();
+                var reply = Encoding.ASCII.GetBytes("ICY 200 OK\r\n\r\n");
+                await client.GetStream().WriteAsync(reply, 0, reply.Length);
+            });
+            try
+            {
+                var url = "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port + "/";
+                var error = await Assert.ThrowsAsync<System.Net.Http.HttpRequestException>(() => TuneInPlaybackHttp.SendAsync(
+                    new HttpRequestOptions { Url = url, CancellationToken = CancellationToken.None }));
+                Assert.Contains("no permitted address", error.Message);
+            }
+            finally { listener.Stop(); }
+        }
+
+        [Fact]
+        public void IcyHeadersParseRedirectsAndRejectInvalidStatusLines()
+        {
+            var redirect = TuneInPlaybackHttp.ParseIcyHeaders("HTTP/1.0 302 Found\nLocation: http://radio.example/live\n");
+            Assert.Equal(HttpStatusCode.Redirect, redirect.StatusCode);
+            Assert.Equal("http://radio.example/live", redirect.Headers["Location"]);
+            Assert.Throws<System.Net.Http.HttpRequestException>(() => TuneInPlaybackHttp.ParseIcyHeaders("<html>\r\n"));
+        }
+
+        [Fact]
         public async Task SharedPacerDoesNotScheduleNegativeDelayWhenClockCrossesDeadline()
         {
             var start = DateTime.UtcNow;

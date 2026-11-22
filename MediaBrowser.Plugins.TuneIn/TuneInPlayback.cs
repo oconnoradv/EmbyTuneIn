@@ -310,7 +310,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         return send(new HttpRequestOptions
                         {
                             Url = uri.AbsoluteUri, CancellationToken = operation.Token, ThrowOnErrorResponse = false,
-                            BufferContent = false
+                            BufferContent = false, UserAgent = TuneInPlaybackHttp.UserAgent
                         });
                     }
                     if (IsApiHost(uri))
