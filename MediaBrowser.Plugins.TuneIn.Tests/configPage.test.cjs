@@ -46,11 +46,13 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     const requestInterval = new Element('input');
     const form = { addEventListener: (event, handler) => { formHandlers[event] = handler; } };
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon,
-        '.apiRequestIntervalSeconds': requestInterval, '.importDeadlineHours': new Element('input') };
+        '.apiRequestIntervalSeconds': requestInterval, '.importDeadlineHours': new Element('input'),
+        '.discoveryDeadlineHours': new Element('input') };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.stationDeletionNotice',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
+        '.refreshImportContents', '.refreshPendingFolders', '.refreshPendingFolderText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
         '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
         '.settingsLockState', '.settingsLockStatus', '.refreshQueueNote', '.tuneInRefreshRecoveryDialog', '.refreshRecoveryText',
@@ -416,7 +418,7 @@ test('native view lifecycle loads labeled upstream settings on each visit', asyn
     await first;
     assert.equal(app.username.value, 'listener');
     assert.equal(app.latLon.value, '1,2');
-    assert.equal(String(app.requestInterval.value), '1');
+    assert.equal(String(app.requestInterval.value), '2');
     app.instance.onPause('away');
     const second = app.instance.onResume();
     app.reads[1].resolve({ Username: null, LatLon: null });
@@ -447,8 +449,9 @@ test('save retains unrelated configuration and converts empty fields to null', a
     assert.equal(app.writes[0].config.Other, 42);
     assert.equal(app.writes[0].config.SchemaVersion, 1);
     assert.equal(app.writes[0].config.ConfigurationCompleted, true);
-    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 1);
-    assert.equal(app.writes[0].config.ImportDeadlineHours, 4);
+    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 2);
+    assert.equal(app.writes[0].config.ImportDeadlineHours, 24);
+    assert.equal(app.writes[0].config.DiscoveryDeadlineHours, 3);
     assert.equal(app.writes[0].config.EnableCatalogIdentityDiagnostics, false);
     assert.deepEqual(app.notices, ['saved']);
 });
@@ -479,20 +482,22 @@ test('API request interval validates and saves the shared catalog pacing setting
     assert.equal(app.writes.length, 2);
 });
 
-test('import deadline loads saved values, validates whole hours, and saves both bounds', async () => {
+for (const setting of ['Import', 'Discovery']) {
+test(`${setting.toLowerCase()} deadline loads saved values, validates whole hours, and saves both bounds`, async () => {
     const app = harness();
     const visit = app.instance.onResume();
-    app.reads[0].resolve({ ImportDeadlineHours: 7 });
+    app.reads[0].resolve({ [setting + 'DeadlineHours']: 7 });
     await visit;
-    const deadline = app.elements['.importDeadlineHours'];
+    const deadline = app.elements['.' + setting.toLowerCase() + 'DeadlineHours'];
+    const maximum = setting === 'Import' ? 100 : 10;
     assert.equal(deadline.value, 7);
-    for (const value of ['', '0', '11', '1.5', 'abc']) {
+    for (const value of ['', '0', String(maximum + 1), '1.5', 'abc']) {
         deadline.value = value;
         app.formHandlers.submit({ preventDefault() {} });
         assert.equal(app.writes.length, 0);
-        assert.match(app.elements['.status'].textContent, /whole number from 1 to 10/);
+        assert.ok(app.elements['.status'].textContent.includes('whole number from 1 to ' + maximum));
     }
-    for (const value of [1, 10]) {
+    for (const value of [1, maximum]) {
         const toggle = app.elements['.settingsLocked'];
         if (toggle.checked) {
             toggle.checked = false;
@@ -500,12 +505,13 @@ test('import deadline loads saved values, validates whole hours, and saves both 
         }
         deadline.value = String(value);
         app.formHandlers.submit({ preventDefault() {} });
-        assert.equal(app.writes.at(-1).config.ImportDeadlineHours, value);
+        assert.equal(app.writes.at(-1).config[setting + 'DeadlineHours'], value);
         await settle();
         assert.equal(deadline.disabled, true);
     }
     assert.equal(app.writes.length, 2);
 });
+}
 
 test('identity diagnostics load, save and lock with the advanced catalog settings', async () => {
     const app = harness();
@@ -530,12 +536,13 @@ test('identity diagnostics load, save and lock with the advanced catalog setting
     assert.equal(diagnostics.disabled, true);
 });
 
-test('advanced settings start collapsed and group the three controls in order', () => {
+test('advanced settings start collapsed and group the controls in order', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     const advanced = html.match(/<details class="tuneInAdvancedSettings">([\s\S]*?)<\/details>/);
     assert.ok(advanced);
     assert.match(advanced[1], /<summary>Advanced Settings<\/summary>/);
-    assert.ok(advanced[1].indexOf('id="tuneInApiInterval"') < advanced[1].indexOf('id="tuneInImportDeadline"'));
+    assert.ok(advanced[1].indexOf('id="tuneInApiInterval"') < advanced[1].indexOf('id="tuneInDiscoveryDeadline"'));
+    assert.ok(advanced[1].indexOf('id="tuneInDiscoveryDeadline"') < advanced[1].indexOf('id="tuneInImportDeadline"'));
     assert.ok(advanced[1].indexOf('id="tuneInImportDeadline"') < advanced[1].indexOf('class="enableCatalogIdentityDiagnostics"'));
     assert.match(advanced[1], /Off by default/);
 });
@@ -1567,6 +1574,7 @@ test('first save history is independent of the browsing checkbox and the setting
     assert.equal(app.elements['.hideRegionalGenres'].disabled, true);
     assert.equal(app.requestInterval.disabled, true);
     assert.equal(app.elements['.importDeadlineHours'].disabled, true);
+    assert.equal(app.elements['.discoveryDeadlineHours'].disabled, true);
     await open(app.elements['.selectors'].childNodes[0].descendants().find(node => node.tagName === 'details'));
     assert.equal(app.selectors.length, 0);
     enableBrowsing(app);
@@ -1574,6 +1582,7 @@ test('first save history is independent of the browsing checkbox and the setting
     assert.equal(app.elements['.hideRegionalGenres'].disabled, false);
     assert.equal(app.requestInterval.disabled, false);
     assert.equal(app.elements['.importDeadlineHours'].disabled, false);
+    assert.equal(app.elements['.discoveryDeadlineHours'].disabled, false);
     assert.equal(app.elements['.refreshStart'].disabled, true);
     app.formHandlers.submit({ preventDefault() {} });
     app.writes[0].reject(new Error('save failed'));
@@ -1862,6 +1871,66 @@ test('refresh work metric switches to actual folder progress during import', asy
     await visit;
     assert.match(app.elements['.refreshSummary'].textContent, /248\/1(?:,|\.|\s)?107 folders/);
     assert.match(app.elements['.refreshWork'].textContent, /248 \/ 1(?:,|\.|\s)?107 folders served/);
+    app.instance.onPause();
+});
+
+test('import content counts and opt-in folder details survive timeout and render as text', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({
+        State: 'TimedOut', Phase: 'Import timed out', Busy: false,
+        Categories: [{ Category: 'music', Name: 'Music', State: 'Timed out' }], QueueSlotsAvailable: 2,
+        ImportFoldersServed: 484, ImportFoldersTotal: 486,
+        ImportProgress: {
+            StationEntriesServed: 8, StationEntriesTotal: 12,
+            SubfolderEntriesServed: 5, SubfolderEntriesTotal: 6,
+            LastFolderStationEntries: 3, LastFolderSubfolderEntries: 1,
+            PendingFolders: [{ Reference: 'abc', Path: 'Music > <img onerror=bad> More Stations',
+                StationEntries: 4, SubfolderEntries: 1 }],
+            PendingFoldersOmitted: 1
+        }
+    });
+    await visit;
+    assert.equal(app.elements['.refreshImportContents'].hidden, false);
+    assert.match(app.elements['.refreshImportContents'].textContent,
+        /8 \/ 12 station entries; 5 \/ 6 subfolder entries/);
+    assert.match(app.elements['.refreshImportContents'].textContent,
+        /Still in unserved listings: 4 station entries, 1 subfolder entries/);
+    assert.match(app.elements['.refreshImportContents'].textContent,
+        /Last newly served folder: 3 station entries, 1 subfolder entries/);
+    assert.match(app.elements['.refreshImportContents'].textContent, /served does not mean stored in Emby/);
+    assert.equal(app.elements['.refreshPendingFolders'].hidden, false);
+    assert.match(app.elements['.refreshPendingFolderText'].textContent,
+        /\[abc\] Music > <img onerror=bad> More Stations: 4 station entries, 1 subfolder entries/);
+    assert.match(app.elements['.refreshPendingFolderText'].textContent, /Additional folder details omitted: 1/);
+    assert.equal(app.elements['.refreshPendingFolderText'].childNodes.length, 0);
+
+    app.elements['.tuneInRefresh'].open = true;
+    app.elements['.refreshStart'].handlers.click();
+    app.refresh.at(-1).resolve({ State: 'Running', Phase: 'Discovering', Busy: true });
+    await settle();
+    assert.equal(app.elements['.refreshImportContents'].hidden, true);
+    assert.equal(app.elements['.refreshImportContents'].textContent, '');
+    assert.equal(app.elements['.refreshPendingFolders'].hidden, true);
+    assert.equal(app.elements['.refreshPendingFolderText'].textContent, '');
+    app.instance.onPause();
+});
+
+test('basic import counts remain available with verbose diagnostics off', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({
+        State: 'Running', Phase: 'Importing', Busy: true,
+        ImportProgress: { StationEntriesServed: 0, StationEntriesTotal: 2,
+            SubfolderEntriesServed: 0, SubfolderEntriesTotal: 1 }
+    });
+    await visit;
+    assert.equal(app.elements['.refreshImportContents'].hidden, false);
+    assert.match(app.elements['.refreshImportContents'].textContent, /0 \/ 2 station entries/);
+    assert.doesNotMatch(app.elements['.refreshImportContents'].textContent, /Last newly served folder/);
+    assert.equal(app.elements['.refreshPendingFolders'].hidden, true);
     app.instance.onPause();
 });
 

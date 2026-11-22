@@ -282,6 +282,9 @@ namespace MediaBrowser.Plugins.TuneIn
             if (value.ImportDeadlineHours < PluginConfiguration.MinImportDeadlineHours
                 || value.ImportDeadlineHours > PluginConfiguration.MaxImportDeadlineHours)
                 throw new ArgumentException("TuneIn import deadline must be between 1 and 10 hours.");
+            if (value.DiscoveryDeadlineHours < PluginConfiguration.MinDiscoveryDeadlineHours
+                || value.DiscoveryDeadlineHours > PluginConfiguration.MaxDiscoveryDeadlineHours)
+                throw new ArgumentException("TuneIn discovery deadline must be between 1 and 10 hours.");
             var schedules = value.RefreshSchedules;
             if (schedules != null && (schedules.Count > CategoryKeys.Length || schedules.Any(schedule => !ValidSchedule(schedule))
                 || schedules.Select(schedule => schedule.Category).Distinct(StringComparer.Ordinal).Count() != schedules.Count))

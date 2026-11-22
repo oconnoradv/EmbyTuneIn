@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -27,6 +28,13 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly ChannelItemResult scopedChannelRoot;
         private readonly object gate = new object();
         private Exception failure;
+        private Action<TuneInImportProgress> reportProgress;
+        private readonly Dictionary<string, (int Stations, int Subfolders)> listingCounts =
+            new Dictionary<string, (int, int)>(StringComparer.Ordinal);
+        private Dictionary<string, LinkedListNode<TuneInImportFolderDetails>> pendingDetails;
+        private LinkedList<TuneInImportFolderDetails> pendingOrder;
+        private int stationEntriesTotal, stationEntriesServed, subfolderEntriesTotal, subfolderEntriesServed;
+        private int? lastFolderStationEntries, lastFolderSubfolderEntries;
 
         internal ChannelItemInfo Root { get; private set; }
         internal int Count => folders.Count;
@@ -250,7 +258,8 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal static TuneInStagedImport ForChannel(IEnumerable<ChannelItemInfo> roots,
             IEnumerable<TuneInCategorySnapshot> categories, CancellationToken token,
-            Action<int, int> report, Action validate, string restrictTopLevelFolderId = null)
+            Action<int, int> report, Action validate, string restrictTopLevelFolderId = null,
+            Action<TuneInImportProgress> reportProgress = null, bool verboseDiagnostics = false)
         {
             var rootItems = roots.ToList();
             var channelRoot = new ChannelItemResult { Items = rootItems };
@@ -272,8 +281,75 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
             }
             staged.ImportRefreshLevel = staged.MeasureImportRefreshLevel(restrictTopLevelFolderId);
+            if (reportProgress != null)
+                staged.PrepareProgress(rootItems, restrictTopLevelFolderId, reportProgress, verboseDiagnostics);
             return staged;
         }
+
+        private void PrepareProgress(List<ChannelItemInfo> roots, string restriction,
+            Action<TuneInImportProgress> callback, bool verbose)
+        {
+            reportProgress = callback;
+            foreach (var folder in folders)
+            {
+                token.ThrowIfCancellationRequested();
+                var stations = folder.Value.Items.Count(item => item.Type == ChannelItemType.Media);
+                var subfolders = folder.Value.Items.Count(item => item.Type == ChannelItemType.Folder);
+                listingCounts.Add(folder.Key, (stations, subfolders));
+                stationEntriesTotal += stations;
+                subfolderEntriesTotal += subfolders;
+            }
+            if (verbose)
+            {
+                pendingDetails = new Dictionary<string, LinkedListNode<TuneInImportFolderDetails>>(StringComparer.Ordinal);
+                pendingOrder = new LinkedList<TuneInImportFolderDetails>();
+                var pending = new Queue<(string Id, string Name, string Path)>();
+                var startName = restriction == null ? "TuneIn" : SafeLabel(roots.Single(root => root.Id == restriction).Name);
+                pending.Enqueue((restriction ?? string.Empty, startName, startName));
+                while (pending.Count != 0)
+                {
+                    token.ThrowIfCancellationRequested();
+                    var entry = pending.Dequeue();
+                    if (pendingDetails.ContainsKey(entry.Id)) continue;
+                    var counts = listingCounts[entry.Id];
+                    using (var hash = SHA256.Create())
+                        pendingDetails.Add(entry.Id, pendingOrder.AddLast(new TuneInImportFolderDetails
+                        {
+                            Reference = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(entry.Id)))
+                                .Replace("-", "").Substring(0, 16),
+                            Name = entry.Name, Path = entry.Path,
+                            StationEntries = counts.Stations, SubfolderEntries = counts.Subfolders
+                        }));
+                    foreach (var child in folders[entry.Id].Items.Where(item => item.Type == ChannelItemType.Folder))
+                    {
+                        var name = SafeLabel(child.Name);
+                        var path = entry.Path + " > " + name;
+                        if (path.Length > 512) path = "... " + path.Substring(path.Length - 508);
+                        pending.Enqueue((child.Id, name, path));
+                    }
+                }
+            }
+            ReportProgress();
+        }
+
+        private static string SafeLabel(string value)
+        {
+            value = value ?? "(unnamed folder)";
+            value = Regex.Replace(value, @"[\x00-\x1f\x7f]", " ");
+            value = Regex.Replace(value, @"(?i)\b(?:https?|file)://\S+", "[URL omitted]");
+            value = Regex.Replace(value, @"[A-Za-z][A-Za-z0-9_-]*\s*=\s*[^\s;]*", "[assignment omitted]");
+            value = Regex.Replace(value, @"[A-Za-z0-9_-]{80,}(?:\.[A-Za-z0-9_-]{20,})?", "[identifier omitted]");
+            return value.Length > 128 ? value.Substring(0, 125) + "..." : value;
+        }
+
+        private void ReportProgress() => reportProgress?.Invoke(new TuneInImportProgress
+        {
+            StationEntriesTotal = stationEntriesTotal, StationEntriesServed = stationEntriesServed,
+            SubfolderEntriesTotal = subfolderEntriesTotal, SubfolderEntriesServed = subfolderEntriesServed,
+            LastFolderStationEntries = lastFolderStationEntries, LastFolderSubfolderEntries = lastFolderSubfolderEntries,
+            PendingFolders = pendingOrder?.Take(TuneInImportStallDiagnostics.MaxFolderDetails).ToArray(),
+            PendingFoldersOmitted = Math.Max(0, (pendingDetails?.Count ?? 0) - TuneInImportStallDiagnostics.MaxFolderDetails)
+        });
 
         private int MeasureImportRefreshLevel(string restrictTopLevelFolderId)
         {
@@ -348,7 +424,22 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (!folders.TryGetValue(key, out var result))
                         throw new InvalidOperationException("Emby requested a folder outside the staged TuneIn channel.");
                     if (served.Add(key))
+                    {
                         report?.Invoke(folders.Count, served.Count);
+                        if (listingCounts.TryGetValue(key, out var counts))
+                        {
+                            stationEntriesServed += counts.Stations;
+                            subfolderEntriesServed += counts.Subfolders;
+                            lastFolderStationEntries = counts.Stations;
+                            lastFolderSubfolderEntries = counts.Subfolders;
+                            if (pendingDetails != null && pendingDetails.TryGetValue(key, out var node))
+                            {
+                                pendingOrder.Remove(node);
+                                pendingDetails.Remove(key);
+                            }
+                            ReportProgress();
+                        }
+                    }
                     return new ChannelItemResult { Items = result.Items.ToList() };
                 }
                 catch (Exception error) { failure = error; throw; }

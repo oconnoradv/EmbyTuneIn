@@ -293,7 +293,7 @@
         .tuneInRefresh > .tuneInSectionBox {
             margin-block-start: 1em;
         }
-        .tuneInRefresh .refreshFailureLog {
+        .tuneInRefresh .refreshFailureLog, .tuneInRefresh .refreshPendingFolderText {
             box-sizing: border-box;
             max-height: 20rem;
             overflow: auto;
@@ -498,20 +498,26 @@
                                 <label for="tuneInApiInterval">API request interval (seconds):</label>
                                 <input id="tuneInApiInterval" type="number" class="apiRequestIntervalSeconds" min="1" max="30" step="1" aria-describedby="tuneInApiIntervalHint" required disabled />
                             </div>
-                            <div class="fieldDescription" id="tuneInApiIntervalHint">Minimum delay between TuneIn API request starts: 1 to 30 seconds (default: 1). TuneIn retry delays are always honored.</div>
+                            <div class="fieldDescription" id="tuneInApiIntervalHint">Minimum delay between TuneIn API request starts: 1 to 30 seconds (default: 2). TuneIn retry delays are always honored.</div>
                         </div>
                         <div class="inputContainer">
                             <div class="tuneInApiIntervalRow">
-                                <label for="tuneInImportDeadline">Import deadline (hours):</label>
-                                <input id="tuneInImportDeadline" type="number" class="importDeadlineHours" min="1" max="10" step="1" aria-describedby="tuneInImportDeadlineHint" required disabled />
+                                <label for="tuneInDiscoveryDeadline">Discovery deadline (hours):</label>
+                                <input id="tuneInDiscoveryDeadline" type="number" class="discoveryDeadlineHours" min="1" max="10" step="1" aria-describedby="tuneInDiscoveryDeadlineHint" required disabled />
                             </div>
-                            <div class="fieldDescription" id="tuneInImportDeadlineHint">Time allowed per import attempt: 1 to 10 hours (default: 4), including preparation and verification. Does not change discovery limits. Timed-out imports drain before retrying the complete traversal.</div>
+                            <div class="fieldDescription" id="tuneInDiscoveryDeadlineHint">Time allowed for catalog discovery: 1 to 10 hours (default: 3), excluding import time. On timeout, active work drains and the refresh stops without an automatic retry. Saved discovery pages can be reused by a manual refresh.</div>
+
+                            <div class="inputContainer">
+                                <label for="tuneInImportDeadline">Import deadline (hours):</label>
+                                <input id="tuneInImportDeadline" type="number" class="importDeadlineHours" min="1" max="100" step="1" aria-describedby="tuneInImportDeadlineHint" required disabled />
+                            </div>
+                            <div class="fieldDescription" id="tuneInImportDeadlineHint">Time allowed per import: 1 to 100 hours (default: 24), including preparation and verification. Does not change discovery limits. On timeout, active work drains and the refresh stops without an automatic retry. A manual refresh replays the complete traversal, not the last served folder.</div>
                         </div>
                         <label class="emby-checkbox-label">
                             <input type="checkbox" is="emby-checkbox" class="enableCatalogIdentityDiagnostics" aria-describedby="tuneInIdentityDiagnosticsHint" disabled />
                             <span>Enable catalog identity diagnostics</span>
                         </label>
-                        <p class="fieldDescription" id="tuneInIdentityDiagnosticsHint">Off by default. Enable temporarily when refreshes unexpectedly delete/recreate stations or are unusually slow. Logs one saved/fresh catalog comparison per category without names, URLs or signed IDs. Adds processing and memory overhead; disable after troubleshooting. Does not change imports or normal error logging.</p>
+                        <p class="fieldDescription" id="tuneInIdentityDiagnosticsHint">Off by default. Enable temporarily when refreshes unexpectedly delete/recreate stations or are unusually slow. Logs aggregate saved/fresh catalog comparisons and enables unserved folder names, paths and content counts in the dashboard, stall warnings and stopped-import reports. Folder details are limited to 50 per snapshot; URLs and signed IDs are omitted. Folder labels may be private; review before sharing. Adds processing and memory overhead; disable after troubleshooting. Does not change imports or normal error logging.</p>
                     </details>
                 </fieldset>
             </details>
@@ -554,6 +560,12 @@
                     <div><dt>Current work</dt><dd class="refreshWork">-</dd></div>
                     <div><dt>Last progress</dt><dd class="refreshLastProgress">-</dd></div>
                 </dl>
+                <p class="refreshImportContents" hidden></p>
+                <details class="refreshPendingFolders" hidden>
+                    <summary>Unserved folder details</summary>
+                    <p class="fieldDescription">Advanced diagnostics: up to 50 folders per snapshot. Counts are direct listing contents, not confirmed database writes. Folder labels may be private; review before sharing. A folder not yet requested is not necessarily incomplete or faulty.</p>
+                    <pre class="refreshPendingFolderText" tabindex="0" aria-label="Unserved import folder details"></pre>
+                </details>
                 <div class="tuneInRefreshActions">
                     <button is="emby-button" type="button" class="raised button-submit refreshStart" disabled>Refresh all enabled categories</button>
                     <button is="emby-button" type="button" class="raised button-submit refreshCancel" disabled>Cancel refresh</button>

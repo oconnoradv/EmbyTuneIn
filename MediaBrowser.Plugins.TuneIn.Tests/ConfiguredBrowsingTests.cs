@@ -90,7 +90,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 + "<outline type='audio' text='Radio' guide_id='s1'/>")));
             var before = directory.Snapshot();
             var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
-            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "ImportDeadlineHours", "EnableCatalogIdentityDiagnostics", "HideRegionalGenres",
+            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "DiscoveryDeadlineHours", "ImportDeadlineHours", "EnableCatalogIdentityDiagnostics", "HideRegionalGenres",
                 "AllowPartialCatalogImport", "HasStartedCatalogRefresh",
                 "SettingsSaved", "TalkMode", "TalkIds", "SportsMode", "SportsIds", "PodcastsMode", "PodcastIds" })
                 legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });
@@ -145,7 +145,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData("", 1)]
+        [InlineData("", 2)]
+        [InlineData("<ApiRequestIntervalSeconds>1</ApiRequestIntervalSeconds>", 1)]
         [InlineData("<ApiRequestIntervalSeconds>3</ApiRequestIntervalSeconds>", 3)]
         [InlineData("<ApiRequestIntervalSeconds>17</ApiRequestIntervalSeconds>", 17)]
         public void RequestIntervalDefaultsOnlyWhenNotSaved(string setting, int expected)
@@ -156,9 +157,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData("", 4)]
+        [InlineData("", 24)]
         [InlineData("<ImportDeadlineHours>1</ImportDeadlineHours>", 1)]
+        [InlineData("<ImportDeadlineHours>6</ImportDeadlineHours>", 6)]
         [InlineData("<ImportDeadlineHours>10</ImportDeadlineHours>", 10)]
+        [InlineData("<ImportDeadlineHours>24</ImportDeadlineHours>", 24)]
+        [InlineData("<ImportDeadlineHours>100</ImportDeadlineHours>", 100)]
         public void ImportDeadlineSurvivesLegacyLoadingAndSnapshotsWithoutInvalidatingCatalog(string setting, int expected)
         {
             using var reader = new StringReader("<PluginConfiguration>" + setting + "</PluginConfiguration>");
@@ -166,7 +170,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             ConfigurationSnapshot.Validate(config);
             var snapshot = new ConfigurationSnapshot(config);
             Assert.Equal(expected, snapshot.Value.ImportDeadlineHours);
-            config.ImportDeadlineHours = expected == 10 ? 1 : 10;
+            config.ImportDeadlineHours = expected == 100 ? 1 : 100;
             var changed = new ConfigurationSnapshot(config);
             Assert.Equal(snapshot.Key, changed.Key);
             Assert.Equal(snapshot.DiscoveryKey, changed.DiscoveryKey);
@@ -188,8 +192,35 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
+        [InlineData("", 3)]
+        [InlineData("<DiscoveryDeadlineHours>1</DiscoveryDeadlineHours>", 1)]
+        [InlineData("<DiscoveryDeadlineHours>10</DiscoveryDeadlineHours>", 10)]
+        public void DiscoveryDeadlineSurvivesLegacyLoadingWithoutInvalidatingCatalog(string setting, int expected)
+        {
+            using var reader = new StringReader("<PluginConfiguration>" + setting + "</PluginConfiguration>");
+            var config = (PluginConfiguration)new XmlSerializer(typeof(PluginConfiguration)).Deserialize(reader);
+            ConfigurationSnapshot.Validate(config);
+            var snapshot = new ConfigurationSnapshot(config);
+            Assert.Equal(expected, snapshot.Value.DiscoveryDeadlineHours);
+            config.DiscoveryDeadlineHours = expected == 10 ? 1 : 10;
+            var changed = new ConfigurationSnapshot(config);
+            Assert.Equal(snapshot.Key, changed.Key);
+            Assert.Equal(snapshot.DiscoveryKey, changed.DiscoveryKey);
+        }
+
+        [Theory]
         [InlineData(0)]
         [InlineData(11)]
+        public void InvalidDiscoveryDeadlinesAreRejectedServerSide(int hours)
+        {
+            var config = Ready();
+            config.DiscoveryDeadlineHours = hours;
+            Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(101)]
         public void InvalidImportDeadlinesAreRejectedServerSide(int hours)
         {
             var config = Ready();
@@ -859,7 +890,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public void InvalidAdminConfigurationIsRejectedServerSide()
         {
             var config = Ready();
-            Assert.Equal(1, new PluginConfiguration().ApiRequestIntervalSeconds);
+            Assert.Equal(2, new PluginConfiguration().ApiRequestIntervalSeconds);
             config.ApiRequestIntervalSeconds = 0;
             Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
             config.ApiRequestIntervalSeconds = 31;

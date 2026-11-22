@@ -50,9 +50,10 @@ and compatibility with supported Emby versions still requires verification.
 ## Branch and release scope
 
 This branch combines configured browsing, partial refreshes, the Control Panel,
-playback improvements, and library maintenance. Discovery attempts have a
-60-minute deadline; import attempts have a separately configured 1-to-10-hour
-deadline (default: 4 hours). Both have bounded retries. Restarting Emby alone
+playback improvements, and library maintenance. Discovery and import have
+separate discovery and import deadlines: 1 to 10 hours for discovery (default: 3),
+and 1 to 100 hours for import (default: 24).
+Timeouts stop without automatic retries; bounded interruption recovery remains enabled. Restarting Emby alone
 never starts a refresh.
 
 ## Requirements and installation
@@ -143,13 +144,17 @@ refresh become available after you save.
   imports of valid results when malformed trusted provider links are skipped.
   See [Partial results](#partial-results).
 - **API request interval** sets minimum request spacing from 1 to 30 seconds,
-  defaulting to 1 second between request starts when unset. Previously saved
+  defaulting to 2 seconds between request starts when unset. Previously saved
   intervals are preserved. TuneIn retry delays take precedence.
-- **Import deadline** sets the time allowed per import attempt from 1 to 10
-  whole hours, defaulting to 4 hours when absent from saved settings. It appears
-  below API request interval in Global TuneIn Settings. It covers preparation,
+- **Discovery deadline** sets the time allowed for discovery from 1 to 10
+  whole hours, defaulting to 3 hours when absent from saved settings. It excludes
+  import time and does not change individual HTTP response limits.
+- **Import deadline** sets the time allowed per import from 1 to 100
+  whole hours, defaulting to 24 hours when absent from saved settings. It appears
+  beside Discovery deadline in the collapsed Advanced Settings subsection. It covers preparation,
   Emby traversal, and verification without changing discovery limits or import
-  concurrency. Changing it preserves compatible catalog and discovery snapshots.
+  concurrency. Changing either deadline preserves compatible catalog and discovery snapshots.
+  Previously saved deadline values are preserved rather than replaced by new defaults.
 
 Both checkboxes default to checked when the settings are absent. Explicitly
 saved unchecked choices remain unchanged. Changing these options does not
@@ -274,6 +279,12 @@ Repeated requests still return the complete listing but do not reset the last
 progress time or suppress stall warnings. Folders served measures provider
 consumption, not confirmed Emby database commits.
 
+The dashboard also shows station and subfolder entries in served versus total
+staged listings, entries remaining in unserved listings, and direct content
+counts for the last newly served folder. These are listing-delivery counts,
+not unique stations or confirmed database writes: entries can repeat across
+folders. Final counts remain visible after an import stops until a new refresh.
+
 **Diagnostics** shows provider attempts and successes, cached-page replays,
 active HTTP requests, rate-limit retries, checkpoint resume, and skipped-link
 counts grouped by category and reason. Up to five reason groups are displayed;
@@ -311,7 +322,7 @@ rejection reason, source page, and rejected navigation query values and
 fragment. Duplicate parameters and truncation are identified. Timeout reports
 record the phase that stopped, discovery/import timeout counts and interruption retry limits,
 checkpoint time, and whether an import may have partially applied. Live status
-identifies whether an automatic retry is for discovery or import.
+identifies whether an interruption recovery retry is for discovery or import.
 
 Non-navigation parameters, including usernames, coordinates, serials, partner
 IDs, and tokens, are omitted. Embedded credential-like assignments are
@@ -373,14 +384,14 @@ category in settings if it should stay absent.
 
 | Limit | Behavior |
 | --- | --- |
-| Discovery attempt | Up to 60 minutes, independent of import time |
-| Import attempt | A fresh configured deadline of 1 to 10 hours (default: 4) for staging, importing and verification/finalization |
+| Discovery attempt | Configured deadline of 1 to 10 hours (default: 3), independent of import time |
+| Import attempt | A fresh configured deadline of 1 to 100 hours (default: 24) for staging, importing and verification/finalization |
 | Catalog cache | Up to 60,000 pages and 640 MiB per refresh |
 | Discovered category | Up to 1,000,000 items and 1 GiB estimated data |
 | Catalog HTTP response | 90 seconds including body reads, excluding pacing and provider cooldowns |
 | Discovery checkpoint | At a completed folder after five minutes or 3,000 additional station rows when new pages are available, and on interruption or timeout when possible |
 | Automatic refresh retries | Up to 3 for interrupted work within an active refresh, shared across discovery and import |
-| Timeout retries | Up to 10 discovery retries and 3 import retries after draining |
+| Timeout handling | Drains active work and stops without automatic discovery or import retries |
 | Manual Cancel | Drains active work and stops; never triggers an automatic recovery retry |
 | Checkpoint resume window | 48 hours from discovery start, with matching settings and requested category scope |
 | Folder depth | Eight levels; forward pagination does not consume depth but still consumes page and folder budgets |
@@ -405,11 +416,12 @@ validation is never replayed from it. The provider may change during that ten-mi
 Large refresh limits can require substantial memory and disk: discovery
 checkpoints can reach 900 MiB and saved catalog state can reach 1 GiB.
 
-A discovery timeout saves additional validated pages when possible and retries
-up to ten times. Large discoveries can still require a manual resume within the
-48-hour checkpoint window after those retries are exhausted. An import deadline cancels and drains its attempt before up to
-three retries. The separate 90-second catalog HTTP response timeout also counts
-as a discovery timeout. Once retries are exhausted, the refresh reports **TimedOut**.
+A discovery timeout saves additional validated pages when possible, drains active
+work, and reports **TimedOut** without retrying automatically. A manual refresh
+can reuse those pages within the 48-hour checkpoint window. An import deadline
+also cancels and drains its operation, then reports **TimedOut** without an
+automatic retry. The separate 90-second catalog HTTP response timeout also counts
+as a discovery timeout.
 Checkpoints remain available for a manual refresh until import preparation
 succeeds. Timeouts never publish incomplete trees.
 
@@ -426,7 +438,7 @@ refresh was interrupted. Only a manual request or a due configured schedule can
 start new work; compatible discovery checkpoints and required reconciliation
 remain available to that run. Queued requests are not recovered.
 
-Each recovery attempt has fresh deadlines. Import retries reuse the complete
+Each interruption recovery attempt has fresh deadlines. Import recovery reuses the complete
 staged catalog, including saved siblings and any Partial outcome, only while
 it remains in memory, compatible with saved settings, and less than 48 hours
 old from discovery start. A restart loses that in-memory catalog; recovery then
@@ -440,8 +452,8 @@ never starts while the prior import task is still running. The dashboard shows
 **Import deadline reached; draining** during this wait. The Emby server log
 records when each import traversal starts and how many folders were served at
 the deadline. The dashboard elapsed time covers the whole refresh, including
-discovery, retries, and draining. Once all three
-automatic retries are exhausted, the refresh reports **TimedOut**, retains the
+discovery, interruption retries, and draining. After an import timeout,
+the refresh reports **TimedOut**, retains the
 repair requirement, and makes a diagnostic report available. After a failed
 import, manually refreshing the same scope replays the staged catalog without
 discovery if it is still in memory, compatible with the saved settings, and
@@ -473,7 +485,13 @@ Emby server.
 While a staged import is stalled, the server logs the time since progress,
 the unread folder count, and whether Emby is still importing or draining after
 cancellation. Warnings are limited to three per attempt, no more than one per
-minute. They do not identify individual folders or diagnose the cause of the stall.
+minute. With Advanced diagnostics enabled, each warning also includes up to 50
+unserved folders with their names, bounded navigation paths, opaque references
+and direct station/subfolder entry counts. Extra folders are explicitly reported
+as omitted; details narrow as folders are served. The dashboard exposes the same
+details and the stopped-refresh report retains the final snapshot. Deadline
+logging also captures the unserved folders before cancellation drains. These
+details do not diagnose the cause of the stall.
 
 **Import recovery is replay, not resumable import.** Emby's
 [`IChannelManager.RefreshChannelContent`](https://dev.emby.media/reference/pluginapi/MediaBrowser.Controller.Channels.IChannelManager.html)
@@ -491,6 +509,10 @@ collapsed by default, containing API Request Interval, Import Deadline and
 **Enable catalog identity diagnostics**. Diagnostics default to disabled.
 Enable temporarily to investigate unexpected station replacement or slow imports,
 then disable to avoid the additional comparison processing and memory overhead.
+The same toggle enables verbose pending-folder diagnostics. Folder labels may
+be private; review before sharing. URLs and signed navigation IDs are omitted,
+and control characters are sanitized. Basic listing-content counts are always
+available. Diagnostics do not exclude folders or change retry behavior.
 Normal timeout and error logging is unaffected.
 
 When enabled, after discovery produces a usable category listing, one aggregate identity

@@ -444,6 +444,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.allowPartialCatalogImport').disabled = catalogDisabled;
         instance.view.querySelector('.apiRequestIntervalSeconds').disabled = catalogDisabled;
         instance.view.querySelector('.importDeadlineHours').disabled = catalogDisabled;
+        instance.view.querySelector('.discoveryDeadlineHours').disabled = catalogDisabled;
         instance.view.querySelector('.enableCatalogIdentityDiagnostics').disabled = catalogDisabled;
         instance.view.querySelector('.tuneInSettingsSave').disabled = disabled;
         instance.refreshCategoryRows.forEach(function (row) { row.schedule.disabled = catalogDisabled; });
@@ -618,6 +619,33 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.refreshWork').textContent = work;
         instance.view.querySelector('.refreshLastProgress').textContent = progressAge
             ? progressAge + ' ago' : status.LastProgressUtc ? 'Finished' : '-';
+
+        var contents = status.ImportProgress;
+        var contentsText = instance.view.querySelector('.refreshImportContents');
+        contentsText.hidden = !contents;
+        contentsText.textContent = contents
+            ? 'Listings served: ' + contents.StationEntriesServed.toLocaleString() + ' / '
+                + contents.StationEntriesTotal.toLocaleString() + ' station entries; '
+                + contents.SubfolderEntriesServed.toLocaleString() + ' / '
+                + contents.SubfolderEntriesTotal.toLocaleString() + ' subfolder entries. Still in unserved listings: '
+                + (contents.StationEntriesTotal - contents.StationEntriesServed).toLocaleString() + ' station entries, '
+                + (contents.SubfolderEntriesTotal - contents.SubfolderEntriesServed).toLocaleString() + ' subfolder entries.'
+                + (typeof contents.LastFolderStationEntries === 'number'
+                    ? ' Last newly served folder: ' + contents.LastFolderStationEntries.toLocaleString() + ' station entries, '
+                        + contents.LastFolderSubfolderEntries.toLocaleString() + ' subfolder entries.' : '')
+                + ' Entries can repeat across folders; served does not mean stored in Emby.'
+            : '';
+        var pending = contents && contents.PendingFolders;
+        var pendingText = instance.view.querySelector('.refreshPendingFolderText');
+        pendingText.textContent = (pending || []).map(function (folder) {
+            return '[' + folder.Reference + '] ' + folder.Path + ': '
+                + folder.StationEntries.toLocaleString() + ' station entries, '
+                + folder.SubfolderEntries.toLocaleString() + ' subfolder entries';
+        }).join('\n');
+        if (contents && contents.PendingFoldersOmitted)
+            pendingText.textContent += '\nAdditional folder details omitted: ' + contents.PendingFoldersOmitted.toLocaleString();
+        instance.view.querySelector('.refreshPendingFolders').hidden =
+            !pending || !pending.length && !contents.PendingFoldersOmitted;
 
         var diagnostics = [];
         if (typeof status.RequestsStarted === 'number' || typeof status.RequestsCompleted === 'number') {
@@ -1092,9 +1120,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             message(instance, 'Use a whole number from 1 to 30 for the API request interval.');
             return false;
         }
+        var discoveryDeadline = String(instance.view.querySelector('.discoveryDeadlineHours').value || '').trim();
+        if (!/^[0-9]+$/.test(discoveryDeadline) || Number(discoveryDeadline) < 1 || Number(discoveryDeadline) > 10) {
+            message(instance, 'Use a whole number from 1 to 10 for the discovery deadline.');
+            return false;
+        }
         var importDeadline = String(instance.view.querySelector('.importDeadlineHours').value || '').trim();
-        if (!/^[0-9]+$/.test(importDeadline) || Number(importDeadline) < 1 || Number(importDeadline) > 10) {
-            message(instance, 'Use a whole number from 1 to 10 for the import deadline.');
+        if (!/^[0-9]+$/.test(importDeadline) || Number(importDeadline) < 1 || Number(importDeadline) > 100) {
+            message(instance, 'Use a whole number from 1 to 100 for the import deadline.');
             return false;
         }
         var localEnabled = instance.view.querySelector('[data-category="EnableLocalRadio"]').checked;
@@ -1123,6 +1156,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         config.LatLon = coordinates || null;
         config.ApiRequestIntervalSeconds = Number(requestInterval);
         config.ImportDeadlineHours = Number(importDeadline);
+        config.DiscoveryDeadlineHours = Number(discoveryDeadline);
         config.EnableCatalogIdentityDiagnostics = instance.view.querySelector('.enableCatalogIdentityDiagnostics').checked;
         config.HideRegionalGenres = instance.view.querySelector('.hideRegionalGenres').checked;
         config.AllowPartialCatalogImport = instance.view.querySelector('.allowPartialCatalogImport').checked;
@@ -1291,9 +1325,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.txtUsername').value = config.Username || '';
             view.querySelector('.txtLatLon').value = config.LatLon || '';
             view.querySelector('.apiRequestIntervalSeconds').value =
-                config.ApiRequestIntervalSeconds == null ? 1 : Math.min(config.ApiRequestIntervalSeconds, 30);
+                config.ApiRequestIntervalSeconds == null ? 2 : Math.min(config.ApiRequestIntervalSeconds, 30);
             view.querySelector('.importDeadlineHours').value =
-                config.ImportDeadlineHours == null ? 4 : config.ImportDeadlineHours;
+                config.ImportDeadlineHours == null ? 24 : config.ImportDeadlineHours;
+            view.querySelector('.discoveryDeadlineHours').value =
+                config.DiscoveryDeadlineHours == null ? 3 : config.DiscoveryDeadlineHours;
             view.querySelector('.enableCatalogIdentityDiagnostics').checked = config.EnableCatalogIdentityDiagnostics === true;
             view.querySelector('.hideRegionalGenres').checked = config.HideRegionalGenres !== false;
             view.querySelector('.allowPartialCatalogImport').checked = config.AllowPartialCatalogImport !== false;
