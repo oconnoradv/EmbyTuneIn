@@ -424,7 +424,7 @@ test('native view lifecycle loads labeled upstream settings on each visit', asyn
     await first;
     assert.equal(app.username.value, 'listener');
     assert.equal(app.latLon.value, '1,2');
-    assert.equal(String(app.requestInterval.value), '2');
+    assert.equal(String(app.requestInterval.value), '3');
     app.instance.onPause('away');
     const second = app.instance.onResume();
     app.reads[1].resolve({ Username: null, LatLon: null });
@@ -455,7 +455,7 @@ test('save retains unrelated configuration and converts empty fields to null', a
     assert.equal(app.writes[0].config.Other, 42);
     assert.equal(app.writes[0].config.SchemaVersion, 1);
     assert.equal(app.writes[0].config.ConfigurationCompleted, true);
-    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 2);
+    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 3);
     assert.equal(app.writes[0].config.ImportDeadlineHours, 8);
     assert.equal(app.writes[0].config.DiscoveryDeadlineHours, 2);
     assert.equal(app.writes[0].config.EnableCatalogIdentityDiagnostics, false);

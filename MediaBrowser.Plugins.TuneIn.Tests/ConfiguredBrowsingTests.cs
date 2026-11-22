@@ -174,9 +174,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData("", 2)]
+        [InlineData("", 3)]
         [InlineData("<ApiRequestIntervalSeconds>1</ApiRequestIntervalSeconds>", 1)]
-        [InlineData("<ApiRequestIntervalSeconds>3</ApiRequestIntervalSeconds>", 3)]
+        [InlineData("<ApiRequestIntervalSeconds>2</ApiRequestIntervalSeconds>", 2)]
         [InlineData("<ApiRequestIntervalSeconds>17</ApiRequestIntervalSeconds>", 17)]
         public void RequestIntervalDefaultsOnlyWhenNotSaved(string setting, int expected)
         {
@@ -956,7 +956,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public void InvalidAdminConfigurationIsRejectedServerSide()
         {
             var config = Ready();
-            Assert.Equal(2, new PluginConfiguration().ApiRequestIntervalSeconds);
+            Assert.Equal(3, new PluginConfiguration().ApiRequestIntervalSeconds);
             config.ApiRequestIntervalSeconds = 0;
             Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
             config.ApiRequestIntervalSeconds = 31;

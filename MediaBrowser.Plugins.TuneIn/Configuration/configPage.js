@@ -1478,7 +1478,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.txtUsername').value = config.Username || '';
             view.querySelector('.txtLatLon').value = config.LatLon || '';
             view.querySelector('.apiRequestIntervalSeconds').value =
-                config.ApiRequestIntervalSeconds == null ? 2 : Math.min(config.ApiRequestIntervalSeconds, 30);
+                config.ApiRequestIntervalSeconds == null ? 3 : Math.min(config.ApiRequestIntervalSeconds, 30);
             view.querySelector('.importDeadlineHours').value =
                 config.ImportDeadlineHours == null ? 8 : config.ImportDeadlineHours;
             view.querySelector('.discoveryDeadlineHours').value =

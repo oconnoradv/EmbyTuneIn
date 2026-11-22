@@ -151,7 +151,7 @@ refresh become available after you save.
   imports of valid results when malformed trusted provider links are skipped.
   See [Partial results](#partial-results).
 - **API request interval** sets minimum request spacing from 1 to 30 seconds,
-  defaulting to 2 seconds between request starts when unset. Previously saved
+  defaulting to 3 seconds between request starts when unset. Previously saved
   intervals are preserved. TuneIn retry delays take precedence.
 - **Discovery deadline** sets the time allowed for discovery from 1 to 10
   whole hours, defaulting to 3 hours when absent from saved settings. It excludes
