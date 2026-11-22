@@ -20,12 +20,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
     public class LibraryArtworkTests
     {
         [Fact]
-        public void PluginLibraryThumbnailUsesPoweredByTuneInImage()
+        public void PluginLibraryThumbnailUsesLibraryArtwork()
         {
             var plugin = (Plugin)RuntimeHelpers.GetUninitializedObject(typeof(Plugin));
             using var actual = plugin.GetThumbImage();
             using var expected = typeof(Plugin).Assembly.GetManifestResourceStream(
-                "MediaBrowser.Plugins.TuneIn.Images.tunein-poweredby.png");
+                "MediaBrowser.Plugins.TuneIn.Images.tunein-library.png");
             using var actualBuffer = new System.IO.MemoryStream();
             using var expectedBuffer = new System.IO.MemoryStream();
             Assert.NotNull(actual);
@@ -33,17 +33,17 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             actual.CopyTo(actualBuffer);
             expected.CopyTo(expectedBuffer);
             Assert.Equal(expectedBuffer.ToArray(), actualBuffer.ToArray());
-            Assert.Equal(544, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(actualBuffer.ToArray().AsSpan(16, 4)));
-            Assert.Equal(306, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(actualBuffer.ToArray().AsSpan(20, 4)));
+            Assert.Equal(1280, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(actualBuffer.ToArray().AsSpan(16, 4)));
+            Assert.Equal(720, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(actualBuffer.ToArray().AsSpan(20, 4)));
         }
 
         [Fact]
-        public async Task ChannelImagesUsePoweredByTuneInAssetAndInvalidateCachedVersion()
+        public async Task ChannelImagesUseLibraryArtworkAndInvalidateCachedVersion()
         {
             var directory = new TuneInDirectory(() => new PluginConfiguration(), (_, __) => throw new Exception("Unexpected provider request."));
             var channel = new TuneInChannel(directory);
             Assert.Equal("49", channel.DataVersion);
-            using var expected = typeof(TuneInChannel).Assembly.GetManifestResourceStream("MediaBrowser.Plugins.TuneIn.Images.tunein-poweredby.png");
+            using var expected = typeof(TuneInChannel).Assembly.GetManifestResourceStream("MediaBrowser.Plugins.TuneIn.Images.tunein-library.png");
             using var expectedBuffer = new System.IO.MemoryStream();
             Assert.NotNull(expected);
             expected.CopyTo(expectedBuffer);
@@ -56,8 +56,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     image.Stream.CopyTo(actualBuffer);
                     var png = actualBuffer.ToArray();
                     Assert.Equal(expectedBuffer.ToArray(), png);
-                    Assert.Equal(544, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(16, 4)));
-                    Assert.Equal(306, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(20, 4)));
+                    Assert.Equal(1280, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(16, 4)));
+                    Assert.Equal(720, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(20, 4)));
                 }
             }
         }
@@ -149,7 +149,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
 
             Assert.Single(proxy.Updated, item => item == parent);
-            Assert.All(types, type => Assert.Equal("http://127.0.0.1:8096/emby/TuneIn/CategoryArtwork/channel?v=1",
+            Assert.All(types, type => Assert.Equal("http://127.0.0.1:8096/emby/TuneIn/CategoryArtwork/channel?v=2",
                 parent.GetImagePath(type, 0)));
             Assert.EndsWith("/TuneIn/CategoryArtwork/talk?v=1", proxy.Root.GetImagePath(ImageType.Primary, 0));
         }

@@ -300,12 +300,12 @@ namespace MediaBrowser.Plugins.TuneIn
             const string provider = "TuneInLibraryArtwork";
             var url = CategoryArtworkUrl(TuneInCategoryArtwork.ChannelArtwork);
             var previousRevision = channel.GetProviderId(provider);
-            if (previousRevision == TuneInCategoryArtwork.Revision &&
+            if (previousRevision == TuneInCategoryArtwork.LibraryRevision &&
                 ChannelImageTypes.All(type => channel.HasImage(type, 0))) return;
             var now = DateTimeOffset.UtcNow;
             foreach (var type in ChannelImageTypes)
                 channel.SetImage(new ItemImageInfo { Path = url, Type = type, DateModified = now }, 0);
-            channel.SetProviderId(provider, TuneInCategoryArtwork.Revision);
+            channel.SetProviderId(provider, TuneInCategoryArtwork.LibraryRevision);
             try { library.UpdateItem(channel, library.GetItemById(channel.ParentId), ItemUpdateType.ImageUpdate); }
             catch
             {

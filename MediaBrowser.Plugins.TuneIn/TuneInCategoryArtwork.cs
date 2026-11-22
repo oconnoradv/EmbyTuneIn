@@ -59,6 +59,7 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         internal const string Revision = "1";
         internal const string GenreRevision = "3";
+        internal const string LibraryRevision = "2";
         internal const string ChannelArtwork = "channel";
         private const string GenrePrefix = "MediaBrowser.Plugins.TuneIn.Images.genres.";
         private static readonly string[] Categories = { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
@@ -73,7 +74,7 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             ResourceName(category);
             if (string.IsNullOrEmpty(baseUrl)) throw new InvalidOperationException("The local Emby API URL is unavailable.");
-            return baseUrl.TrimEnd('/') + "/TuneIn/CategoryArtwork/" + category + "?v=" + Revision;
+            return baseUrl.TrimEnd('/') + "/TuneIn/CategoryArtwork/" + category + "?v=" + (category == ChannelArtwork ? LibraryRevision : Revision);
         }
 
         // Music genre folders, including music genres listed under a language, use bundled genre artwork when available.
@@ -104,7 +105,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private static string ResourceName(string category)
         {
-            if (category == ChannelArtwork) return "MediaBrowser.Plugins.TuneIn.Images.tunein-poweredby.png";
+            if (category == ChannelArtwork) return "MediaBrowser.Plugins.TuneIn.Images.tunein-library.png";
             if (!Categories.Contains(category, StringComparer.Ordinal))
                 throw new ArgumentException("Unknown TuneIn artwork category.", nameof(category));
             var name = category == "local" ? "localradio" : category == "language" ? "bylanguage"

@@ -605,7 +605,8 @@ Emby's import is not guaranteed.
 Category folders use bundled artwork. Refreshing a category updates its saved
 folder artwork even when the catalog is unchanged. Refresh also updates the
 top-level TuneIn library item's Primary, Thumb, and first Backdrop images to
-the **Powered by TuneIn** artwork.
+bundled original neon broadcast artwork that includes the unaltered
+**Powered by TuneIn** mark.
 
 Music genre folders, including music genres shown under **By Language**, use
 bundled original 1280×720 neon artwork. Each card's typography, palette, and
