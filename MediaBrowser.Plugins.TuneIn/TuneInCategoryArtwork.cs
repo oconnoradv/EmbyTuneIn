@@ -15,13 +15,6 @@ namespace MediaBrowser.Plugins.TuneIn
         public string Category { get; set; }
     }
 
-    [Route("/TuneIn/GenreArtwork/{GenreId}", "GET")]
-    [Authenticated(AllowLocalOnly = true)]
-    public sealed class GetTuneInGenreArtwork
-    {
-        public string GenreId { get; set; }
-    }
-
     public sealed class TuneInCategoryArtworkService : IService, IRequiresRequest
     {
         private readonly IHttpResultFactory resultFactory;
@@ -32,25 +25,19 @@ namespace MediaBrowser.Plugins.TuneIn
             this.resultFactory = resultFactory ?? throw new ArgumentNullException(nameof(resultFactory));
         }
 
-        public object Get(GetTuneInCategoryArtwork request) =>
-            Respond(() => TuneInCategoryArtwork.Open(request.Category), "image/png");
-
-        public object Get(GetTuneInGenreArtwork request) =>
-            Respond(() => TuneInCategoryArtwork.OpenGenre(request.GenreId), "image/jpeg");
-
-        private object Respond(Func<Stream> open, string contentType)
+        public object Get(GetTuneInCategoryArtwork request)
         {
             var remote = Request?.RemoteIp;
             if (remote?.IsIPv4MappedToIPv6 == true) remote = remote.MapToIPv4();
             if (Request == null || !Request.IsSocketConnectionLocal || remote == null || !IPAddress.IsLoopback(remote))
                 throw new UnauthorizedAccessException("TuneIn category artwork is available only to this Emby server.");
             Request.CancellationToken.ThrowIfCancellationRequested();
-            using (var stream = open())
+            using (var stream = TuneInCategoryArtwork.Open(request.Category))
             using (var buffer = new MemoryStream())
             {
                 stream.CopyTo(buffer);
                 Request.CancellationToken.ThrowIfCancellationRequested();
-                return resultFactory.GetResult(Request, new ReadOnlyMemory<byte>(buffer.ToArray()), contentType, null);
+                return resultFactory.GetResult(Request, new ReadOnlyMemory<byte>(buffer.ToArray()), "image/png", null);
             }
         }
     }
@@ -58,16 +45,14 @@ namespace MediaBrowser.Plugins.TuneIn
     internal static class TuneInCategoryArtwork
     {
         internal const string Revision = "1";
-        internal const string GenreRevision = "1";
+        internal const string GenreRevision = "2";
         internal const string ChannelArtwork = "channel";
-        private const string GenrePrefix = "MediaBrowser.Plugins.TuneIn.Images.genres.";
         private static readonly string[] Categories = { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
-        // Bundled genre images are built offline by tools\Build-GenreArtwork.ps1.
-        private static readonly HashSet<string> Genres = new HashSet<string>(
-            typeof(TuneInCategoryArtwork).Assembly.GetManifestResourceNames()
-                .Where(name => name.StartsWith(GenrePrefix, StringComparison.Ordinal) && name.EndsWith(".jpg", StringComparison.Ordinal))
-                .Select(name => name.Substring(GenrePrefix.Length, name.Length - GenrePrefix.Length - 4)),
-            StringComparer.Ordinal);
+        // Music genres for which TuneIn publishes a genre logo; other genres return a generic or station image.
+        private static readonly HashSet<string> Genres = new HashSet<string>(new[]
+        {
+            "c100000948", "c100000949", "c100000952", "c100001676", "c100001870", "c100002494", "c100002506", "c100002533", "c100003819", "c100006348", "c10635888", "c1367173", "c481372", "c530749", "c57935", "c57939", "c57940", "c57941", "c57942", "c57943", "c57944", "c57950", "c57951", "g115", "g22", "g2762", "g2771", "g2773", "g2774", "g2792", "g2804", "g393", "g4152", "g4154", "g4156", "g54", "g63"
+        }, StringComparer.Ordinal);
 
         internal static string Url(string baseUrl, string category)
         {
@@ -76,7 +61,7 @@ namespace MediaBrowser.Plugins.TuneIn
             return baseUrl.TrimEnd('/') + "/TuneIn/CategoryArtwork/" + category + "?v=" + Revision;
         }
 
-        // Music genre folders, including music genres listed under a language, use bundled genre artwork when available.
+        // Music genre folders, including music genres listed under a language, use TuneIn's genre logo when one is published.
         internal static string GenreId(NavigationEntry entry)
         {
             if (entry?.Request == null || entry.StationId != null) return null;
@@ -84,18 +69,10 @@ namespace MediaBrowser.Plugins.TuneIn
             return entry.Request.Parameters.TryGetValue("id", out var id) && id != null && Genres.Contains(id) ? id : null;
         }
 
-        internal static string GenreUrl(string baseUrl, string genreId)
+        internal static string GenreUrl(string genreId)
         {
             if (genreId == null || !Genres.Contains(genreId)) throw new ArgumentException("Unknown TuneIn genre artwork.", nameof(genreId));
-            if (string.IsNullOrEmpty(baseUrl)) throw new InvalidOperationException("The local Emby API URL is unavailable.");
-            return baseUrl.TrimEnd('/') + "/TuneIn/GenreArtwork/" + genreId + "?v=" + GenreRevision;
-        }
-
-        internal static Stream OpenGenre(string genreId)
-        {
-            if (genreId == null || !Genres.Contains(genreId)) throw new ArgumentException("Unknown TuneIn genre artwork.", nameof(genreId));
-            return typeof(TuneInCategoryArtwork).Assembly.GetManifestResourceStream(GenrePrefix + genreId + ".jpg")
-                ?? throw new InvalidOperationException("Bundled TuneIn genre artwork is missing.");
+            return "https://cdn-profiles.tunein.com/" + genreId + "/images/logoq.png";
         }
 
         internal static Stream Open(string category) =>
