@@ -75,6 +75,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("g2698", "c100002520", "26", "s", "nextStations")]
         [InlineData("g3078", "c100001377", "26", "p", "nextShows")]
         [InlineData("g214", "c100000971", "26", "s", "nextStations")]
+        [InlineData("g2801", "c100002500", "26", "s", "nextStations")]
+        [InlineData("g2801", "c100002500", "6", "p", "nextShows")]
+        [InlineData("g2758", "c100002502", "26", "s", "nextStations")]
+        [InlineData("g403", "c100002503", "6", "p", "nextShows")]
         public async Task LegacyGenrePaginationFollowsItsCanonicalMusicCategory(
             string genre, string category, string offset, string filter, string key)
         {
@@ -95,6 +99,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("g71", "id=c100002515&filter=s")]
         [InlineData("g71", "offset=0&id=c100002515&filter=s")]
         [InlineData("g71", "offset=26&id=c100002515&filter=s&c=music")]
+        [InlineData("g2801", "offset=26&id=c100002519&filter=s")]
+        [InlineData("g2801", "offset=26&id=c100002500&filter=g1")]
+        [InlineData("g2801", "offset=26&id=g2758&filter=s")]
         public async Task LegacyGenrePaginationDoesNotFollowUnrelatedIdsOrNonPageLinks(string genre, string query)
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true };

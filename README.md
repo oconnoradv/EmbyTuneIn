@@ -288,13 +288,12 @@ violations, unrecovered request failures, cancellation, timeouts, or catalog
 budgets. Changing it applies to the next manual or scheduled refresh; it cannot
 apply previously fetched results without another discovery.
 
-When a TuneIn **More Stations** or **More Shows** link jumps to an
-unrecognized category instead of the next page of the same one, that page is
-not followed. A refresh counts it as a skipped entry, so the result is
-**Partial** and saved stations are retained, rather than failing. Known
-legacy genre IDs whose pages continue under their canonical category ID, such
-as Talk > Video Games, are followed normally in every category, including
-By Language.
+When a TuneIn **More Stations** or **More Shows** link moves a genre (`g…`) to
+its own category ID (`c…`), the next page is followed normally in every
+category, including By Language. Links to a category known to belong to a
+different genre, or any other unexpected jump, are not followed. A refresh
+counts those as skipped entries, so the result is **Partial** and saved
+stations are retained, rather than failing.
 
 ### Status and station counts
 

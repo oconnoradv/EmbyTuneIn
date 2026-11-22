@@ -275,11 +275,15 @@ namespace MediaBrowser.Plugins.TuneIn
             if (from == null || current.Parameters.ContainsKey("c") || next.Parameters.ContainsKey("c")
                 || !int.TryParse(next.Parameters.GetValueOrDefault("offset"), out var offset) || offset <= 0)
                 return false;
-            return CanonicalPaginationIds.TryGetValue(from, out var canonical) && canonical == to;
+            if (CanonicalPaginationIds.TryGetValue(from, out var canonical)) return canonical == to;
+            // TuneIn pages a genre's More Stations/Shows under that genre's own category ID; refuse IDs owned by another genre.
+            return Regex.IsMatch(from, @"\Ag[1-9][0-9]{0,9}\z") && to != null
+                && Regex.IsMatch(to, @"\Ac[1-9][0-9]{0,9}\z") && !CanonicalPaginationIds.ContainsValue(to)
+                && (next.Parameters.GetValueOrDefault("filter") == "s" || next.Parameters.GetValueOrDefault("filter") == "p");
         }
 
-        // TuneIn emits the canonical category ID in More Stations/Shows links for these legacy genre IDs in Music,
-        // Talk and Sports, including when By Language reaches them. Other jumps are skipped, not followed.
+        // Known canonical category IDs for legacy genre IDs in Music, Talk and Sports, including when By Language reaches
+        // them. Other genres may page to their own unlisted category ID, but never to one listed here for another genre.
         private static readonly Dictionary<string, string> CanonicalPaginationIds = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["g3"] = "c57935", ["g19"] = "c57951", ["g22"] = "c57954", ["g71"] = "c100002515",
