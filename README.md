@@ -186,15 +186,38 @@ Before the first refresh, the Control Panel highlights a reminder. It stays
 dismissed after an administrator starts a refresh, including across restarts.
 
 Discovery completes for a category before it is imported; eligible partial
-results are handled as described below. An initial or full-tree import supplies
+and intentionally limited results are handled as described below. An initial or full-tree import supplies
 Emby with the **complete staged channel tree**, including saved siblings. With
 a compatible baseline, a refresh can import one complete category at a time.
 A single-category refresh fetches only that category. Unchanged catalogs skip
 import unless reconciliation is needed.
 
-The import asks Emby to traverse the depth of the staged tree, including
-forward pagination folders. The separate discovery limit on nested folders
-still applies. If Emby leaves folders unread, the refresh remains incomplete
+**Advanced Settings** includes **Max Station Count**, default **250**, accepting
+**Not set** (blank) or **1-4000**. It counts unique TuneIn station IDs **per
+top-level category**: all Music genres share one counter, and repeated placements
+of the same station count once. Not set disables this configurable cap, not the
+resource safety limits.
+
+**Traversal depth limit** accepts **3-50**, default **5**. The TuneIn category
+root is level **0**; every folder transition, including **More Stations**,
+adds one level. Additional depths allow traversing more stations, subject to
+Max Station Count. These controls limit TuneIn discovery, not Emby traversal.
+Reaching either cap produces a coherent limited tree that can still be imported;
+status reports **Limited**, rather than claiming complete discovery.
+
+Refresh retains existing verified category entries still allowed by saved filters
+and merges discovered additions and metadata updates. Absence from a discovery
+result is not a deletion request. Existing placements retain their IDs when only
+metadata changes. Existing Emby inventory is included, not just the last saved
+snapshot; ambiguous or unverified ownership blocks unsafe preservation. Removing
+selected genres or other saved filters still removes entries outside the allowed
+scope. Changing the favorites username or coordinate-based Local Radio scope
+invalidates that old scope. Retained totals can exceed Max Station Count, and
+older deeper branches are preserved.
+
+The import asks Emby to traverse the actual merged tree depth, including
+retained branches and forward pagination folders. It is never clamped to the
+new discovery depth. If Emby leaves folders unread, the refresh remains incomplete
 and the diagnostic report records the served and expected folder counts and
 the requested refresh level.
 
@@ -362,6 +385,16 @@ targets. Playlists and other references to removed entries may break.
 Concurrent deletion behavior and speed have not been verified on a live Emby
 server.
 
+For a broken individual station, choose **One station entry** and paste its Emby
+details URL or numeric/GUID item ID. **Preview cleanup** verifies its station type,
+TuneIn ownership and ancestor chain, and identifies the exact entry. Confirm after
+the backup acknowledgement to delete only that Emby item, not every placement of
+the provider station. Its single saved parent placement is removed atomically
+before deletion, protecting against immediate restoration from a stale snapshot;
+if deletion fails, the saved placement is restored and failure is reported.
+Parent folders and other placements remain. No exclusion or blacklist is saved:
+future TuneIn discovery can add the entry again.
+
 Refreshes (including schedules and recovery) and settings writes cannot run
 while cleanup is active. The dashboard reports progress and partial failures.
 **Stop cleanup** requests a cooperative stop after current removals finish;
@@ -388,13 +421,14 @@ category in settings if it should stay absent.
 | Import attempt | A fresh configured deadline of 1 to 100 hours (default: 24) for staging, importing and verification/finalization |
 | Catalog cache | Up to 60,000 pages and 640 MiB per refresh |
 | Discovered category | Up to 1,000,000 items and 1 GiB estimated data |
+| Max Station Count | Not set or 1-4000 unique TuneIn station IDs per top-level category (default: 250); caps discovery, not retained totals |
 | Catalog HTTP response | 90 seconds including body reads, excluding pacing and provider cooldowns |
 | Discovery checkpoint | At a completed folder after five minutes or 3,000 additional station rows when new pages are available, and on interruption or timeout when possible |
 | Automatic refresh retries | Up to 3 for interrupted work within an active refresh, shared across discovery and import |
 | Timeout handling | Drains active work and stops without automatic discovery or import retries |
 | Manual Cancel | Drains active work and stops; never triggers an automatic recovery retry |
 | Checkpoint resume window | 48 hours from discovery start, with matching settings and requested category scope |
-| Folder depth | Eight levels; forward pagination does not consume depth but still consumes page and folder budgets |
+| TuneIn traversal depth | 3-50 (default: 5), category root at level 0; every folder and More Stations transition counts; limited results can be imported |
 
 Discovery can overlap up to four independent requests without reducing shared spacing
 between request starts. HTTP 429 responses have a run-wide budget of three

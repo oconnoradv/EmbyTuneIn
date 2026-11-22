@@ -4,7 +4,9 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Logging;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -17,6 +19,8 @@ namespace MediaBrowser.Plugins.TuneIn
         public int Stations { get; set; }
         public string Message { get; set; }
         public string Scope { get; set; }
+        public string StationName { get; set; }
+        public string StationReference { get; set; }
     }
 
     public sealed class TuneInCleanupStatus
@@ -51,6 +55,54 @@ namespace MediaBrowser.Plugins.TuneIn
             internal Target[] Targets;
             internal int Unverified;
             internal string Category;
+            internal bool SingleStation;
+            internal Target[] Ancestors;
+            internal string StationName;
+        }
+
+        internal Plan PreviewStation(ConfigurationSnapshot snapshot, string reference)
+        {
+            if (string.IsNullOrWhiteSpace(reference) || reference.Length > 2048)
+                throw new ArgumentException("Enter an Emby item ID or station details URL.");
+            var id = reference.Trim();
+            if (Uri.TryCreate(id, UriKind.Absolute, out var uri) && (uri.Scheme == "http" || uri.Scheme == "https"))
+            {
+                var match = Regex.Match(uri.Query + uri.Fragment, @"[?&]id=([^&#]+)", RegexOptions.IgnoreCase);
+                if (!match.Success) throw new ArgumentException("The Emby details URL must contain an item id.");
+                id = Uri.UnescapeDataString(match.Groups[1].Value);
+            }
+            BaseItem item;
+            if (long.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var internalId) && internalId > 0)
+                item = library.GetItemById(internalId);
+            else if (Guid.TryParse(id, out var guid) && guid != Guid.Empty)
+                item = library.GetItemById(guid);
+            else throw new ArgumentException("Enter a numeric or GUID Emby item ID, not a station name or TuneIn station ID.");
+            if (!(item is MediaBrowser.Controller.Entities.Audio.Audio)
+                || !TuneInDirectory.GeneratedStation(snapshot, item.ExternalId))
+                throw new InvalidOperationException("The reference is not a verified TuneIn station entry.");
+            var root = getRoot() ?? throw new InvalidOperationException("TuneIn channel is not registered.");
+            var category = TuneInDirectory.GeneratedCategory(snapshot, item.ExternalId);
+            if (category == null) throw new InvalidOperationException("The TuneIn station category cannot be verified.");
+            var ancestors = new List<Target>();
+            var seen = new HashSet<long> { item.InternalId };
+            var parentId = item.ParentId;
+            while (parentId != root.InternalId)
+            {
+                if (!seen.Add(parentId)) throw new InvalidOperationException("The station ancestor chain is cyclic.");
+                var parent = library.GetItemById(parentId);
+                if (!(parent is Folder) || parent is Channel
+                    || TuneInDirectory.GeneratedCategory(snapshot, parent.ExternalId) != category)
+                    throw new InvalidOperationException("The station is not beneath its verified TuneIn category.");
+                ancestors.Add(new Target(parent));
+                parentId = parent.ParentId;
+            }
+            if (ancestors.Count == 0 || TuneInDirectory.GeneratedCategory(snapshot, ancestors.Last().ExternalId, true) != category)
+                throw new InvalidOperationException("The station category root cannot be verified.");
+            return new Plan
+            {
+                Root = root.InternalId, Category = category, Targets = new[] { new Target(item) },
+                Ancestors = ancestors.ToArray(), SingleStation = true, StationName = item.Name
+            };
         }
 
         internal sealed class Target
@@ -137,7 +189,7 @@ namespace MediaBrowser.Plugins.TuneIn
             var failed = 0;
             var reportedRemoved = -1;
             var reportedFailed = -1;
-            var targets = plan.Targets.ToDictionary(item => item.Id);
+            var targets = plan.Targets.Concat(plan.Ancestors ?? Array.Empty<Target>()).ToDictionary(item => item.Id);
             void Report()
             {
                 if (reportedRemoved == removed && reportedFailed == failed) return;

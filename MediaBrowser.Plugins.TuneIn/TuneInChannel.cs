@@ -140,6 +140,98 @@ namespace MediaBrowser.Plugins.TuneIn
             return stations.Count;
         }
 
+        internal TuneInCategorySnapshot ReadCategorySnapshot(ConfigurationSnapshot snapshot, string category, CancellationToken token,
+            TuneInCategorySnapshot previous = null)
+        {
+            if (library == null) return null;
+            directory.CheckCurrent(snapshot, token);
+            var channels = library.GetItemList(new InternalItemsQuery { IncludeItemTypes = new[] { nameof(Channel) } }, token)
+                .OfType<Channel>().Where(item => item.Name == Name).ToArray();
+            if (channels.Length > 1) throw new InvalidOperationException("The TuneIn channel is ambiguous.");
+            if (channels.Length == 0) return null;
+            var rootId = GetCategoryRoot(snapshot, category).Id;
+            var categoryRoots = library.GetItemList(new InternalItemsQuery
+            { ParentIds = new[] { channels[0].InternalId }, IsFolder = true, Recursive = false, Limit = TuneInStagedImport.MaxFolders + 1 }, token);
+            if (categoryRoots.Length > TuneInStagedImport.MaxFolders)
+                throw new InvalidOperationException("Existing TuneIn channel exceeds its root folder limit.");
+            var roots = categoryRoots.Where(item => TuneInDirectory.GeneratedCategory(snapshot, item.ExternalId, true) == category
+                && (previous != null || category != "presets" && (category != "local" || snapshot.LocalSource != "coordinates")
+                    || item.ExternalId == rootId)).ToArray();
+            if (roots.Length == 0) return null;
+            var items = library.GetItemList(new InternalItemsQuery
+            { ParentIds = roots.Select(item => item.InternalId).ToArray(), Recursive = true, Limit = TuneInStagedImport.MaxItems + 1 }, token);
+            if (items.Length > TuneInStagedImport.MaxItems)
+                throw new InvalidOperationException("Existing TuneIn category exceeds its inventory limit.");
+            var inventory = roots.Concat(items).ToDictionary(item => item.InternalId);
+            var reachable = new HashSet<long>(roots.Select(item => item.InternalId));
+            foreach (var item in items)
+            {
+                token.ThrowIfCancellationRequested();
+                var ancestry = new HashSet<long>();
+                var parentId = item.InternalId;
+                while (!reachable.Contains(parentId))
+                {
+                    if (!ancestry.Add(parentId) || !inventory.TryGetValue(parentId, out var parent))
+                        throw new InvalidOperationException("Existing TuneIn category contains cyclic or unreachable entries.");
+                    parentId = parent.ParentId;
+                }
+                reachable.UnionWith(ancestry);
+            }
+            var metadata = (previous?.Folders.SelectMany(folder => folder.Items) ?? Enumerable.Empty<TuneInItemSnapshot>())
+                .GroupBy(item => directory.MembershipKey(snapshot, item.Id), StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            var folders = new Dictionary<string, TuneInFolderSnapshot>(StringComparer.Ordinal)
+            { [rootId] = new TuneInFolderSnapshot { Id = rootId } };
+            var children = items.ToLookup(item => item.ParentId);
+            var pending = new Queue<(long InternalId, string FolderId)>(roots.Select(item => (item.InternalId, rootId)));
+            var seen = new HashSet<long>(roots.Select(item => item.InternalId));
+            while (pending.Count != 0)
+            {
+                token.ThrowIfCancellationRequested();
+                var parent = pending.Dequeue();
+                foreach (var item in children[parent.InternalId])
+                {
+                    if (!seen.Add(item.InternalId))
+                        throw new InvalidOperationException("Existing TuneIn category contains cyclic entries.");
+                    if (TuneInDirectory.GeneratedCategory(snapshot, item.ExternalId) != category)
+                        throw new InvalidOperationException("Existing TuneIn category contains unverified entries; preservation cannot safely proceed.");
+                    var id = directory.RebindOwned(snapshot, item.ExternalId);
+                    if (id == null) continue;
+                    var isFolder = item is Folder;
+                    if (!isFolder && (!(item is MediaBrowser.Controller.Entities.Audio.Audio)
+                        || !TuneInDirectory.GeneratedStation(snapshot, item.ExternalId)))
+                        throw new InvalidOperationException("Existing TuneIn category contains an unsupported item type.");
+                    var listing = folders[parent.FolderId];
+                    if (!listing.Items.Any(saved => saved.Id == id))
+                    {
+                        metadata.TryGetValue(directory.MembershipKey(snapshot, id), out var savedMetadata);
+                        listing.Items.Add(new TuneInItemSnapshot
+                        {
+                            Id = id, Name = item.Name ?? "", Type = isFolder ? "Folder" : "Media",
+                            MediaType = savedMetadata?.MediaType ?? "Audio", ContentType = savedMetadata?.ContentType ?? "Song",
+                            ImageUrl = savedMetadata?.ImageUrl ?? ""
+                        });
+                    }
+                    if (isFolder)
+                    {
+                        if (folders.Count == TuneInStagedImport.MaxFolders && !folders.ContainsKey(id))
+                            throw new InvalidOperationException("Existing TuneIn category exceeds its folder limit.");
+                        if (!folders.ContainsKey(id)) folders[id] = new TuneInFolderSnapshot { Id = id };
+                        pending.Enqueue((item.InternalId, id));
+                    }
+                }
+            }
+            directory.CheckCurrent(snapshot, token);
+            var result = new TuneInCategorySnapshot
+            {
+                Category = category, RootId = rootId, Folders = folders.Values.ToList(),
+                DiscoveryPartial = previous?.DiscoveryPartial == true,
+                DiscoveryLimitReason = previous?.DiscoveryLimitReason
+            };
+            result.Fingerprint = TuneInStagedImport.Fingerprint(result.Folders);
+            return result;
+        }
+
         internal void UpdateCategoryArtwork(string folderId, CancellationToken token)
         {
             if (serverHost == null || library == null) throw new InvalidOperationException("TuneIn artwork services are unavailable.");

@@ -2,6 +2,7 @@ using MediaBrowser.Controller.Channels;
 using MediaBrowser.Model.Channels;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -16,7 +17,6 @@ namespace MediaBrowser.Plugins.TuneIn
         // A category root can be generated locally without fetching a page.
         internal const int MaxFolders = TuneInCatalogueSession.MaxRefreshPages + 1;
         internal const int MaxItems = 1000000;
-        private const int MaxFolderDepth = 8;
         internal const long MaxEstimatedBytes = 1024L * 1024 * 1024;
         private readonly Dictionary<string, ChannelItemResult> folders = new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal);
         private readonly HashSet<string> incompleteFolders = new HashSet<string>(StringComparer.Ordinal);
@@ -40,6 +40,7 @@ namespace MediaBrowser.Plugins.TuneIn
         internal int Count => folders.Count;
         internal int ImportRefreshLevel { get; private set; }
         internal bool DiscoveryIncomplete => incompleteFolders.Count != 0;
+        internal string DiscoveryLimitReason { get; private set; }
         internal int CountStations(Func<string, string> stationId) => folders.Values
             .SelectMany(folder => folder.Items).Where(item => item.Type == ChannelItemType.Media)
             .Select(item => stationId(item.Id)).Where(id => id != null).Distinct(StringComparer.Ordinal).Count();
@@ -56,10 +57,14 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static async Task<TuneInStagedImport> DiscoverAsync(TuneInChannel channel, ChannelItemInfo root,
             TuneInCatalogueSession session, CancellationToken token,
             Func<string, TuneInCatalogueSession, bool, CancellationToken, Task<ChannelItemResult>> getItems,
-            Action<int, int> report, Action validate, Func<string, string, bool> isForwardPage, Action<int> checkpoint = null)
+            Action<int, int> report, Action validate, Func<string, string, bool> isForwardPage, Action<int> checkpoint = null,
+            int? maxStationCount = null, int traversalDepthLimit = Configuration.PluginConfiguration.DefaultTraversalDepthLimit,
+            Func<string, string> stationId = null)
         {
             if (channel == null || root == null || session == null || getItems == null)
                 throw new ArgumentNullException("A complete TuneIn discovery context is required.");
+            if (maxStationCount.HasValue && (maxStationCount < 1 || stationId == null) || traversalDepthLimit < 0)
+                throw new ArgumentException("Valid discovery limits and station identity lookup are required.");
             var staged = new TuneInStagedImport(token, report, validate) { Root = root };
             var pending = new Queue<KeyValuePair<string, int>>();
             var visited = new HashSet<string>(StringComparer.Ordinal);
@@ -67,6 +72,9 @@ namespace MediaBrowser.Plugins.TuneIn
             long estimatedBytes = 0;
             var itemCount = 0;
             var stationCount = 0;
+            var distinctStations = new HashSet<string>(StringComparer.Ordinal);
+            var stationLimited = false;
+            var depthLimited = false;
 
             using (var batch = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
@@ -87,6 +95,12 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     token.ThrowIfCancellationRequested();
                     validate?.Invoke();
+                    if (maxStationCount.HasValue && distinctStations.Count == maxStationCount.Value
+                        && pending.Any(entry => !visited.Contains(entry.Key)))
+                    {
+                        stationLimited = true;
+                        break;
+                    }
                     var entries = new List<KeyValuePair<string, int>>(TuneInRequestPacer.MaxParallelCatalogue);
                     while (pending.Count != 0 && entries.Count < Math.Min(TuneInRequestPacer.MaxParallelCatalogue, MaxFolders - staged.folders.Count))
                     {
@@ -108,12 +122,33 @@ namespace MediaBrowser.Plugins.TuneIn
                         if (skips.SkippedLink) staged.incompleteFolders.Add(entry.Key);
                         if (skips.SkippedStation) staged.incompleteStationListings.Add(entry.Key);
                         CheckListingBudget(entry.Key, result, ref estimatedBytes, ref itemCount);
-                        stationCount += result.Items.Count(item => item.Type == ChannelItemType.Media);
+                        var accepted = new List<ChannelItemInfo>();
                         foreach (var item in result.Items)
+                        {
+                            if (item.Type == ChannelItemType.Media && maxStationCount.HasValue)
+                            {
+                                var identity = stationId(item.Id);
+                                if (identity == null) throw new InvalidDataException("TuneIn returned a station without an identity.");
+                                if (!distinctStations.Contains(identity) && distinctStations.Count == maxStationCount.Value)
+                                {
+                                    stationLimited = true;
+                                    continue;
+                                }
+                                distinctStations.Add(identity);
+                            }
                             if (item.Type == ChannelItemType.Folder)
-                                pending.Enqueue(new KeyValuePair<string, int>(item.Id,
-                                    ChildDepth(entry.Value, entry.Key, item.Id, isForwardPage)));
-                        staged.folders.Add(entry.Key, new ChannelItemResult { Items = result.Items.ToList() });
+                            {
+                                if (entry.Value == traversalDepthLimit)
+                                {
+                                    depthLimited = true;
+                                    continue;
+                                }
+                                pending.Enqueue(new KeyValuePair<string, int>(item.Id, entry.Value + 1));
+                            }
+                            accepted.Add(item);
+                        }
+                        stationCount += accepted.Count(item => item.Type == ChannelItemType.Media);
+                        staged.folders.Add(entry.Key, new ChannelItemResult { Items = accepted });
                         checkpoint?.Invoke(stationCount);
                     }
 
@@ -122,15 +157,52 @@ namespace MediaBrowser.Plugins.TuneIn
                         Accept(entries[i], results[i].Result, results[i].Skips);
                 }
             }
+            foreach (var listing in staged.folders.Values)
+                listing.Items.RemoveAll(item => item.Type == ChannelItemType.Folder && !staged.folders.ContainsKey(item.Id));
+            depthLimited |= staged.TrimDiscoveryDepth(traversalDepthLimit);
+            staged.DiscoveryLimitReason = string.Join("; ", new[]
+            {
+                stationLimited ? $"Max Station Count {maxStationCount} reached (per top-level category)" : null,
+                depthLimited ? $"TuneIn traversal depth limit {traversalDepthLimit} reached (including pagination)" : null
+            }.Where(reason => reason != null));
+            if (staged.DiscoveryLimitReason.Length == 0) staged.DiscoveryLimitReason = null;
             return staged;
         }
 
-        private static int ChildDepth(int parentDepth, string parent, string child, Func<string, string, bool> isForwardPage)
+        private bool TrimDiscoveryDepth(int maximum)
         {
-            if (isForwardPage(parent, child)) return parentDepth;
-            if (parentDepth >= MaxFolderDepth)
-                throw new InvalidOperationException($"TuneIn discovery exceeded its folder depth limit ({MaxFolderDepth} levels, excluding forward pages).");
-            return parentDepth + 1;
+            var incoming = folders.Keys.ToDictionary(id => id, _ => 0, StringComparer.Ordinal);
+            foreach (var item in folders.Values.SelectMany(listing => listing.Items).Where(item => item.Type == ChannelItemType.Folder))
+                incoming[item.Id]++;
+            if (incoming[Root.Id] != 0) throw new InvalidOperationException("TuneIn discovery contains cyclic folders.");
+            var levels = new Dictionary<string, int>(StringComparer.Ordinal) { [Root.Id] = 0 };
+            var pending = new Queue<string>();
+            pending.Enqueue(Root.Id);
+            var visited = 0;
+            var limited = false;
+            while (pending.Count != 0)
+            {
+                token.ThrowIfCancellationRequested();
+                var id = pending.Dequeue();
+                visited++;
+                foreach (var item in folders[id].Items.Where(item => item.Type == ChannelItemType.Folder).ToArray())
+                {
+                    if (levels.TryGetValue(id, out var depth) && depth < maximum)
+                    {
+                        levels.TryGetValue(item.Id, out var previous);
+                        levels[item.Id] = Math.Max(previous, depth + 1);
+                    }
+                    else
+                    {
+                        folders[id].Items.Remove(item);
+                        limited = true;
+                    }
+                    if (--incoming[item.Id] == 0) pending.Enqueue(item.Id);
+                }
+            }
+            if (visited != folders.Count) throw new InvalidOperationException("TuneIn discovery contains cyclic or unreachable folders.");
+            foreach (var id in folders.Keys.Where(id => !levels.ContainsKey(id)).ToArray()) folders.Remove(id);
+            return limited;
         }
 
         private static void CheckListingBudget(string id, ChannelItemResult result, ref long estimatedBytes, ref int itemCount)
@@ -204,11 +276,86 @@ namespace MediaBrowser.Plugins.TuneIn
                 merged.Add(id, listing);
                 foreach (var item in listing.Items.Where(item => item.Type == ChannelItemType.Folder))
                 {
-                    pending.Enqueue((item.Id, ChildDepth(depth, id, item.Id, isForwardPage)));
+                    pending.Enqueue((item.Id, depth + 1));
                 }
             }
             return CreateSnapshot(previous.Category, merged, true);
         }
+
+        internal TuneInCategorySnapshot MergeRetainedCategory(string category, TuneInCategorySnapshot previous,
+            Func<string, string> membershipKey, bool allowExclusions)
+        {
+            if (DiscoveryIncomplete && !allowExclusions) return null;
+            if (previous == null) return CreateSnapshot(category, folders, DiscoveryIncomplete);
+            if (previous.Category != category || previous.RootId != Root.Id)
+                throw new InvalidOperationException("The retained category does not match TuneIn discovery.");
+            var merged = previous.Folders.ToDictionary(folder => folder.Id, RestoreFolder, StringComparer.Ordinal);
+            var known = new Dictionary<string, List<(string Folder, ChannelItemInfo Item)>>(StringComparer.Ordinal);
+            foreach (var folder in merged)
+                foreach (var item in folder.Value.Items)
+                {
+                    var key = membershipKey(item.Id);
+                    if (!known.TryGetValue(key, out var placements)) known[key] = placements = new List<(string, ChannelItemInfo)>();
+                    placements.Add((folder.Key, item));
+                }
+            var retainedFolders = new HashSet<string>(merged.Keys, StringComparer.Ordinal);
+            var folderIds = previous.Folders.GroupBy(folder => membershipKey(folder.Id), StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First().Id, StringComparer.Ordinal);
+            foreach (var folder in folders.Keys)
+                if (!folderIds.ContainsKey(membershipKey(folder))) folderIds[membershipKey(folder)] = folder;
+            foreach (var folder in folders)
+            {
+                token.ThrowIfCancellationRequested();
+                var id = folderIds[membershipKey(folder.Key)];
+                if (!merged.TryGetValue(id, out var listing))
+                    merged[id] = listing = new ChannelItemResult { Items = new List<ChannelItemInfo>() };
+                foreach (var item in folder.Value.Items)
+                {
+                    var key = membershipKey(item.Id);
+                    if (known.TryGetValue(key, out var placements))
+                    {
+                        foreach (var placement in placements)
+                        {
+                            placement.Item.ForceUpdate |= placement.Item.Name != item.Name
+                                || placement.Item.ContentType != item.ContentType || placement.Item.MediaType != item.MediaType
+                                || !string.IsNullOrEmpty(item.ImageUrl) && placement.Item.ImageUrl != item.ImageUrl;
+                            placement.Item.Name = item.Name;
+                            placement.Item.ContentType = item.ContentType;
+                            placement.Item.MediaType = item.MediaType;
+                            if (!string.IsNullOrEmpty(item.ImageUrl)) placement.Item.ImageUrl = item.ImageUrl;
+                        }
+                        continue;
+                    }
+                    var copy = CopyItem(item);
+                    if (item.Type == ChannelItemType.Folder) copy.Id = folderIds[key];
+                    listing.Items.Add(copy);
+                    known[key] = new List<(string, ChannelItemInfo)> { (id, copy) };
+                }
+            }
+            // Discard new pagination branches that contributed no stations or retained folders.
+            bool removed;
+            do
+            {
+                var empty = new HashSet<string>(merged.Where(folder => folder.Key != Root.Id
+                    && !retainedFolders.Contains(folder.Key) && folder.Value.Items.Count == 0)
+                    .Select(folder => folder.Key), StringComparer.Ordinal);
+                removed = empty.Count != 0;
+                foreach (var id in empty) merged.Remove(id);
+                foreach (var listing in merged.Values)
+                    listing.Items.RemoveAll(item => item.Type == ChannelItemType.Folder && empty.Contains(item.Id));
+            } while (removed);
+            long bytes = 0;
+            var count = 0;
+            if (merged.Count > MaxFolders) throw new InvalidOperationException("Retained TuneIn category exceeds its folder limit.");
+            foreach (var folder in merged) CheckListingBudget(folder.Key, folder.Value, ref bytes, ref count);
+            return CreateSnapshot(category, merged, DiscoveryIncomplete);
+        }
+
+        private static ChannelItemInfo CopyItem(ChannelItemInfo item) => new ChannelItemInfo
+        {
+            Id = item.Id, Name = item.Name, Type = item.Type, ContentType = item.ContentType,
+            MediaType = item.MediaType, ImageUrl = item.ImageUrl, ForceUpdate = item.ForceUpdate
+        };
 
         private TuneInCategorySnapshot CreateSnapshot(string category,
             Dictionary<string, ChannelItemResult> source, bool discoveryPartial)
@@ -224,7 +371,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         Type = item.Type.ToString(),
                         ContentType = item.ContentType.ToString(),
                         MediaType = item.MediaType.ToString(),
-                        ImageUrl = item.ImageUrl ?? ""
+                        ImageUrl = item.ImageUrl ?? "",
+                        ForceUpdate = item.ForceUpdate
                     }).ToList()
                 })
                 .ToList();
@@ -239,6 +387,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 Category = category,
                 RootId = Root.Id,
                 DiscoveryPartial = discoveryPartial,
+                DiscoveryLimitReason = DiscoveryLimitReason,
                 Folders = listings
             };
             snapshot.Fingerprint = Fingerprint(snapshot.Folders);
@@ -405,7 +554,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 Type = (ChannelItemType)Enum.Parse(typeof(ChannelItemType), item.Type),
                 ContentType = (ChannelMediaContentType)Enum.Parse(typeof(ChannelMediaContentType), item.ContentType),
                 MediaType = (ChannelMediaType)Enum.Parse(typeof(ChannelMediaType), item.MediaType),
-                ImageUrl = item.ImageUrl
+                ImageUrl = item.ImageUrl,
+                ForceUpdate = item.ForceUpdate
             }).ToList()
         };
 

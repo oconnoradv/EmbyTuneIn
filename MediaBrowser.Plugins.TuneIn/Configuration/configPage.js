@@ -445,6 +445,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.apiRequestIntervalSeconds').disabled = catalogDisabled;
         instance.view.querySelector('.importDeadlineHours').disabled = catalogDisabled;
         instance.view.querySelector('.discoveryDeadlineHours').disabled = catalogDisabled;
+        instance.view.querySelector('.maxStationCount').disabled = catalogDisabled;
+        instance.view.querySelector('.traversalDepthLimit').disabled = catalogDisabled;
         instance.view.querySelector('.enableCatalogIdentityDiagnostics').disabled = catalogDisabled;
         instance.view.querySelector('.tuneInSettingsSave').disabled = disabled;
         instance.refreshCategoryRows.forEach(function (row) { row.schedule.disabled = catalogDisabled; });
@@ -543,6 +545,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function categoryOutcome(state) {
         return /^(Imported|Unchanged|Completed)$/.test(state) ? 'Completed'
+            : /^Limited\b/.test(state) ? 'Limited'
             : /^(Partial|Incomplete)\b/.test(state) ? 'Partial'
             : /^(Failed|Error|Timed out|TimedOut)$/.test(state) ? 'Error' : '';
     }
@@ -563,10 +566,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var overall = categoryOutcome(status.State);
         if (overall === 'Error' || outcomes.includes('Error')) overall = 'Error';
         else if (overall === 'Partial' || outcomes.includes('Partial')) overall = 'Partial';
+        else if (overall === 'Limited' || outcomes.includes('Limited')) overall = 'Limited';
         else if (!status.Busy && /^(Completed|NeverRun)$/.test(status.State) &&
             outcomes.length && outcomes.every(function (outcome) { return outcome === 'Completed'; })) overall = 'Completed';
         else overall = '';
-        setRefreshOutcome(instance, overall, overall === 'Error' ? 'error'
+        setRefreshOutcome(instance, overall === 'Limited' ? 'Partial' : overall, overall === 'Error' ? 'error'
+            : overall === 'Limited' ? 'limited discovery'
             : overall === 'Partial' ? 'partial' : overall === 'Completed' ? 'successful'
             : 'not all categories confirmed successful');
         instance.view.querySelector('.refreshIndicator').hidden = !instance.refreshBusy;
@@ -887,7 +892,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             type: 'POST', dataType: 'json',
             url: ApiClient.getUrl('TuneIn/Cleanup/' + (start ? 'Start' : 'Preview')),
             contentType: 'application/json',
-            data: JSON.stringify(start ? { Token: preview.Token } : { Category: view.querySelector('.cleanupScope').value })
+            data: JSON.stringify(start ? { Token: preview.Token }
+                : view.querySelector('.cleanupScope').value === 'station'
+                    ? { StationReference: view.querySelector('.cleanupStationReference').value.trim() }
+                    : { Category: view.querySelector('.cleanupScope').value })
         }).then(function (result) {
             if (epoch !== instance.viewEpoch) return;
             if (start) {
@@ -901,8 +909,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             }
             instance.cleanupPreview = result;
             view.querySelector('.cleanupPreviewText').textContent =
-                'Remove ' + result.Folders + ' folders and ' + result.Stations + ' station entries from ' + result.Scope + '?' +
+                (result.StationReference
+                    ? 'Remove only "' + result.StationName + '" (Emby item ' + result.StationReference + ') from ' + result.Scope +
+                        '? Other placements remain; future discovery may add this entry again.'
+                    : 'Remove ' + result.Folders + ' folders and ' + result.Stations + ' station entries from ' + result.Scope + '?') +
                 (result.Message ? ' ' + result.Message : '');
+            view.querySelector('.cleanupConfirm').textContent = result.StationReference ? 'Confirm delete station' : 'Remove generated entries';
             view.querySelector('.cleanupStatus').textContent = '';
             view.querySelector('.cleanupConfirmation').hidden = false;
         }).catch(function () {
@@ -967,7 +979,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             !!backupInProgress(instance) || !!instance.backupRequest || !instance.backupState || instance.backupState === 'Unavailable';
         cannotClean = cannotClean || !!backupInProgress(instance);
         instance.view.querySelector('.cleanupScope').disabled = cannotClean;
-        instance.view.querySelector('.cleanupPreview').disabled = cannotClean || !instance.view.querySelector('.cleanupScope').value;
+        var stationMode = instance.view.querySelector('.cleanupScope').value === 'station';
+        instance.view.querySelector('.cleanupStationFields').hidden = !stationMode;
+        instance.view.querySelector('.cleanupStationReference').disabled = cannotClean || !stationMode;
+        instance.view.querySelector('.cleanupPreview').disabled = cannotClean || !instance.view.querySelector('.cleanupScope').value ||
+            (stationMode && !instance.view.querySelector('.cleanupStationReference').value.trim());
         instance.view.querySelector('.cleanupCancel').disabled = !available || !instance.cleanupBusy ||
             !!instance.cleanupAction || !!(status && status.Cleanup && status.Cleanup.Cancelling);
         instance.view.querySelector('.cleanupConfirm').disabled = cannotClean || !instance.cleanupPreview ||
@@ -1130,6 +1146,16 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             message(instance, 'Use a whole number from 1 to 100 for the import deadline.');
             return false;
         }
+        var maxStationCount = String(instance.view.querySelector('.maxStationCount').value || '').trim();
+        if (maxStationCount !== '' && (!/^[0-9]+$/.test(maxStationCount) || Number(maxStationCount) < 1 || Number(maxStationCount) > 4000)) {
+            message(instance, 'Use Not set (blank) or a whole number from 1 to 4000 for Max Station Count.');
+            return false;
+        }
+        var traversalDepth = String(instance.view.querySelector('.traversalDepthLimit').value || '').trim();
+        if (!/^[0-9]+$/.test(traversalDepth) || Number(traversalDepth) < 3 || Number(traversalDepth) > 50) {
+            message(instance, 'Use a whole number from 3 to 50 for the traversal depth limit.');
+            return false;
+        }
         var localEnabled = instance.view.querySelector('[data-category="EnableLocalRadio"]').checked;
         var browsing = browsingSelected(instance);
         var source = instance.view.querySelector('.localSource').value;
@@ -1157,6 +1183,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         config.ApiRequestIntervalSeconds = Number(requestInterval);
         config.ImportDeadlineHours = Number(importDeadline);
         config.DiscoveryDeadlineHours = Number(discoveryDeadline);
+        config.MaxStationCount = maxStationCount === '' ? null : Number(maxStationCount);
+        config.TraversalDepthLimit = Number(traversalDepth);
         config.EnableCatalogIdentityDiagnostics = instance.view.querySelector('.enableCatalogIdentityDiagnostics').checked;
         config.HideRegionalGenres = instance.view.querySelector('.hideRegionalGenres').checked;
         config.AllowPartialCatalogImport = instance.view.querySelector('.allowPartialCatalogImport').checked;
@@ -1252,6 +1280,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             clearCleanupPreview(instance);
             refreshControls(instance, instance.refreshAvailable);
         });
+        view.querySelector('.cleanupStationReference').addEventListener('input', function () {
+            clearCleanupPreview(instance);
+            refreshControls(instance, instance.refreshAvailable);
+        });
         view.querySelector('.cleanupBackupVerified').addEventListener('change', function () {
             refreshControls(instance, instance.refreshAvailable);
         });
@@ -1330,6 +1362,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 config.ImportDeadlineHours == null ? 24 : config.ImportDeadlineHours;
             view.querySelector('.discoveryDeadlineHours').value =
                 config.DiscoveryDeadlineHours == null ? 3 : config.DiscoveryDeadlineHours;
+            view.querySelector('.maxStationCount').value =
+                config.MaxStationCount === undefined ? 250 : config.MaxStationCount == null ? '' : config.MaxStationCount;
+            view.querySelector('.traversalDepthLimit').value =
+                config.TraversalDepthLimit == null ? 5 : config.TraversalDepthLimit;
             view.querySelector('.enableCatalogIdentityDiagnostics').checked = config.EnableCatalogIdentityDiagnostics === true;
             view.querySelector('.hideRegionalGenres').checked = config.HideRegionalGenres !== false;
             view.querySelector('.allowPartialCatalogImport').checked = config.AllowPartialCatalogImport !== false;

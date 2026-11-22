@@ -48,6 +48,7 @@ namespace MediaBrowser.Plugins.TuneIn
     public sealed class PreviewTuneInCleanup : IReturn<TuneInCleanupPreview>
     {
         public string Category { get; set; }
+        public string StationReference { get; set; }
     }
 
     [Route("/TuneIn/Cleanup/Start", "POST")]
@@ -121,7 +122,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public TuneInCleanupPreview Post(PreviewTuneInCleanup request)
         {
             EnsureAdmin();
-            return refresh.PreviewCleanup(request.Category);
+            return refresh.PreviewCleanup(request.Category, request.StationReference);
         }
 
         public TuneInRefreshStatus Post(StartTuneInCleanup request)

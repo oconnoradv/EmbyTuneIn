@@ -16,6 +16,98 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 {
     public class LibraryCleanupTests
     {
+        [Theory]
+        [InlineData("3")]
+        [InlineData("http://emby.test/web/index.html#!/item?id=3")]
+        [InlineData("00112233-4455-6677-8899-aabbccddeeff")]
+        public async Task StationPreviewRemovesOnlyTheReferencedEntryAndVerifiesAncestors(string reference)
+        {
+            var fixture = new Fixture();
+            fixture.Add(2, 1, fixture.SignedId());
+            fixture.AddStation(3, 2);
+            fixture.AddStation(4, 2);
+            var plan = fixture.Cleanup.PreviewStation(fixture.Directory.Snapshot(), reference);
+            Assert.Equal(3, Assert.Single(plan.Targets).Id);
+            Assert.Single(plan.Ancestors);
+            var counts = (0, 0);
+            await fixture.Cleanup.RunAsync(plan, (removed, failed) => counts = (removed, failed), CancellationToken.None);
+            Assert.Equal((1, 0), counts);
+            Assert.Equal(new long[] { 3 }, fixture.Library.Removed);
+            Assert.True(fixture.Library.Items.ContainsKey(2));
+            Assert.True(fixture.Library.Items.ContainsKey(4));
+        }
+
+        [Fact]
+        public async Task StationPreviewRejectsOtherItemsAndChangedAncestorCannotAuthorizeDeletion()
+        {
+            var fixture = new Fixture();
+            fixture.Add(2, 1, fixture.SignedId());
+            fixture.AddStation(3, 2);
+            Assert.Throws<ArgumentException>(() => fixture.Cleanup.PreviewStation(fixture.Directory.Snapshot(), "s1"));
+            Assert.Throws<InvalidOperationException>(() => fixture.Cleanup.PreviewStation(fixture.Directory.Snapshot(), "2"));
+            Assert.Throws<InvalidOperationException>(() => fixture.Cleanup.PreviewStation(fixture.Directory.Snapshot(), "999"));
+            var plan = fixture.Cleanup.PreviewStation(fixture.Directory.Snapshot(), "3");
+            fixture.Library.Items[2].ExternalId = "unverified";
+            var counts = (0, 0);
+            await fixture.Cleanup.RunAsync(plan, (removed, failed) => counts = (removed, failed), CancellationToken.None);
+            Assert.Equal((0, 1), counts);
+            Assert.Empty(fixture.Library.Removed);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task StationCleanupUpdatesOneRetainedPlacementBeforeDeletionAndRollsBackFailures(bool fail)
+        {
+            var fixture = new Fixture();
+            fixture.Add(2, 1, fixture.SignedId());
+            var stationId = fixture.AddStation(3, 2);
+            var request = new DirectoryRequest();
+            request.Parameters["id"] = "c123";
+            var branchId = fixture.Directory.Register(fixture.Directory.Snapshot(), new NavigationEntry { Category = "talk", Request = request });
+            fixture.Add(5, 2, branchId);
+            fixture.AddStation(4, 5);
+            var rootId = fixture.SignedId();
+            TuneInItemSnapshot Item(string id, string type) => new TuneInItemSnapshot
+            { Id = id, Name = "Radio", Type = type, ContentType = "Song", MediaType = "Audio", ImageUrl = "" };
+            var saved = new TuneInCategorySnapshot { Category = "talk", RootId = rootId, Folders = new List<TuneInFolderSnapshot>
+            {
+                new TuneInFolderSnapshot { Id = rootId, Items = new List<TuneInItemSnapshot> { Item(stationId, "Media"), Item(branchId, "Folder") } },
+                new TuneInFolderSnapshot { Id = branchId, Items = new List<TuneInItemSnapshot> { Item(stationId, "Media") } }
+            } };
+            saved.Fingerprint = TuneInStagedImport.Fingerprint(saved.Folders);
+            var path = Path.Combine(Path.GetTempPath(), "tunein-one-station-" + Guid.NewGuid().ToString("N"));
+            var store = new TuneInRefreshStore(path);
+            store.Write(new TuneInRefreshCheckpoint { ConfigurationKey = fixture.Directory.Snapshot().Key,
+                StartedUtc = DateTime.UtcNow, SavedUtc = DateTime.UtcNow, Categories = new List<TuneInCategorySnapshot> { saved } });
+            var original = File.ReadAllText(path);
+            fixture.Library.BeforeDelete = () =>
+            {
+                var beforeDelete = Assert.Single(store.Read().Categories);
+                Assert.DoesNotContain(beforeDelete.Folders.Single(folder => folder.Id == rootId).Items, item => item.Id == stationId);
+                Assert.Contains(beforeDelete.Folders.Single(folder => folder.Id == branchId).Items, item => item.Id == stationId);
+                if (fail) throw new InvalidOperationException("Synthetic deletion failure.");
+            };
+            using var refresh = new TuneInRefresh(fixture.Directory, store,
+                () => throw new InvalidOperationException(), (_, _, _, _, _) => throw new InvalidOperationException(),
+                (_, _, _, _) => throw new InvalidOperationException(), null, libraryCleanup: fixture.Cleanup);
+            try
+            {
+                var preview = refresh.PreviewCleanup(stationReference: "3");
+                Assert.Equal(1, preview.Stations);
+                Assert.Equal(0, preview.Folders);
+                Assert.Equal("3", preview.StationReference);
+                refresh.StartCleanup(preview.Token);
+                Assert.True(await Task.Run(() => SpinWait.SpinUntil(() => refresh.Status().Cleanup.State != "Running", TimeSpan.FromSeconds(5))));
+                Assert.Equal(fail ? "Partial" : "Completed", refresh.Status().Cleanup.State);
+                if (fail) Assert.Equal(original, File.ReadAllText(path));
+                else Assert.Single(Assert.Single(store.Read().Categories).Folders.SelectMany(folder => folder.Items), item => item.Id == stationId);
+                Assert.Empty(store.Read().CleanedCategories);
+                Assert.True(fixture.Library.Items.ContainsKey(4));
+            }
+            finally { store.Clear(); store.ClearDiscovery(); store.ClearRecovery(); }
+        }
+
         [Fact]
         public async Task FailedSiblingKeepsItsParentEvenWhenOtherSiblingIsRemoved()
         {
@@ -411,6 +503,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Directory.Register(Directory.Snapshot(), new NavigationEntry { Category = category });
             internal void Add(long id, long parent, string externalId) =>
                 Library.Items.Add(id, new Folder { InternalId = id, ParentId = parent, ExternalId = externalId });
+            internal string AddStation(long id, long parent)
+            {
+                var externalId = Directory.Register(Directory.Snapshot(), new NavigationEntry { Category = "talk", StationId = "s1", Name = "Radio" });
+                Library.Items.Add(id, new MediaBrowser.Controller.Entities.Audio.Audio
+                { InternalId = id, ParentId = parent, ExternalId = externalId, Name = "Radio" });
+                return externalId;
+            }
         }
 
         public class LibraryProxy : DispatchProxy
@@ -426,6 +525,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 switch (method.Name)
                 {
                     case nameof(ILibraryManager.GetItemById):
+                        if (args[0] is Guid) return Items.GetValueOrDefault(3);
                         lock (gate) return Items.TryGetValue((long)args[0], out var item) ? item : null;
                     case nameof(ILibraryManager.GetItemList):
                         var query = (InternalItemsQuery)args[0];

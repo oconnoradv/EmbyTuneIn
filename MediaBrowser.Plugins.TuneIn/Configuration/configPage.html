@@ -494,6 +494,16 @@
                     <details class="tuneInAdvancedSettings">
                         <summary>Advanced Settings</summary>
                         <div class="inputContainer">
+                            <label for="tuneInMaxStationCount">Max Station Count:</label>
+                            <input id="tuneInMaxStationCount" type="number" class="maxStationCount" min="1" max="4000" step="1" placeholder="Not set" aria-describedby="tuneInMaxStationCountHint" disabled />
+                            <div class="fieldDescription" id="tuneInMaxStationCountHint">Per top-level category: 1 to 4000 unique TuneIn stations (default: 250). All Music genres share one counter; repeated placements count once. Leave blank for Not set. This limits new discovery, not retained station totals.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label for="tuneInTraversalDepthLimit">Traversal depth limit:</label>
+                            <input id="tuneInTraversalDepthLimit" type="number" class="traversalDepthLimit" min="3" max="50" step="1" required aria-describedby="tuneInTraversalDepthLimitHint" disabled />
+                            <div class="fieldDescription" id="tuneInTraversalDepthLimitHint">TuneIn levels: 3 to 50 (default: 5). The top-level category is level 0; every folder transition, including More Stations, adds one level. Additional depths allow traversing more stations, subject to Max Station Count. Reaching either limit still imports the limited discovery and retains existing entries allowed by saved filters. Retained deeper folders remain available; Emby import depth is not capped.</div>
+                        </div>
+                        <div class="inputContainer">
                             <div class="tuneInApiIntervalRow">
                                 <label for="tuneInApiInterval">API request interval (seconds):</label>
                                 <input id="tuneInApiInterval" type="number" class="apiRequestIntervalSeconds" min="1" max="30" step="1" aria-describedby="tuneInApiIntervalHint" required disabled />
@@ -600,10 +610,11 @@
                 <h3>Clean Up Library Folders</h3>
                 <p><strong>Cleanup cannot be undone.</strong> Back up Emby and wait for a successful backup before removing any entries.</p>
                 <p>Cleanup removes generated folders and station entries from the Emby TuneIn channel; it does not remove the channel itself, settings, or media files. Playlists and other references may break.</p>
-                <p>For one category, compatible saved snapshots of other categories are retained. Refresh can recreate an enabled category; rebuilding it requires complete discovery and may reconcile other categories from their saved snapshots. If multiple categories were cleaned, or no compatible baseline exists, Refresh all enabled categories may be required. Disable a category if it should stay absent.</p>
+                <p>For one category, compatible saved snapshots of other categories are retained. Refresh can recreate an enabled category; rebuilding it requires fresh discovery (configured limits apply) and may reconcile other categories from their saved snapshots. If multiple categories were cleaned, or no compatible baseline exists, Refresh all enabled categories may be required. Disable a category if it should stay absent.</p>
                 <label for="tuneInCleanupScope">Folders to remove</label>
                 <select is="emby-select" id="tuneInCleanupScope" class="cleanupScope">
                     <option value="">Choose a category</option>
+                    <option value="station">One station entry</option>
                     <option value="all">All categories</option>
                     <option value="local">Local Radio</option>
                     <option value="music">Music</option>
@@ -614,6 +625,11 @@
                     <option value="podcast">Podcasts</option>
                     <option value="presets">My Favorites</option>
                 </select>
+                <div class="cleanupStationFields inputContainer" hidden>
+                    <label for="tuneInCleanupStationReference">Emby station reference:</label>
+                    <input is="emby-input" id="tuneInCleanupStationReference" class="cleanupStationReference" type="text" maxlength="2048" aria-describedby="tuneInCleanupStationHint" disabled />
+                    <div class="fieldDescription" id="tuneInCleanupStationHint">Paste the station's Emby details URL or numeric/GUID item ID. Preview verifies that it belongs to TuneIn. Only this entry and its retained snapshot placement are removed; other placements stay. No exclusion is saved, so future discovery may add it again.</div>
+                </div>
                 <div class="tuneInCleanupActions">
                     <button is="emby-button" type="button" class="raised button-submit backupStart" disabled>Backup Emby</button>
                     <button is="emby-button" type="button" class="raised button-submit cleanupPreview" disabled>Preview cleanup</button>

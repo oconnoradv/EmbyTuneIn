@@ -47,7 +47,8 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     const form = { addEventListener: (event, handler) => { formHandlers[event] = handler; } };
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon,
         '.apiRequestIntervalSeconds': requestInterval, '.importDeadlineHours': new Element('input'),
-        '.discoveryDeadlineHours': new Element('input') };
+        '.discoveryDeadlineHours': new Element('input'), '.maxStationCount': new Element('input'),
+        '.traversalDepthLimit': new Element('input') };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.stationDeletionNotice',
@@ -58,7 +59,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.settingsLockState', '.settingsLockStatus', '.refreshQueueNote', '.tuneInRefreshRecoveryDialog', '.refreshRecoveryText',
         '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
         '.cleanupConfirm', '.cleanupCancel', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.cleanupScope', '.backupStart',
-        '.backupStatus', '.cleanupBackupVerified', '#tuneInReportHint']) elements[name] = new Element();
+        '.backupStatus', '.cleanupBackupVerified', '.cleanupStationReference', '.cleanupStationFields', '#tuneInReportHint']) elements[name] = new Element();
     for (const [section, summary, open] of [
         ['.globalSection', '.globalSummary', true],
         ['.categoriesSection', '.categoriesSummary', true],
@@ -480,6 +481,98 @@ test('API request interval validates and saves the shared catalog pacing setting
         await settle();
     }
     assert.equal(app.writes.length, 2);
+});
+
+test('discovery controls distinguish legacy defaults from Not set and preserve saved limits', async () => {
+    for (const [config, maximum, depth] of [[{}, 250, 5], [{ MaxStationCount: null }, '', 5],
+        [{ MaxStationCount: 4000, TraversalDepthLimit: 50 }, 4000, 50]]) {
+        const app = harness();
+        const visit = app.instance.onResume();
+        app.reads[0].resolve(config);
+        await visit;
+        assert.equal(app.elements['.maxStationCount'].value, maximum);
+        assert.equal(app.elements['.traversalDepthLimit'].value, depth);
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes[0].config.MaxStationCount, maximum === '' ? null : maximum);
+        assert.equal(app.writes[0].config.TraversalDepthLimit, depth);
+        await settle();
+        assert.equal(app.elements['.maxStationCount'].disabled, true);
+        assert.equal(app.elements['.traversalDepthLimit'].disabled, true);
+    }
+});
+
+test('discovery controls reject invalid values and save inclusive boundaries and blank', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    const cap = app.elements['.maxStationCount'];
+    const depth = app.elements['.traversalDepthLimit'];
+    for (const value of ['0', '4001', '1.5', 'abc']) {
+        cap.value = value;
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes.length, 0);
+        assert.match(app.elements['.status'].textContent, /1 to 4000/);
+    }
+    cap.value = '';
+    for (const value of ['', '2', '51', '3.5']) {
+        depth.value = value;
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes.length, 0);
+        assert.match(app.elements['.status'].textContent, /3 to 50/);
+    }
+    for (const [maximum, limit] of [['', 3], ['1', 50], ['4000', 5]]) {
+        const toggle = app.elements['.settingsLocked'];
+        if (toggle.checked) { toggle.checked = false; await toggle.handlers.change(); }
+        cap.value = maximum;
+        depth.value = String(limit);
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes.at(-1).config.MaxStationCount, maximum === '' ? null : Number(maximum));
+        assert.equal(app.writes.at(-1).config.TraversalDepthLimit, limit);
+        await settle();
+    }
+});
+
+test('station maintenance previews an exact reference and editing it invalidates confirmation', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true });
+    app.refresh[0].resolve({ SettingsLocked: false, Categories: [{ Category: 'talk', Name: 'Talk' }] });
+    await visit;
+    await settle();
+    await open(app.elements['.maintenanceSection']);
+    app.elements['.cleanupScope'].value = 'station';
+    app.elements['.cleanupScope'].handlers.change();
+    assert.equal(app.elements['.cleanupStationFields'].hidden, false);
+    assert.equal(app.elements['.cleanupPreview'].disabled, true);
+    const reference = app.elements['.cleanupStationReference'];
+    reference.value = 'http://emby.test/web/index.html#!/item?id=3';
+    reference.handlers.input();
+    const preview = app.elements['.cleanupPreview'].handlers.click();
+    assert.deepEqual(JSON.parse(app.cleanup[0].options.data), { StationReference: reference.value });
+    app.cleanup[0].resolve({ Token: 'station-token', Scope: 'Talk', Folders: 0, Stations: 1,
+        StationName: '<img src=x>', StationReference: '3' });
+    await preview;
+    assert.match(app.elements['.cleanupPreviewText'].textContent, /Remove only "<img src=x>" \(Emby item 3\)/);
+    assert.equal(app.elements['.cleanupPreviewText'].childNodes.length, 0);
+    assert.equal(app.elements['.cleanupConfirm'].textContent, 'Confirm delete station');
+    reference.value = '4';
+    reference.handlers.input();
+    assert.equal(app.instance.cleanupPreview, null);
+    assert.equal(app.elements['.cleanupConfirmation'].hidden, true);
+    assert.equal(app.elements['.cleanupConfirm'].disabled, true);
+});
+
+test('limited discovery is not displayed as confirmed full success', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true });
+    app.refresh[0].resolve({ State: 'Limited', SettingsLocked: false,
+        Categories: [{ Category: 'talk', Name: 'Talk', State: 'Limited (imported)' }] });
+    await visit;
+    await settle();
+    assert.equal(app.elements['.tuneInRefresh'].attributes['data-outcome'], 'Partial');
+    assert.match(app.elements['.refreshOverall'].textContent, /limited discovery/);
 });
 
 for (const setting of ['Import', 'Discovery']) {

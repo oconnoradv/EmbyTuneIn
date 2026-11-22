@@ -23,6 +23,149 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 {
     public sealed class ScopedRefreshTests
     {
+        [Fact]
+        public async Task ChangingSelectedGenresRetainsOnlyAllowedEntriesAndKeepsMissingStations()
+        {
+            var config = new PluginConfiguration
+            { SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true, MusicMode = "selected" };
+            config.Music.Add(new CatalogSelection { Id = "g71", Enabled = true });
+            config.Music.Add(new CatalogSelection { Id = "g79", Enabled = true });
+            var secondRun = false;
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                var genre = request.Parameters["id"];
+                var rows = secondRun && genre == "g79" ? ""
+                    : "<outline type='audio' guide_id='" + (genre == "g71" ? "s1" : genre == "g79" ? "s2" : "s3") + "' text='Radio'/>";
+                return Task.FromResult(XDocument.Parse("<opml><body>" + rows + "</body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), "tunein-retained-filters-" + Guid.NewGuid().ToString("N"));
+            var store = new TuneInRefreshStore(path);
+            using var refresh = new TuneInRefresh(directory, store, () => channel,
+                (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                (_, staged, _, token) => { ReadStagedTree(staged, token); return Task.CompletedTask; }, null);
+            try
+            {
+                refresh.Start("music");
+                await WaitUntilIdle(refresh);
+                refresh.UpdateConfiguration(() =>
+                {
+                    config.Music.RemoveAll(selection => selection.Id == "g71");
+                    config.Music.Add(new CatalogSelection { Id = "g133", Enabled = true });
+                });
+                var snapshot = directory.Snapshot();
+                var remaining = store.Read().Categories.Single().Folders.SelectMany(folder => folder.Items)
+                    .Where(item => item.Type == "Media").Select(item => directory.Resolve(snapshot, item.Id).StationId);
+                Assert.Equal(new[] { "s2" }, remaining);
+                secondRun = true;
+                refresh.Start("music");
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Equal(new[] { "s2", "s3" }, store.Read().Categories.Single().Folders.SelectMany(folder => folder.Items)
+                    .Where(item => item.Type == "Media").Select(item => directory.Resolve(snapshot, item.Id).StationId).OrderBy(id => id));
+            }
+            finally { store.Clear(); store.ClearDiscovery(); store.ClearRecovery(); }
+        }
+
+        [Fact]
+        public void LibraryInventoryRetainsUncachedStationsButRejectsUnverifiedDescendants()
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var directory = new TuneInDirectory(() => config, (_, _) => throw new InvalidOperationException());
+            var snapshot = directory.Snapshot();
+            var library = new Mock<ILibraryManager>();
+            var channel = new TuneInChannel(directory, library: library.Object);
+            var root = channel.GetCategoryRoot(snapshot, "talk");
+            var stationId = directory.Register(snapshot, new NavigationEntry { Category = "talk", StationId = "s1", Name = "Uncached" });
+            var station = new MediaBrowser.Controller.Entities.Audio.Audio { InternalId = 3, ParentId = 2, ExternalId = stationId, Name = "Uncached" };
+            library.Setup(api => api.GetItemList(It.IsAny<InternalItemsQuery>(), It.IsAny<CancellationToken>()))
+                .Returns((InternalItemsQuery query, CancellationToken _) => query.IncludeItemTypes?.Contains(nameof(Channel)) == true
+                    ? new BaseItem[] { new Channel { InternalId = 1, Name = "TuneIn" } }
+                    : query.Recursive ? new BaseItem[] { station }
+                    : new BaseItem[] { new Folder { InternalId = 2, ParentId = 1, ExternalId = root.Id } });
+            var retained = channel.ReadCategorySnapshot(snapshot, "talk", CancellationToken.None);
+            Assert.Equal(stationId, Assert.Single(Assert.Single(retained.Folders).Items).Id);
+            station.ExternalId = "unverified";
+            Assert.Throws<InvalidOperationException>(() => channel.ReadCategorySnapshot(snapshot, "talk", CancellationToken.None));
+        }
+
+        [Theory]
+        [InlineData(2, 2, 3)]
+        [InlineData(null, 3, 4)]
+        public async Task DiscoveryCountsDistinctStationsAcrossMusicGenres(int? cap, int unique, int placements)
+        {
+            var directory = new TuneInDirectory(() => new PluginConfiguration(), (_, _) => throw new InvalidOperationException());
+            var channel = new TuneInChannel(directory);
+            var root = new ChannelItemInfo { Id = "root", Name = "Music", Type = ChannelItemType.Folder };
+            ChannelItemInfo Item(string id, ChannelItemType type) => new ChannelItemInfo { Id = id, Name = id, Type = type };
+            var graph = new Dictionary<string, ChannelItemResult>
+            {
+                ["root"] = new ChannelItemResult { Items = new List<ChannelItemInfo>
+                    { Item("genre-a", ChannelItemType.Folder), Item("genre-b", ChannelItemType.Folder) } },
+                ["genre-a"] = new ChannelItemResult { Items = new List<ChannelItemInfo>
+                    { Item("s1:a", ChannelItemType.Media), Item("s2:a", ChannelItemType.Media) } },
+                ["genre-b"] = new ChannelItemResult { Items = new List<ChannelItemInfo>
+                    { Item("s1:b", ChannelItemType.Media), Item("s3:b", ChannelItemType.Media) } }
+            };
+            var staged = await TuneInStagedImport.DiscoverAsync(channel, root,
+                new TuneInCatalogueSession(null, TimeSpan.FromMinutes(1), () => DateTime.UtcNow), CancellationToken.None,
+                (id, _, _, _) => Task.FromResult(graph[id]), null, null, (_, _) => false,
+                maxStationCount: cap, stationId: id => id.Split(':')[0]);
+            Assert.Equal(unique, staged.CountStations(id => id.Split(':')[0]));
+            var snapshot = staged.CreateSnapshot("music");
+            Assert.Equal(placements, snapshot.Folders.Sum(folder => folder.Items.Count(item => item.Type == "Media")));
+            Assert.Equal(cap.HasValue, snapshot.DiscoveryLimitReason != null);
+            var import = TuneInStagedImport.ForChannel(new[] { root }, new[] { snapshot }, CancellationToken.None, null, null);
+            ReadStagedTree(import, CancellationToken.None);
+            import.Verify();
+        }
+
+        [Fact]
+        public async Task RetentionKeepsMissingStationsAndDeepFoldersAndUpdatesMetadataWithoutMovingIds()
+        {
+            var directory = new TuneInDirectory(() => new PluginConfiguration(), (_, _) => throw new InvalidOperationException());
+            var channel = new TuneInChannel(directory);
+            var root = new ChannelItemInfo { Id = "root", Name = "Music", Type = ChannelItemType.Folder };
+            var old = new TuneInCategorySnapshot { Category = "music", RootId = "root" };
+            old.Folders.Add(new TuneInFolderSnapshot { Id = "root", Items = new List<TuneInItemSnapshot>
+            {
+                new TuneInItemSnapshot { Id = "s1:old", Name = "Old", Type = "Media", ContentType = "Song", MediaType = "Audio", ImageUrl = "https://old.test/image.png" },
+                new TuneInItemSnapshot { Id = "deep-1", Name = "More Stations", Type = "Folder", ContentType = "Song", MediaType = "Audio" }
+            } });
+            for (var depth = 1; depth <= 7; depth++)
+                old.Folders.Add(new TuneInFolderSnapshot { Id = "deep-" + depth, Items = new List<TuneInItemSnapshot>
+                { new TuneInItemSnapshot { Id = depth == 7 ? "s2:old" : "deep-" + (depth + 1), Name = "Retained",
+                    Type = depth == 7 ? "Media" : "Folder", ContentType = "Song", MediaType = "Audio" } } });
+
+            var staged = await TuneInStagedImport.DiscoverAsync(channel, root,
+                new TuneInCatalogueSession(null, TimeSpan.FromMinutes(1), () => DateTime.UtcNow), CancellationToken.None,
+                (id, _, _, _) => Task.FromResult(new ChannelItemResult { Items = id == "root"
+                    ? new List<ChannelItemInfo> { new ChannelItemInfo { Id = "page-new", Name = "More Stations", Type = ChannelItemType.Folder } }
+                    : new List<ChannelItemInfo>
+                    { new ChannelItemInfo { Id = "s1:new", Name = "Updated", Type = ChannelItemType.Media,
+                        ImageUrl = "https://new.test/image.png" },
+                      new ChannelItemInfo { Id = "s3:new", Name = "New", Type = ChannelItemType.Media } } }),
+                null, null, (_, _) => false, maxStationCount: 1, traversalDepthLimit: 3,
+                stationId: id => id.Split(':')[0]);
+            var merged = staged.MergeRetainedCategory("music", old, id => id.Split(':')[0], false);
+            var updated = merged.Folders.Single(folder => folder.Id == "root").Items.Single(item => item.Type == "Media");
+            Assert.Equal("s1:old", updated.Id);
+            Assert.Equal("Updated", updated.Name);
+            Assert.True(updated.ForceUpdate);
+            Assert.Equal("https://new.test/image.png", updated.ImageUrl);
+            Assert.Contains(merged.Folders.SelectMany(folder => folder.Items), item => item.Id == "s2:old");
+            Assert.DoesNotContain(merged.Folders.SelectMany(folder => folder.Items), item => item.Id == "s3:new");
+            Assert.DoesNotContain(merged.Folders, folder => folder.Id == "page-new");
+            var serializer = new System.Xml.Serialization.XmlSerializer(typeof(TuneInCategorySnapshot));
+            using var xml = new StringWriter();
+            serializer.Serialize(xml, merged);
+            var recovered = (TuneInCategorySnapshot)serializer.Deserialize(new StringReader(xml.ToString()));
+            var import = TuneInStagedImport.ForChannel(new[] { root }, new[] { recovered }, CancellationToken.None, null, null);
+            Assert.True(import.ImportRefreshLevel >= 9);
+            Assert.Equal(2, ReadStagedTree(import, CancellationToken.None)["Music"].Length);
+            Assert.True(import.Read("root", CancellationToken.None).Items.Single(item => item.Type == ChannelItemType.Media).ForceUpdate);
+            import.Verify();
+        }
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
@@ -1242,7 +1385,6 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public async Task MalformedMusicLinkImportsValidResultsAndRetainsSavedBranchesWhenAvailable(string baseline)
         {
             var withBaseline = baseline != "no baseline";
-            var retainsSavedBranch = baseline == "saved parent";
             var config = new PluginConfiguration
             {
                 SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true, EnableTalk = true,
@@ -1274,6 +1416,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var imports = 0;
             var artworkUpdates = 0;
             Dictionary<string, string[]> imported = null;
+            Dictionary<string, string[]> importedNames = null;
             try
             {
                 using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
@@ -1282,6 +1425,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     {
                         imports++;
                         imported = ReadStagedTree(staged, token);
+                        importedNames = ReadStagedTree(staged, token, names: true);
                         return Task.CompletedTask;
                     }, null, updateArtwork: (_, __, ___) => artworkUpdates++);
                 if (withBaseline)
@@ -1319,8 +1463,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal(withBaseline ? 2 : 1, imports);
                 Assert.True(artworkUpdates > 0);
 
-                var after = imported["Music"].Select(id => directory.Resolve(directory.Snapshot(), id).Name).ToArray();
-                Assert.Equal(retainsSavedBranch ? new[] { "Changed", "Retained" } : new[] { "Changed" },
+                var after = importedNames["Music"];
+                Assert.Equal(withBaseline ? new[] { "Changed", "Changed" } : new[] { "Changed" },
                     after.OrderBy(name => name));
                 if (withBaseline)
                 {
@@ -1346,13 +1490,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal(new[] { "talk" }, requests);
                 Assert.Equal(previousImports + (withBaseline ? 1 : 0), imports);
                 Assert.Equal(savedPartialMusic, imported["Music"]);
-                if (withBaseline) Assert.NotEqual(Assert.Single(savedTalk), Assert.Single(imported["Talk"]));
+                if (withBaseline) Assert.Equal(Assert.Single(savedTalk), Assert.Single(imported["Talk"]));
 
                 healed = true;
                 refresh.Start("music");
                 await WaitUntilIdle(refresh);
                 Assert.Equal("Completed", refresh.Status().State);
-                Assert.Equal("Changed", directory.Resolve(directory.Snapshot(), Assert.Single(imported["Music"])).Name);
+                Assert.All(importedNames["Music"], name => Assert.Equal("Changed", name));
                 Assert.False(new TuneInRefreshStore(path).Read().Categories.Single(category => category.Category == "music").DiscoveryPartial);
             }
             finally { File.Delete(path); }
@@ -1406,8 +1550,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
                     (_, staged, __, token) =>
                     {
-                        imports.Add(ReadStagedTree(staged, token)[TuneInBrowsing.CategoryName(category)]
-                            .Select(item => directory.Resolve(directory.Snapshot(), item).Name)
+                        imports.Add(ReadStagedTree(staged, token, names: true)[TuneInBrowsing.CategoryName(category)]
                             .OrderBy(name => name, StringComparer.Ordinal).ToArray());
                         return Task.CompletedTask;
                     }, null);
@@ -2217,7 +2360,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [Fact]
         public async Task DiscoveryCheckpointsAfterThreeThousandStationRowsWithoutWaitingFiveMinutes()
         {
-            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, MaxStationCount = null };
             var now = DateTime.UtcNow;
             var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2561,15 +2704,18 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData(true, true)]
-        [InlineData(false, true)]
-        [InlineData(true, false)]
-        public async Task ForwardPagesDoNotConsumeTheFolderDepthBudget(bool music, bool paginate)
+        [InlineData(true, true, 5)]
+        [InlineData(false, true, 5)]
+        [InlineData(true, false, 5)]
+        [InlineData(true, true, 50)]
+        [InlineData(false, true, 50)]
+        public async Task FolderAndPaginationTransitionsConsumeConfiguredDepthAndLimitedResultsImport(bool music, bool paginate, int depth)
         {
             var category = music ? "music" : "talk";
             var config = new PluginConfiguration
             {
-                SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = music, EnableTalk = !music
+                SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = music, EnableTalk = !music,
+                TraversalDepthLimit = depth
             };
             const string genre = "g71";
             const string canonical = "c100002515";
@@ -2598,25 +2744,19 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
                     (_, staged, __, token) =>
                     {
-                        // A host honoring RC1's former fixed level cannot reach the last page.
-                        Assert.Empty(ReadStagedTree(staged, token, 9)[TuneInBrowsing.CategoryName(category)]);
-                        var incomplete = Assert.Throws<InvalidOperationException>(staged.Verify);
-                        Assert.Contains("Folders served:", incomplete.Message);
-                        Assert.Single(ReadStagedTree(staged, token, staged.ImportRefreshLevel)[TuneInBrowsing.CategoryName(category)]);
+                        var stations = ReadStagedTree(staged, token, staged.ImportRefreshLevel)[TuneInBrowsing.CategoryName(category)];
+                        if (depth == 5) Assert.Empty(stations);
+                        else Assert.Single(stations);
                         staged.Verify();
                         imports++;
                         return Task.CompletedTask;
                     }, null);
                 refresh.Start(category);
                 await WaitUntilIdle(refresh);
-                Assert.Equal(paginate ? "Completed" : "Error", refresh.Status().State);
-                Assert.Equal(paginate ? 1 : 0, imports);
-                if (paginate) Assert.Equal(12, fetches);
-                else
-                {
-                    Assert.Contains("folder depth limit", refresh.GetFailureLog().Text);
-                    Assert.False(File.Exists(path));
-                }
+                Assert.Equal(depth == 5 ? "Limited" : "Completed", refresh.Status().State);
+                Assert.Equal(1, imports);
+                Assert.Equal(depth == 5 ? music ? 5 : 6 : 12, fetches);
+                if (depth == 5) Assert.Contains("depth limit 5", new TuneInRefreshStore(path).Read().Categories.Single().DiscoveryLimitReason);
             }
             finally { File.Delete(path); }
         }
@@ -2657,8 +2797,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
                     (_, staged, __, token) =>
                     {
-                        imports.Add(ReadStagedTree(staged, token)[TuneInBrowsing.CategoryName(category)]
-                            .Select(id => directory.Resolve(directory.Snapshot(), id).Name)
+                        imports.Add(ReadStagedTree(staged, token, names: true)[TuneInBrowsing.CategoryName(category)]
                             .OrderBy(name => name, StringComparer.Ordinal).ToArray());
                         return Task.CompletedTask;
                     }, null);
@@ -2688,6 +2827,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     imports.Last());
                 var partialCheckpoint = store.Read();
                 Assert.True(Assert.Single(partialCheckpoint.Categories).DiscoveryPartial);
+                Assert.All(partialCheckpoint.Categories.SelectMany(saved => saved.Folders).SelectMany(folder => folder.Items),
+                    item => Assert.False(item.ForceUpdate));
                 Assert.Null(partialCheckpoint.DirtyCategory);
                 var checkpointBeforeFailure = File.ReadAllText(path);
 
@@ -3181,7 +3322,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     Assert.Equal(new[] { "talk", "sports", "sports" }, fetched);
                     Assert.Equal(2, imported.Count);
                     Assert.Equal(originalTalkItems, imported[1]["Talk"]);
-                    Assert.NotEqual(imported[0]["Sports"].Single(), imported[1]["Sports"].Single());
+                    Assert.Contains(imported[0]["Sports"].Single(), imported[1]["Sports"]);
+                    Assert.Equal(2, imported[1]["Sports"].Length);
                     Assert.Equal(talkCheckpoint.Fingerprint, store.Read().Categories.Single(category => category.Category == "talk").Fingerprint);
 
                     refresh.Start("sports");
@@ -3777,7 +3919,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal(new[] { "presets" }, requests);
                 Assert.Equal(2, imports.Count);
                 Assert.Equal(Assert.Single(baseline["Music"]), Assert.Single(imports[1]["Music"]));
-                Assert.NotEqual(Assert.Single(baseline["My Favorites"]), Assert.Single(imports[1]["My Favorites"]));
+                Assert.Contains(Assert.Single(baseline["My Favorites"]), imports[1]["My Favorites"]);
+                Assert.Equal(2, imports[1]["My Favorites"].Length);
             }
             finally { File.Delete(path); }
         }
@@ -4040,11 +4183,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         private static Dictionary<string, string[]> ReadStagedTree(TuneInStagedImport staged, CancellationToken token,
-            int maxRefreshLevel = int.MaxValue)
+            int maxRefreshLevel = int.MaxValue, bool names = false)
         {
             string[] ReadDescendants(string id, int level) => level > maxRefreshLevel ? Array.Empty<string>()
                 : staged.Read(id, token).Items.SelectMany(item => item.Type == ChannelItemType.Folder
-                    ? ReadDescendants(item.Id, level + 1) : new[] { item.Id }).ToArray();
+                    ? ReadDescendants(item.Id, level + 1) : new[] { names ? item.Name : item.Id }).ToArray();
             return staged.Read(null, token).Items.ToDictionary(root => root.Name, root => ReadDescendants(root.Id, 2));
         }
     }

@@ -3,6 +3,7 @@ using MediaBrowser.Model.Channels;
 using MediaBrowser.Model.Logging;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -427,14 +428,17 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
-        internal TuneInCleanupPreview PreviewCleanup(string category = null)
+        internal TuneInCleanupPreview PreviewCleanup(string category = null, string stationReference = null)
         {
             lock (gate)
             {
                 EnsureCleanupAvailable();
                 cleanupPlan = null;
                 if (category == "all") category = null;
-                var plan = libraryCleanup.Preview(directory.Snapshot(), category);
+                if (stationReference != null && category != null)
+                    throw new ArgumentException("Choose either category cleanup or a station reference, not both.");
+                var plan = stationReference == null ? libraryCleanup.Preview(directory.Snapshot(), category)
+                    : libraryCleanup.PreviewStation(directory.Snapshot(), stationReference);
                 if (plan.Targets.Length == 0)
                     return new TuneInCleanupPreview { Message = "No verified generated entries were found in the selected cleanup scope." };
                 cleanupPlan = plan;
@@ -444,7 +448,10 @@ namespace MediaBrowser.Plugins.TuneIn
                 return new TuneInCleanupPreview
                 {
                     Token = cleanupToken,
-                    Scope = category == null ? "All categories" : TuneInBrowsing.CategoryName(category),
+                    Scope = plan.SingleStation ? TuneInBrowsing.CategoryName(plan.Category)
+                        : category == null ? "All categories" : TuneInBrowsing.CategoryName(category),
+                    StationName = plan.StationName,
+                    StationReference = plan.SingleStation ? plan.Targets[0].Id.ToString(CultureInfo.InvariantCulture) : null,
                     Folders = folders,
                     Stations = plan.Targets.Length - folders,
                     Message = plan.Unverified == 0 ? null : $"{plan.Unverified} unverified entries will be left alone."
@@ -489,6 +496,7 @@ namespace MediaBrowser.Plugins.TuneIn
             var stopped = false;
             var cancelled = false;
             var baselinePreserved = false;
+            TuneInRefreshCheckpoint stationRollback = null;
             try
             {
                 lock (gate) { recentPages.Clear(); recentPagesKey = null; recentPagesCategory = null; }
@@ -499,7 +507,32 @@ namespace MediaBrowser.Plugins.TuneIn
                 var preserve = checkpoint != null && checkpoint.ConfigurationKey == snapshot.Key;
                 if (preserve)
                 {
-                    if (snapshot.Enabled(plan.Category) && !checkpoint.CleanedCategories.Contains(plan.Category))
+                    if (plan.SingleStation)
+                    {
+                        stationRollback = store.Read() ?? throw new InvalidOperationException("The retained snapshot changed during station cleanup.");
+                        var parentId = directory.RebindOwned(snapshot, plan.Ancestors[0].ExternalId);
+                        var stationId = directory.RebindOwned(snapshot, plan.Targets[0].ExternalId);
+                        var saved = checkpoint.Categories.SingleOrDefault(category => category.Category == plan.Category);
+                        if (saved != null && parentId != null && stationId != null)
+                        {
+                            var parentKey = directory.MembershipKey(snapshot, parentId);
+                            var stationKey = directory.MembershipKey(snapshot, stationId);
+                            var parents = saved.Folders.Where(folder => folder.Id == parentId).ToArray();
+                            if (parents.Length == 0) parents = saved.Folders.Where(folder =>
+                                directory.MembershipKey(snapshot, folder.Id) == parentKey).ToArray();
+                            if (parents.Length > 1) throw new InvalidOperationException("The retained station parent is ambiguous.");
+                            if (parents.Length == 1)
+                            {
+                                var index = parents[0].Items.FindIndex(item => item.Id == stationId);
+                                if (index < 0) index = parents[0].Items.FindIndex(item =>
+                                    directory.MembershipKey(snapshot, item.Id) == stationKey);
+                                if (index >= 0) parents[0].Items.RemoveAt(index);
+                            }
+                            saved.Fingerprint = TuneInStagedImport.Fingerprint(saved.Folders);
+                            saved.StationCounts = null;
+                        }
+                    }
+                    if (!plan.SingleStation && snapshot.Enabled(plan.Category) && !checkpoint.CleanedCategories.Contains(plan.Category))
                         checkpoint.CleanedCategories.Add(plan.Category);
                     store.Write(checkpoint);
                     baselinePreserved = true;
@@ -536,6 +569,15 @@ namespace MediaBrowser.Plugins.TuneIn
             }
             finally
             {
+                if (stationRollback != null && cleanup.Removed == 0)
+                {
+                    try { store.Write(stationRollback); }
+                    catch (Exception error)
+                    {
+                        stopped = true;
+                        logger?.Error("TuneIn station cleanup could not restore the retained snapshot ({0}).", error.GetType().Name);
+                    }
+                }
                 lock (gate)
                 {
                     cleanup.Cancelling = false;
@@ -548,6 +590,12 @@ namespace MediaBrowser.Plugins.TuneIn
                         : plan.Category == null ? "Run Refresh all enabled categories to rebuild the catalog."
                         : baselinePreserved ? "Other category snapshots were retained. A refresh can recreate enabled categories."
                         : "No compatible baseline was retained. Run Refresh all enabled categories to rebuild the catalog.";
+                    if (plan.SingleStation)
+                        cleanup.Message = stopped ? (cleanup.Removed == 1
+                            ? "Station entry removed, but the retained snapshot could not be updated. Review the server log."
+                            : "Station removal stopped. Review the server log.")
+                            : cleanup.Removed == 1 ? "Only the referenced station entry was removed. Future discovery may add it again; no exclusion was saved."
+                            : "Station entry was not removed; its retained snapshot is unchanged.";
                 }
             }
         }
@@ -598,11 +646,14 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (checkpoint?.ConfigurationKey == previous.Key)
                 {
                     var retained = checkpoint.Categories.Where(category => current.Enabled(category.Category)
-                        && previous.CategoryScopeKey(category.Category) == current.CategoryScopeKey(category.Category)).ToList();
+                        && (category.Category != "presets" || previous.Value.Username == current.Value.Username)
+                        && (category.Category != "local" || previous.LocalSource != "coordinates"
+                            && current.LocalSource != "coordinates"
+                            || previous.CategoryScopeKey("local") == current.CategoryScopeKey("local"))).ToList();
                     foreach (var category in retained)
                     {
-                        // IDs include the whole configuration key; authenticate and re-sign unchanged scopes only.
-                        var sign = directory.CategoryRebinder(previous, current, category.Category);
+                        // Authenticate old entries, filter removed scopes, and re-sign the retained memberships.
+                        var sign = directory.CategoryRebinder(previous, current, category.Category, filterSelections: true);
                         var rebound = new Dictionary<string, string>(StringComparer.Ordinal);
                         string Rebind(string id)
                         {
@@ -611,9 +662,11 @@ namespace MediaBrowser.Plugins.TuneIn
                             return updated;
                         }
                         category.RootId = Rebind(category.RootId);
+                        category.Folders = category.Folders.Where(folder => Rebind(folder.Id) != null).ToList();
                         foreach (var folder in category.Folders)
                         {
                             folder.Id = Rebind(folder.Id);
+                            folder.Items = folder.Items.Where(item => Rebind(item.Id) != null).ToList();
                             foreach (var item in folder.Items) item.Id = Rebind(item.Id);
                         }
                         category.Fingerprint = TuneInStagedImport.Fingerprint(category.Folders);
@@ -698,7 +751,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 dirtyCategory = checkpoint.DirtyCategory;
                 foreach (var category in checkpoint.Categories)
                 {
-                    categoryStates[category.Category] = category.DiscoveryPartial ? "Partial (applied)" : "Imported";
+                    categoryStates[category.Category] = category.DiscoveryPartial ? "Partial (applied)"
+                        : category.DiscoveryLimitReason != null ? "Limited (imported)" : "Imported";
                     if (category.StationCounts != null)
                         categoryCounts[category.Category] = category.StationCounts.Copy();
                 }
@@ -951,6 +1005,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         throw new InvalidOperationException("Cannot widen an interrupted scoped TuneIn import. "
                             + "Complete the interrupted category or explicitly refresh all enabled categories.");
                     var partial = replay?.Partial ?? new HashSet<string>(StringComparer.Ordinal);
+                    var limited = new HashSet<string>(StringComparer.Ordinal);
                     var didImport = true;
                     var progressivelyApplied = new HashSet<string>(StringComparer.Ordinal);
                     if (replay != null)
@@ -1062,13 +1117,22 @@ namespace MediaBrowser.Plugins.TuneIn
                                     Update(() => status.LastProgressUtc = clock());
                                     if (SaveDiscovery(linked.Token, stations - checkpointStations >= 3000))
                                         checkpointStations = stations;
-                                }).ConfigureAwait(false);
+                                }, snapshot.Value.MaxStationCount, snapshot.Value.TraversalDepthLimit,
+                                id => directory.Resolve(snapshot, id).StationId).ConfigureAwait(false);
                             directory.CheckCurrent(snapshot, linked.Token);
                             lock (gate)
                                 if (status.RequestsCompleted + status.CacheHits == requestsBefore)
                                     throw new InvalidOperationException("TuneIn category discovery returned no successful provider fetch.");
 
                             listings.TryGetValue(category, out var previous);
+                            if (checkpoint.CleanedCategories.Contains(category)) previous = null;
+                            else previous = channel.ReadCategorySnapshot(snapshot, category, linked.Token, previous) ?? previous;
+                            if (staged.DiscoveryLimitReason != null)
+                            {
+                                limited.Add(category);
+                                logger?.Warn("TuneIn discovery for {0}: {1}. Retaining existing in-scope entries.",
+                                    category, staged.DiscoveryLimitReason);
+                            }
                             var availableStations = staged.CountStations(id =>
                             {
                                 linked.Token.ThrowIfCancellationRequested();
@@ -1078,7 +1142,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             {
                                 var counts = categoryCounts[category];
                                 counts.AvailableStations = availableStations;
-                                counts.AvailablePartial = staged.DiscoveryIncomplete;
+                                counts.AvailablePartial = staged.DiscoveryIncomplete || staged.DiscoveryLimitReason != null;
                                 counts.AvailableCheckedUtc = clock();
                             });
                             var allowExclusions = snapshot.Value.AllowPartialCatalogImport;
@@ -1096,11 +1160,9 @@ namespace MediaBrowser.Plugins.TuneIn
                                 if (checkpoint.DirtyCategory == category) break;
                                 continue;
                             }
-                            var categorySnapshot = staged.DiscoveryIncomplete
-                                ? (allowExclusions || category == "music" && !importRequired
-                                    ? staged.MergePartialCategory(category, previous,
-                                        id => directory.Resolve(snapshot, id).StationId, IsForwardPage, allowExclusions) : null)
-                                : staged.CreateSnapshot(category);
+                            var categorySnapshot = staged.MergeRetainedCategory(category, previous,
+                                id => directory.MembershipKey(snapshot, id),
+                                allowExclusions || category == "music" && !importRequired);
                             if (categorySnapshot == null)
                             {
                                 Update(() => categoryStates[category] = "Incomplete (catalog links skipped)");
@@ -1121,7 +1183,8 @@ namespace MediaBrowser.Plugins.TuneIn
                             }
 
                             if (previous == null || previous.Fingerprint != categorySnapshot.Fingerprint
-                                || previous.DiscoveryPartial != categorySnapshot.DiscoveryPartial)
+                                || previous.DiscoveryPartial != categorySnapshot.DiscoveryPartial
+                                || previous.DiscoveryLimitReason != categorySnapshot.DiscoveryLimitReason)
                                 changed.Add(category);
                             listings[category] = categorySnapshot;
                             if (categorySnapshot.DiscoveryPartial)
@@ -1305,6 +1368,9 @@ namespace MediaBrowser.Plugins.TuneIn
                         }
                         directory.CheckCurrent(snapshot, linked.Token);
                         checkpoint.Categories = importedCategories.Select(category => listings[category]).ToList();
+                        foreach (var category in appliedCategories)
+                            foreach (var item in listings[category].Folders.SelectMany(folder => folder.Items))
+                                item.ForceUpdate = false;
                         checkpoint.PendingCategories.RemoveAll(listings.ContainsKey);
                         checkpoint.NeedsImport = false;
                         checkpoint.DirtyCategory = null;
@@ -1315,7 +1381,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         pendingImport = null;
                         lock (gate)
                             foreach (var category in appliedCategories)
-                                categoryStates[category] = listings[category].DiscoveryPartial ? "Partial (applied)" : "Imported";
+                                categoryStates[category] = listings[category].DiscoveryPartial ? "Partial (applied)"
+                                    : listings[category].DiscoveryLimitReason != null ? "Limited (imported)" : "Imported";
                     }
 
                     if (didImport)
@@ -1347,7 +1414,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         if (!didImport)
                             foreach (var category in categories.Where(category => !progressive
                                 || completed.Contains(category) && !progressivelyApplied.Contains(category)))
-                                categoryStates[category] = partial.Contains(category) ? "Partial (unchanged)" : "Unchanged";
+                                categoryStates[category] = partial.Contains(category) ? "Partial (unchanged)"
+                                    : listings[category].DiscoveryLimitReason != null ? "Limited (unchanged)" : "Unchanged";
                         status.CategoriesSkipped = didImport ? 0 : completed.Count - progressivelyApplied.Count;
                     }
 
@@ -1357,11 +1425,17 @@ namespace MediaBrowser.Plugins.TuneIn
                     {
                         linked.Token.ThrowIfCancellationRequested();
                         store.ClearRecovery();
-                        status.State = partial.Count == 0 ? "Completed" : "Partial";
+                        foreach (var category in categories)
+                            if (listings.TryGetValue(category, out var listing) && listing.DiscoveryLimitReason != null)
+                                limited.Add(category);
+                        status.State = partial.Count != 0 ? "Partial" : limited.Count != 0 ? "Limited" : "Completed";
                         status.Phase = partial.Count != 0
                             ? (progressive ? "Partial refresh completed; incomplete categories left unchanged" :
                                 didImport ? "Partial refresh completed; valid updates applied, rejected entries excluded"
                                 : "Partial refresh completed; merged library unchanged")
+                            : limited.Count != 0 ? (didImport || progressivelyApplied.Count != 0
+                                ? "Limited catalog imported; existing in-scope entries retained"
+                                : "Limited discovery completed; compatible catalog retained")
                             : (categories.Length == 0 ? "No enabled categories" : "Completed");
                         if (partial.Count != 0) status.Category = requestedCategory ?? partial.OrderBy(category => category, StringComparer.Ordinal).First();
                         status.Progress = 100;

@@ -16,6 +16,11 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         internal const int MaxDiscoveryDeadlineHours = 10;
         internal const int MinImportDeadlineHours = 1;
         internal const int MaxImportDeadlineHours = 100;
+        internal const int MinMaxStationCount = 1;
+        internal const int MaxMaxStationCount = 4000;
+        internal const int MinTraversalDepthLimit = 3;
+        internal const int MaxTraversalDepthLimit = 50;
+        internal const int DefaultTraversalDepthLimit = 5;
 
         public String Username { get; set; }
         public String LatLon { get; set; }
@@ -23,6 +28,8 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public int ApiRequestIntervalSeconds { get; set; } = 2;
         public int DiscoveryDeadlineHours { get; set; } = 3;
         public int ImportDeadlineHours { get; set; } = 24;
+        public int? MaxStationCount { get; set; } = 250;
+        public int TraversalDepthLimit { get; set; } = DefaultTraversalDepthLimit;
         public bool EnableCatalogIdentityDiagnostics { get; set; }
         public bool HideRegionalGenres { get; set; } = true;
         public bool AllowPartialCatalogImport { get; set; } = true;

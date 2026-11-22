@@ -28,6 +28,35 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
     {
         private static PluginConfiguration Ready() => new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true };
 
+        [Theory]
+        [InlineData(null, 3, true)]
+        [InlineData(1, 50, true)]
+        [InlineData(4000, 5, true)]
+        [InlineData(0, 5, false)]
+        [InlineData(4001, 5, false)]
+        [InlineData(250, 2, false)]
+        [InlineData(250, 51, false)]
+        public void DiscoveryLimitsValidateWithoutChangingStationIdentity(int? maximum, int depth, bool valid)
+        {
+            var config = Ready();
+            config.EnableTalk = true;
+            var directory = new TuneInDirectory(() => config, (_, _) => throw new InvalidOperationException());
+            var before = directory.Snapshot();
+            var station = directory.Register(before, new NavigationEntry { Category = "talk", StationId = "s1", Name = "Radio" });
+            config.MaxStationCount = maximum;
+            config.TraversalDepthLimit = depth;
+            if (!valid)
+            {
+                Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+                return;
+            }
+            ConfigurationSnapshot.Validate(config);
+            var after = directory.Snapshot();
+            Assert.Equal(before.Key, after.Key);
+            Assert.Equal("s1", directory.Resolve(after, station).StationId);
+            Assert.NotEqual(before.DiscoveryKey, after.DiscoveryKey);
+        }
+
         [Fact]
         public async Task RefreshCacheAcceptsSixtyThousandPagesAndRejectsAnother()
         {
@@ -90,7 +119,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 + "<outline type='audio' text='Radio' guide_id='s1'/>")));
             var before = directory.Snapshot();
             var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
-            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "DiscoveryDeadlineHours", "ImportDeadlineHours", "EnableCatalogIdentityDiagnostics", "HideRegionalGenres",
+            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "DiscoveryDeadlineHours", "ImportDeadlineHours", "MaxStationCount", "TraversalDepthLimit", "EnableCatalogIdentityDiagnostics", "HideRegionalGenres",
                 "AllowPartialCatalogImport", "HasStartedCatalogRefresh",
                 "SettingsSaved", "TalkMode", "TalkIds", "SportsMode", "SportsIds", "PodcastsMode", "PodcastIds" })
                 legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });

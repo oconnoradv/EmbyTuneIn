@@ -47,6 +47,8 @@ namespace MediaBrowser.Plugins.TuneIn
         public string ContentType { get; set; }
         public string MediaType { get; set; }
         public string ImageUrl { get; set; }
+        [System.ComponentModel.DefaultValue(false)]
+        public bool ForceUpdate { get; set; }
     }
 
     public sealed class TuneInFolderSnapshot
@@ -72,6 +74,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public string RootId { get; set; }
         public string Fingerprint { get; set; }
         public bool DiscoveryPartial { get; set; }
+        public string DiscoveryLimitReason { get; set; }
         public TuneInStationCounts StationCounts { get; set; }
         public List<TuneInFolderSnapshot> Folders { get; set; } = new List<TuneInFolderSnapshot>();
     }

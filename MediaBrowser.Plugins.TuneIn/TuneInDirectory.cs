@@ -80,9 +80,11 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             get
             {
-                if (!Value.HideRegionalGenres) return Key;
+                var discoveryScope = Key + ":stations:" + (Value.MaxStationCount?.ToString(CultureInfo.InvariantCulture) ?? "unset")
+                    + ":depth:" + Value.TraversalDepthLimit.ToString(CultureInfo.InvariantCulture);
+                if (!Value.HideRegionalGenres) return discoveryScope;
                 using (var hash = SHA256.Create())
-                    return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(Key + ":hide-regional-genres"))).Replace("-", "");
+                    return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(discoveryScope + ":hide-regional-genres"))).Replace("-", "");
             }
         }
 
@@ -282,6 +284,12 @@ namespace MediaBrowser.Plugins.TuneIn
             if (value.ImportDeadlineHours < PluginConfiguration.MinImportDeadlineHours
                 || value.ImportDeadlineHours > PluginConfiguration.MaxImportDeadlineHours)
                 throw new ArgumentException($"TuneIn import deadline must be between {PluginConfiguration.MinImportDeadlineHours} and {PluginConfiguration.MaxImportDeadlineHours} hours.");
+            if (value.MaxStationCount.HasValue && (value.MaxStationCount < PluginConfiguration.MinMaxStationCount
+                || value.MaxStationCount > PluginConfiguration.MaxMaxStationCount))
+                throw new ArgumentException($"TuneIn Max Station Count must be not set or between {PluginConfiguration.MinMaxStationCount} and {PluginConfiguration.MaxMaxStationCount}.");
+            if (value.TraversalDepthLimit < PluginConfiguration.MinTraversalDepthLimit
+                || value.TraversalDepthLimit > PluginConfiguration.MaxTraversalDepthLimit)
+                throw new ArgumentException($"TuneIn traversal depth limit must be between {PluginConfiguration.MinTraversalDepthLimit} and {PluginConfiguration.MaxTraversalDepthLimit}.");
             if (value.DiscoveryDeadlineHours < PluginConfiguration.MinDiscoveryDeadlineHours
                 || value.DiscoveryDeadlineHours > PluginConfiguration.MaxDiscoveryDeadlineHours)
                 throw new ArgumentException("TuneIn discovery deadline must be between 1 and 10 hours.");
@@ -475,17 +483,40 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         internal Func<string, string> CategoryRebinder(ConfigurationSnapshot previous, ConfigurationSnapshot current,
-            string category)
+            string category, bool filterSelections = false)
         {
-            if (previous.CategoryScopeKey(category) != current.CategoryScopeKey(category))
+            if (!filterSelections && previous.CategoryScopeKey(category) != current.CategoryScopeKey(category))
                 throw new InvalidOperationException("Cannot reuse a TuneIn item whose category scope changed.");
             return id =>
             {
                 var entry = ResolveSigned(previous, id);
                 if (entry.Category != category)
                     throw new InvalidOperationException("Saved TuneIn item belongs to a different category.");
+                if (filterSelections && !Allowed(current, entry)) return null;
                 return Register(current, entry);
             };
+        }
+
+        internal string MembershipKey(ConfigurationSnapshot snapshot, string id)
+        {
+            var entry = Resolve(snapshot, id);
+            return string.Join("\0", entry.Category, entry.SelectionId ?? "", entry.StationId ?? "",
+                entry.ContentCategory ?? "", entry.MusicSelectionId ?? "", entry.TopicBranchKey ?? "",
+                entry.Request?.Url ?? "");
+        }
+
+        internal string RebindOwned(ConfigurationSnapshot snapshot, string id)
+        {
+            var bytes = ReadSignedPayload(snapshot, id);
+            if (bytes == null) throw new InvalidOperationException("Existing TuneIn item cannot be authenticated.");
+            using (var stream = new MemoryStream(bytes))
+            using (var reader = XmlReader.Create(stream, new XmlReaderSettings
+            { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 4096 }))
+            {
+                var document = XElement.Load(reader);
+                var entry = ReadEntry(document);
+                return Allowed(snapshot, entry) ? Register(snapshot, entry) : null;
+            }
         }
 
         // Ownership survives settings changes; navigation still requires the current key and scope.
@@ -516,8 +547,22 @@ namespace MediaBrowser.Plugins.TuneIn
                         return null;
                     return category;
                 }
+
             }
             catch (XmlException) { return null; }
+        }
+
+        internal static bool GeneratedStation(ConfigurationSnapshot snapshot, string id)
+        {
+            var bytes = ReadSignedPayload(snapshot, id);
+            if (bytes == null) return false;
+            using (var stream = new MemoryStream(bytes))
+            using (var reader = XmlReader.Create(stream, new XmlReaderSettings
+            { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 4096 }))
+            {
+                var document = XElement.Load(reader);
+                return document.Name == "entry" && TuneInBrowsing.ValidStation(document.Element("station")?.Value);
+            }
         }
 
         private static byte[] ReadSignedPayload(ConfigurationSnapshot snapshot, string id)
@@ -550,25 +595,32 @@ namespace MediaBrowser.Plugins.TuneIn
                 var document = XElement.Load(reader);
                 if ((string)document.Attribute("key") != snapshot.Key)
                     throw new InvalidOperationException("TuneIn configuration changed. Return to the channel root.");
-                var entry = new NavigationEntry
-                {
-                    Category = document.Element("category")?.Value,
-                    SelectionId = EmptyToNull(document.Element("selection")?.Value),
-                    StationId = EmptyToNull(document.Element("station")?.Value),
-                    Name = document.Element("name")?.Value,
-                    ContentCategory = EmptyToNull(document.Element("contentCategory")?.Value),
-                    MusicSelectionId = EmptyToNull(document.Element("musicSelection")?.Value),
-                    TopicBranchKey = EmptyToNull(document.Element("topicBranch")?.Value)
-                };
-                var request = document.Element("request");
-                if (request != null)
-                {
-                    entry.Request = new DirectoryRequest { Method = (string)request.Attribute("method") };
-                    foreach (var pair in request.Elements()) entry.Request.Parameters.Add(pair.Name.LocalName, pair.Value);
-                }
+                var entry = ReadEntry(document);
                 if (!Allowed(snapshot, entry)) throw new InvalidOperationException("TuneIn item is disabled or outside its selection.");
                 return entry;
             }
+        }
+
+        private static NavigationEntry ReadEntry(XElement document)
+        {
+            if (document.Name != "entry") throw new InvalidDataException("Invalid TuneIn entry document.");
+            var entry = new NavigationEntry
+            {
+                Category = document.Element("category")?.Value,
+                SelectionId = EmptyToNull(document.Element("selection")?.Value),
+                StationId = EmptyToNull(document.Element("station")?.Value),
+                Name = document.Element("name")?.Value,
+                ContentCategory = EmptyToNull(document.Element("contentCategory")?.Value),
+                MusicSelectionId = EmptyToNull(document.Element("musicSelection")?.Value),
+                TopicBranchKey = EmptyToNull(document.Element("topicBranch")?.Value)
+            };
+            var request = document.Element("request");
+            if (request != null)
+            {
+                entry.Request = new DirectoryRequest { Method = (string)request.Attribute("method") };
+                foreach (var pair in request.Elements()) entry.Request.Parameters.Add(pair.Name.LocalName, pair.Value);
+            }
+            return entry;
         }
 
         private void AssertSnapshot(ConfigurationSnapshot snapshot)
