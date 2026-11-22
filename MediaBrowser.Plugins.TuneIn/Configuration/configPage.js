@@ -607,12 +607,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             var cards = status.ArtworkCards || 0;
             var count = cards + (cards === 1 ? ' custom genre image' : ' custom genre images');
             var pack = status.ArtworkPackStatus === 'identified' && status.ArtworkPackName
-                ? 'Artwork pack in this Emby instance: ' + status.ArtworkPackName + ' (from pack metadata). '
-                : status.ArtworkPackStatus === 'invalid' ? 'Artwork pack metadata is invalid. '
-                : status.ArtworkPackStatus === 'unavailable' ? 'Artwork pack metadata is unavailable. '
-                : 'Artwork pack is unidentified (no pack metadata). ';
-            instance.view.querySelector('.tuneInArtworkCount').textContent = pack + count
-                + (typeof status.ArtworkPackImageCount === 'number' ? '; ' + status.ArtworkPackImageCount + ' images listed in the pack.' : '.');
+                ? status.ArtworkPackName
+                : status.ArtworkPackStatus === 'invalid' ? 'invalid pack metadata'
+                : status.ArtworkPackStatus === 'unavailable' ? 'pack metadata unavailable'
+                : 'unknown (no pack metadata)';
+            instance.view.querySelector('.tuneInArtworkCount').textContent =
+                'Artwork pack installed in this Emby Instance: ' + pack + ' * ' + count;
             artworkInstall.hidden = false;
         }        if (instance.refreshDefaultPending) {
             instance.refreshDefaultPending = false;

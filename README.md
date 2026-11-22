@@ -224,8 +224,7 @@ Packs are published in
 the images and `tunein-artwork.json` into
 `<Emby data>\plugins\configurations\TuneInArtwork\genres` and refresh Music.
 Advanced Settings shows this folder, the installed image count, and the pack
-name and image count from its manifest when available. The pack count is not
-the total number of customizable genres. Only names like `c57943.jpg` or
+name from its manifest when available. Only names like `c57943.jpg` or
 `g79.png` are used. The optional Cartoon example loads from GitHub.
 
 ## Playback

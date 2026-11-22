@@ -2125,7 +2125,7 @@ test('artwork pack help shows the server folder, pack metadata and installed ima
     await visit;
     assert.equal(install.hidden, false);
     assert.equal(app.elements['.tuneInArtworkFolder'].textContent, 'C:\\Emby\\plugins\\configurations\\TuneInArtwork\\genres');
-    assert.match(app.elements['.tuneInArtworkCount'].textContent, /unidentified.*0 custom genre images/);
+    assert.match(app.elements['.tuneInArtworkCount'].textContent, /unknown.*0 custom genre images/);
     app.instance.onPause();
     const again = app.instance.onResume();
     app.reads[1].resolve({});
@@ -2133,7 +2133,7 @@ test('artwork pack help shows the server folder, pack metadata and installed ima
         ArtworkPackStatus: 'identified', ArtworkPackName: 'Cartoon', ArtworkPackImageCount: 123 });
     await again;
     assert.equal(app.elements['.tuneInArtworkCount'].textContent,
-        'Artwork pack in this Emby instance: Cartoon (from pack metadata). 123 custom genre images; 123 images listed in the pack.');
+        'Artwork pack installed in this Emby Instance: Cartoon * 123 custom genre images');
     app.instance.onPause();
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /<details class="tuneInAdvancedSettings">\s*<summary>Advanced Settings<\/summary>\s*<aside class="tuneInArtworkPacks">/);
