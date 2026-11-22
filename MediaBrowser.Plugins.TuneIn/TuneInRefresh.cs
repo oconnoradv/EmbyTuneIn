@@ -70,7 +70,21 @@ namespace MediaBrowser.Plugins.TuneIn
         public string ArtworkPackName { get; set; }
         public int? ArtworkPackImageCount { get; set; }
         public string ArtworkPackStatus { get; set; }
+        public TuneInArtworkPackStatus[] ArtworkPacks { get; set; }
         internal TuneInRefreshStatus Copy() => (TuneInRefreshStatus)MemberwiseClone();
+    }
+
+    public sealed class TuneInArtworkPackStatus
+    {
+        public string Scope { get; set; }
+        public string Path { get; set; }
+        public string Status { get; set; }
+        public string Name { get; set; }
+        public int? ImageCount { get; set; }
+        public int? InstalledCount { get; set; }
+        public int? MatchedCount { get; set; }
+        public int? ModifiedCount { get; set; }
+        public int? AddedCount { get; set; }
     }
 
     internal static class PluginBuild

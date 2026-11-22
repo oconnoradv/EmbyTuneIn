@@ -14,6 +14,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 using Xunit;
 
 namespace MediaBrowser.Plugins.TuneIn.Tests
@@ -141,6 +142,15 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal("identified", pack.Status);
                 Assert.Equal("Cartoon", pack.Name);
                 Assert.Equal(123, pack.ImageCount);
+                var bytes = new byte[] { 1, 2, 3 };
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, "g19.jpg"), bytes);
+                using var sha = System.Security.Cryptography.SHA256.Create();
+                var hash = Convert.ToHexString(sha.ComputeHash(bytes));
+                System.IO.File.WriteAllText(path, "{\"schemaVersion\":1,\"packName\":\"Cartoon\",\"imageCount\":1,\"images\":[{\"id\":\"g19\",\"file\":\"g19.jpg\",\"sha256\":\"" + hash + "\"}]}");
+                pack = TuneInCategoryArtwork.ReadPackManifest();
+                Assert.Equal("identified", pack.Status);
+                Assert.Equal(1, pack.MatchedCount);
+                Assert.Equal(0, pack.AddedCount);
                 System.IO.File.WriteAllText(path, "{\"schemaVersion\":2,\"packName\":\"Cartoon\",\"imageCount\":123}");
                 Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackManifest().Status);
                 System.IO.File.WriteAllText(path, "{invalid");
@@ -150,6 +160,186 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             {
                 TuneInCategoryArtwork.GenreFolder = previous;
                 System.IO.Directory.Delete(folder, true);
+            }
+        }
+
+        [Fact]
+        public void ScopedPackStatusCountsMatchedModifiedAndAddedCards()
+        {
+            var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tunein-status-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            var previous = TuneInCategoryArtwork.LanguageFolder;
+            try
+            {
+                TuneInCategoryArtwork.LanguageFolder = folder;
+                var matching = new byte[] { 1, 2, 3 };
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, "l122.jpg"), matching);
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, "l123.png"), new byte[] { 4 });
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, "l124.jpg"), new byte[] { 5 });
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, "r101227.jpg"), new byte[] { 6 });
+                using var sha = System.Security.Cryptography.SHA256.Create();
+                var hash = Convert.ToHexString(sha.ComputeHash(matching)).ToLowerInvariant();
+                var manifest = System.IO.Path.Combine(folder, "tunein-artwork.json");
+                System.IO.File.WriteAllText(manifest, "{\"schemaVersion\":1,\"scope\":\"languages\",\"packName\":\"Test\",\"imageCount\":2,\"images\":["
+                    + "{\"id\":\"l122\",\"file\":\"l122.jpg\",\"sha256\":\"" + hash + "\"},"
+                    + "{\"id\":\"l123\",\"file\":\"l123.png\",\"sha256\":\"" + hash + "\"}]}");
+                var status = TuneInCategoryArtwork.ReadPackStatus("languages");
+                Assert.Equal("identified", status.Status);
+                Assert.Equal(3, status.InstalledCount);
+                Assert.Equal(1, status.MatchedCount);
+                Assert.Equal(1, status.ModifiedCount);
+                Assert.Equal(1, status.AddedCount);
+                System.IO.File.Delete(System.IO.Path.Combine(folder, "l122.jpg"));
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, "l122.png"), matching);
+                status = TuneInCategoryArtwork.ReadPackStatus("languages");
+                Assert.Equal(0, status.MatchedCount);
+                Assert.Equal(2, status.ModifiedCount);
+                Assert.Equal(1, status.AddedCount);
+                System.IO.File.WriteAllText(manifest, "{\"schemaVersion\":1,\"scope\":\"locations\",\"packName\":\"Wrong\",\"imageCount\":0,\"images\":[]}");
+                Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackStatus("languages").Status);
+                System.IO.File.WriteAllText(manifest, "{\"schemaVersion\":1,\"scope\":\"languages\",\"packName\":\"Bad\",\"imageCount\":1,\"images\":[{\"id\":\"l122\",\"file\":\"../l122.jpg\",\"sha256\":\"" + hash + "\"}]}");
+                Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackStatus("languages").Status);
+                System.IO.File.WriteAllText(manifest, "{\"schemaVersion\":1,\"packName\":\"Legacy\"}");
+                Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackStatus("languages").Status);
+                System.IO.File.Delete(manifest);
+                status = TuneInCategoryArtwork.ReadPackStatus("languages");
+                Assert.Equal("missing", status.Status);
+                Assert.Equal(3, status.InstalledCount);
+                Assert.Null(status.AddedCount);
+                TuneInCategoryArtwork.LanguageFolder = null;
+                Assert.Equal("unavailable", TuneInCategoryArtwork.ReadPackStatus("languages").Status);
+            }
+            finally
+            {
+                TuneInCategoryArtwork.LanguageFolder = previous;
+                System.IO.Directory.Delete(folder, true);
+            }
+        }
+
+        [Theory]
+        [InlineData("language", "languages", "l122")]
+        [InlineData("location", "locations", "r101227")]
+        public void ScopedArtworkMigratesOnAdditionReplacementAndRemoval(string category, string scope, string id)
+        {
+            var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tunein-scoped-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            var previousLanguage = TuneInCategoryArtwork.LanguageFolder;
+            var previousLocation = TuneInCategoryArtwork.LocationFolder;
+            try
+            {
+                TuneInCategoryArtwork.LanguageFolder = folder;
+                TuneInCategoryArtwork.LocationFolder = folder;
+                var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableLanguage = true, EnableLocation = true };
+                var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("Unexpected provider request."));
+                var snapshot = directory.Snapshot();
+                var rootId = directory.Register(snapshot, new NavigationEntry { Category = category, Name = category });
+                var request = category == "language"
+                    ? DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?c=lang&filter=" + id)
+                    : DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=" + id);
+                var entry = new NavigationEntry { Category = category, Request = request, Name = id };
+                var library = DispatchProxy.Create<ILibraryManager, LibraryProxy>();
+                var proxy = (LibraryProxy)library;
+                proxy.Root = Folder(1, rootId);
+                var item = Folder(2, directory.Register(snapshot, entry));
+                proxy.Descendants = new BaseItem[] { item };
+                var channel = new TuneInChannel(directory, serverHost: DispatchProxy.Create<IServerApplicationHost, HostProxy>(), library: library);
+                var card = System.IO.Path.Combine(folder, id + ".jpg");
+                channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+                Assert.EndsWith("/TuneIn/CategoryArtwork/" + category + "?v=1", item.GetImagePath(ImageType.Primary, 0));
+                System.IO.File.WriteAllBytes(card, new byte[] { 1 });
+                channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+                var first = item.GetImagePath(ImageType.Primary, 0);
+                Assert.Contains("/TuneIn/PackArtwork/" + scope + "/" + id + "?v=", first);
+                Assert.Throws<UnauthorizedAccessException>(() => new TuneInCategoryArtworkService(Moq.Mock.Of<IHttpResultFactory>())
+                    .Get(new GetTuneInPackArtwork { Scope = scope, Id = id }));
+                var httpRequest = new Moq.Mock<IRequest>();
+                httpRequest.SetupGet(value => value.RemoteIp).Returns(IPAddress.Loopback);
+                httpRequest.SetupGet(value => value.IsSocketConnectionLocal).Returns(true);
+                var factory = new Moq.Mock<IHttpResultFactory>();
+                factory.Setup(value => value.GetResult(httpRequest.Object, Moq.It.IsAny<ReadOnlyMemory<byte>>(), "image/jpeg", null))
+                    .Returns("ok");
+                Assert.Equal("ok", new TuneInCategoryArtworkService(factory.Object) { Request = httpRequest.Object }
+                    .Get(new GetTuneInPackArtwork { Scope = scope, Id = id }));
+                var modified = System.IO.File.GetLastWriteTimeUtc(card);
+                System.IO.File.WriteAllBytes(card, new byte[] { 2 });
+                System.IO.File.SetLastWriteTimeUtc(card, modified);
+                channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+                Assert.NotEqual(first, item.GetImagePath(ImageType.Primary, 0));
+                System.IO.File.Delete(card);
+                channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+                Assert.EndsWith("/TuneIn/CategoryArtwork/" + category + "?v=1", item.GetImagePath(ImageType.Primary, 0));
+                Assert.Null(TuneInCategoryArtwork.PackFile(scope, "..\\l122"));
+                Assert.Null(TuneInCategoryArtwork.PackFile("invalid", id));
+                Assert.Throws<ArgumentException>(() => new TuneInCategoryArtworkService(Moq.Mock.Of<IHttpResultFactory>())
+                    .Get(new GetTuneInPackArtwork { Scope = "../languages", Id = id }));
+                Assert.Single(typeof(GetTuneInPackArtwork).GetCustomAttributes(typeof(AuthenticatedAttribute), false));
+            }
+            finally
+            {
+                TuneInCategoryArtwork.LanguageFolder = previousLanguage;
+                TuneInCategoryArtwork.LocationFolder = previousLocation;
+                System.IO.Directory.Delete(folder, true);
+            }
+        }
+
+        [Fact]
+        public async Task LanguageRootAndMusicHubsKeepTheirArtworkScopes()
+        {
+            var root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tunein-scopes-" + Guid.NewGuid().ToString("N"));
+            var genres = System.IO.Path.Combine(root, "genres");
+            var languages = System.IO.Path.Combine(root, "languages");
+            var locations = System.IO.Path.Combine(root, "locations");
+            System.IO.Directory.CreateDirectory(genres);
+            System.IO.Directory.CreateDirectory(languages);
+            System.IO.Directory.CreateDirectory(locations);
+            var oldGenre = TuneInCategoryArtwork.GenreFolder;
+            var oldLanguage = TuneInCategoryArtwork.LanguageFolder;
+            var oldLocation = TuneInCategoryArtwork.LocationFolder;
+            try
+            {
+                TuneInCategoryArtwork.GenreFolder = genres;
+                TuneInCategoryArtwork.LanguageFolder = languages;
+                TuneInCategoryArtwork.LocationFolder = locations;
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(languages, "l122.jpg"), new byte[] { 1 });
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(languages, "l216.jpg"), new byte[] { 1 });
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(genres, "g19.jpg"), new byte[] { 1 });
+                var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableLanguage = true };
+                var directory = new TuneInDirectory(() => config, (request, token) =>
+                {
+                    var rows = request.Parameters.GetValueOrDefault("filter") == null
+                        ? "<outline type='link' text='Arabic' URL='https://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=l122'/>"
+                          + "<outline type='link' text='Bashkir' URL='https://opml.radiotime.com/Browse.ashx?id=c424724&amp;filter=l216'/>"
+                        : "<outline type='link' text='Music' URL='https://opml.radiotime.com/Browse.ashx?id=c424724&amp;filter=l122'/>";
+                    return Task.FromResult(XDocument.Parse("<opml><body>" + rows + "</body></opml>"));
+                });
+                var channel = new TuneInChannel(directory, serverHost: DispatchProxy.Create<IServerApplicationHost, HostProxy>());
+                var snapshot = directory.Snapshot();
+                var rootId = directory.Register(snapshot, new NavigationEntry { Category = "language", Name = "Language" });
+                var items = (await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = rootId }, CancellationToken.None)).Items;
+                Assert.Equal(2, items.Count);
+                Assert.Contains("/PackArtwork/languages/l122?", items[0].ImageUrl);
+                Assert.Contains("/PackArtwork/languages/l216?", items[1].ImageUrl);
+                var bashkir = directory.Resolve(snapshot, items[1].Id);
+                Assert.Equal("l216", bashkir.LanguageArtworkId);
+                var hub = Assert.Single((await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = items[0].Id }, CancellationToken.None)).Items);
+                Assert.DoesNotContain("/PackArtwork/languages/", hub.ImageUrl);
+                var genre = new NavigationEntry
+                {
+                    Category = "language", ContentCategory = "music",
+                    Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=g19&filter=l122")
+                };
+                Assert.Equal(("genres", "g19"), TuneInCategoryArtwork.ArtworkFor(genre));
+                genre.StationId = "s1";
+                Assert.Equal((null, null), TuneInCategoryArtwork.ArtworkFor(genre));
+                Assert.Null(TuneInCategoryArtwork.PackFile("locations", "l122"));
+                Assert.Null(TuneInCategoryArtwork.PackFile("genres", "l122"));
+            }
+            finally
+            {
+                TuneInCategoryArtwork.GenreFolder = oldGenre;
+                TuneInCategoryArtwork.LanguageFolder = oldLanguage;
+                TuneInCategoryArtwork.LocationFolder = oldLocation;
+                System.IO.Directory.Delete(root, true);
             }
         }
 

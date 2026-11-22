@@ -91,9 +91,10 @@ namespace MediaBrowser.Plugins.TuneIn
             EnsureAdmin();
             var status = refresh.Status();
             status.SettingsLocked = Plugin.Instance.SettingsLock.TryReadStatus();
-            status.ArtworkFolder = TuneInCategoryArtwork.GenreFolder;
-            status.ArtworkCards = TuneInCategoryArtwork.CountGenreFiles();
-            var artworkPack = TuneInCategoryArtwork.ReadPackManifest();
+            status.ArtworkPacks = TuneInCategoryArtwork.Scopes.Select(TuneInCategoryArtwork.ReadPackStatus).ToArray();
+            var artworkPack = status.ArtworkPacks[0];
+            status.ArtworkFolder = artworkPack.Path;
+            status.ArtworkCards = artworkPack.InstalledCount ?? 0;
             status.ArtworkPackName = artworkPack.Name;
             status.ArtworkPackImageCount = artworkPack.ImageCount;
             status.ArtworkPackStatus = artworkPack.Status;

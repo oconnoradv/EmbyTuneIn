@@ -230,7 +230,13 @@ namespace MediaBrowser.Plugins.TuneIn
                     {
                         Category = entry.Category, SelectionId = entry.SelectionId, ContentCategory = contentCategory,
                         MusicSelectionId = entry.MusicSelectionId, TopicBranchKey = entry.TopicBranchKey,
-                        Request = next, Name = name
+                        Request = next, Name = name,
+                        LanguageArtworkId = entry.Category == "language" && entry.SelectionId == null
+                            && entry.Request.Parameters.GetValueOrDefault("c") == "lang"
+                            && !entry.Request.Parameters.ContainsKey("filter")
+                            && next.Parameters.GetValueOrDefault("c") != "lang"
+                            && ConfigurationSnapshot.ValidId(next.Parameters.GetValueOrDefault("filter"), "language")
+                            ? next.Parameters["filter"] : null
                     }));
                 }
             }

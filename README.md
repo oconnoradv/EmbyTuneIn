@@ -39,7 +39,7 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
   whole TuneIn library.
 - **Playback:** a validated relay for every station, including TuneIn's
   separate introductions, with stalled-stream handling.
-- **Artwork:** bundled category artwork and optional genre artwork packs.
+- **Artwork:** bundled category artwork and optional music genre, language and location artwork packs.
 
 Planned: Control Panel localization that follows the user's Emby language.
 
@@ -218,14 +218,18 @@ Category folders use bundled artwork, and the top-level TuneIn library item
 uses bundled artwork with the **Powered by TuneIn** mark. Refreshing a
 category updates its artwork.
 
-Music genre folders use the Music artwork unless a genre pack is installed.
-Packs are published in
-[EmbyTuneInArt](https://github.com/oconnoradv/EmbyTuneInArt/releases). Extract
-the images and `tunein-artwork.json` into
-`<Emby data>\plugins\configurations\TuneInArtwork\genres` and refresh Music.
-Advanced Settings shows this folder, the installed image count, and the pack
-name from its manifest when available. Only names like `c57943.jpg` or
-`g79.png` are used. The optional Cartoon example loads from GitHub.
+Music genre, language and location folders use their category artwork unless
+matching cards are installed. Packs are published in
+[EmbyTuneInArt](https://github.com/oconnoradv/EmbyTuneInArt/releases).
+Extract each pack's images and `tunein-artwork.json` into its own directory:
+`<Emby data>\plugins\configurations\TuneInArtwork\genres`, `languages`, or
+`locations`. Install one pack per directory, then refresh the corresponding
+category (refresh Language too for music genres browsed under a language).
+Cards use TuneIn IDs as filenames, for example `c57943.jpg`, `g79.png`,
+`l122.jpg`, or `r101227.png`. Advanced Settings reports the server paths,
+installed counts and manifest identity; when hashes are available it also
+distinguishes unchanged, replaced and added cards. The optional Cartoon example
+loads from GitHub.
 
 ## Playback
 

@@ -399,6 +399,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public string ContentCategory { get; set; }
         public string MusicSelectionId { get; set; }
         public string TopicBranchKey { get; set; }
+        public string LanguageArtworkId { get; set; }
     }
 
     public sealed class SelectorItem
@@ -467,6 +468,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 new XElement("musicSelection", entry.MusicSelectionId ?? ""));
             if (entry.TopicBranchKey != null)
                 document.Add(new XElement("topicBranch", entry.TopicBranchKey));
+            if (entry.LanguageArtworkId != null)
+                document.Add(new XElement("languageArtwork", entry.LanguageArtworkId));
             if (entry.Request != null)
             {
                 var request = new XElement("request", new XAttribute("method", entry.Request.Method));
@@ -617,7 +620,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 Name = document.Element("name")?.Value,
                 ContentCategory = EmptyToNull(document.Element("contentCategory")?.Value),
                 MusicSelectionId = EmptyToNull(document.Element("musicSelection")?.Value),
-                TopicBranchKey = EmptyToNull(document.Element("topicBranch")?.Value)
+                TopicBranchKey = EmptyToNull(document.Element("topicBranch")?.Value),
+                LanguageArtworkId = EmptyToNull(document.Element("languageArtwork")?.Value)
             };
             var request = document.Element("request");
             if (request != null)
@@ -645,6 +649,9 @@ namespace MediaBrowser.Plugins.TuneIn
         private static bool Allowed(ConfigurationSnapshot snapshot, NavigationEntry entry) =>
             snapshot.Enabled(entry.Category)
             && (entry.StationId == null || TuneInBrowsing.ValidStation(entry.StationId))
+            && (entry.LanguageArtworkId == null || entry.Category == "language" && entry.SelectionId == null
+                && entry.StationId == null && ConfigurationSnapshot.ValidId(entry.LanguageArtworkId, "language")
+                && entry.Request?.Parameters.GetValueOrDefault("filter") == entry.LanguageArtworkId)
             && (entry.Category != "language" || LanguageContentAllowed(snapshot, entry))
             && (snapshot.UsesSelectedTopics(entry.Category)
                 ? (entry.SelectionId != null) == (entry.TopicBranchKey != null)

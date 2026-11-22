@@ -22,8 +22,11 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             SettingsLock = new TuneInSettingsLockStore(string.IsNullOrEmpty(applicationPaths.DataPath)
                 ? null : Path.Combine(applicationPaths.DataPath, "tunein-fork-settings-lock.xml"));
-            if (!string.IsNullOrEmpty(applicationPaths.PluginConfigurationsPath))
-                TuneInCategoryArtwork.GenreFolder = Path.Combine(applicationPaths.PluginConfigurationsPath, "TuneInArtwork", "genres");
+            var artworkRoot = string.IsNullOrEmpty(applicationPaths.PluginConfigurationsPath)
+                ? null : Path.Combine(applicationPaths.PluginConfigurationsPath, "TuneInArtwork");
+            TuneInCategoryArtwork.GenreFolder = artworkRoot == null ? null : Path.Combine(artworkRoot, "genres");
+            TuneInCategoryArtwork.LanguageFolder = artworkRoot == null ? null : Path.Combine(artworkRoot, "languages");
+            TuneInCategoryArtwork.LocationFolder = artworkRoot == null ? null : Path.Combine(artworkRoot, "locations");
             Instance = this;
         }
 

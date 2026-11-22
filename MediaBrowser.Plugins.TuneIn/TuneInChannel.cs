@@ -275,9 +275,10 @@ namespace MediaBrowser.Plugins.TuneIn
                     return;
                 }
                 if (entry.Category != rootEntry.Category || entry.StationId != null) return;
-                var genre = TuneInCategoryArtwork.GenreId(entry);
+                var artwork = TuneInCategoryArtwork.ArtworkFor(entry);
                 var version = TuneInCategoryArtwork.Revision + ":" + entry.Category
-                    + (genre == null ? "" : ":" + genre + ":" + TuneInCategoryArtwork.GenreRevision(genre));
+                    + (artwork.Id == null ? "" : ":" + (artwork.Scope == "genres" ? "" : artwork.Scope + ":")
+                        + artwork.Id + ":" + TuneInCategoryArtwork.PackRevision(artwork.Scope, artwork.Id));
                 var previousVersion = folder.GetProviderId("TuneInCategoryArtwork");
                 if (previousVersion == version && folder.HasImage(ImageType.Primary, 0)) return;
                 folder.SetImage(new ItemImageInfo
@@ -326,9 +327,9 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private string FolderImage(NavigationEntry entry)
         {
-            var genre = TuneInCategoryArtwork.GenreId(entry);
-            return genre == null || serverHost == null ? null
-                : TuneInCategoryArtwork.GenreUrl(serverHost.GetLocalApiUrl(System.Net.IPAddress.Loopback), genre);
+            var artwork = TuneInCategoryArtwork.ArtworkFor(entry);
+            return artwork.Id == null || serverHost == null ? null
+                : TuneInCategoryArtwork.PackUrl(serverHost.GetLocalApiUrl(System.Net.IPAddress.Loopback), artwork.Scope, artwork.Id);
         }
 
         private string CategoryArtworkUrl(string category) =>

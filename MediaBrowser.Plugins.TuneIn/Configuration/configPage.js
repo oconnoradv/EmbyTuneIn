@@ -594,6 +594,55 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.refreshOverall').textContent = ' - Overall: ' + text;
     }
 
+    function renderArtworkPacks(instance, status) {
+        var packs = status && (status.artworkPacks || status.ArtworkPacks);
+        if (!Array.isArray(packs)) packs = [];
+        function field(pack, name) {
+            return pack && (pack[name] != null ? pack[name] : pack[name.charAt(0).toUpperCase() + name.slice(1)]);
+        }
+        function count(pack, name) {
+            var value = field(pack, name);
+            return typeof value === 'number' && isFinite(value) && value >= 0 && Math.floor(value) === value
+                ? value : null;
+        }
+        [
+            { selector: 'Genres', scopes: ['genres', 'genre', 'musicgenres', 'musicgenre'] },
+            { selector: 'Languages', scopes: ['languages', 'language'] },
+            { selector: 'Locations', scopes: ['locations', 'location'] }
+        ].forEach(function (scope) {
+            var pack = packs.find(function (item) {
+                var name = field(item, 'scope');
+                return typeof name === 'string' && scope.scopes.includes(name.toLowerCase().replace(/[^a-z]/g, ''));
+            });
+            var state = field(pack, 'status');
+            var installed = count(pack, 'installedCount');
+            var matched = count(pack, 'matchedCount');
+            var modified = state === 'identified' ? count(pack, 'modifiedCount') : null;
+            var added = state === 'identified' ? count(pack, 'addedCount') : null;
+            var name = field(pack, 'name');
+            var path = field(pack, 'path');
+            instance.view.querySelector('.artwork' + scope.selector + 'Name').textContent =
+                state === 'identified' && typeof name === 'string' && name.trim() ? name
+                : state === 'identified' ? 'Pack name unavailable'
+                : state === 'missing' && installed === 0 ? 'Default artwork'
+                : state === 'missing' ? 'No pack metadata'
+                : state === 'invalid' ? 'Invalid pack metadata'
+                : 'Status unavailable';
+            var images = [];
+            if (installed !== null) images.push(installed + ' installed');
+            if (matched !== null) images.push(matched + ' matched');
+            instance.view.querySelector('.artwork' + scope.selector + 'Images').textContent =
+                images.length ? images.join(', ') : 'Unavailable';
+            instance.view.querySelector('.artwork' + scope.selector + 'Path').textContent =
+                typeof path === 'string' && path.trim() ? path : 'Folder unavailable';
+            var changes = [];
+            if (modified !== null) changes.push(modified + ' modified');
+            if (added !== null) changes.push(added + ' added');
+            instance.view.querySelector('.artwork' + scope.selector + 'Changes').textContent =
+                changes.length ? '(' + changes.join(', ') + ')' : '(change counts unavailable)';
+        });
+    }
+
     function renderRefresh(instance, status) {
         instance.refreshBusy = !!status.Busy;
         var version = instance.view.querySelector('.tuneInPluginVersion');
@@ -601,20 +650,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             version.textContent = 'TuneIn plugin ' + status.PluginVersion;
             version.hidden = false;
         }
-        var artworkInstall = instance.view.querySelector('.tuneInArtworkInstall');
-        if (artworkInstall && (status.ArtworkFolder || status.ArtworkPackStatus)) {
-            instance.view.querySelector('.tuneInArtworkFolder').textContent = status.ArtworkFolder || 'Artwork folder unavailable';
-            var cards = status.ArtworkFolder && typeof status.ArtworkCards === 'number' ? status.ArtworkCards : null;
-            var count = cards == null ? 'image count unavailable'
-                : cards + (cards === 1 ? ' custom genre image' : ' custom genre images');
-            var pack = status.ArtworkPackStatus === 'identified' && status.ArtworkPackName
-                ? status.ArtworkPackName
-                : status.ArtworkPackStatus === 'invalid' ? 'invalid pack metadata'
-                : status.ArtworkPackStatus === 'unavailable' ? 'pack metadata unavailable'
-                : 'unknown (no pack metadata)';
-            instance.view.querySelector('.tuneInArtworkPackName').textContent = pack;
-            instance.view.querySelector('.tuneInArtworkCustomCount').textContent = ' * ' + count;
-        }
+        renderArtworkPacks(instance, status);
         if (instance.refreshDefaultPending) {
             instance.refreshDefaultPending = false;
             instance.refreshSection.open = instance.refreshBusy ||
@@ -1203,9 +1239,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 setRefreshOutcome(instance, '', 'status unavailable');
                 instance.view.querySelector('.refreshStatus').textContent = 'Could not read refresh status. Retrying automatically.';
                 instance.view.querySelector('.refreshCategoryNote').textContent = '';
-                instance.view.querySelector('.tuneInArtworkFolder').textContent = 'Artwork folder unavailable';
-                instance.view.querySelector('.tuneInArtworkPackName').textContent = 'status unavailable';
-                instance.view.querySelector('.tuneInArtworkCustomCount').textContent = ' * image count unavailable';
+                renderArtworkPacks(instance, null);
                 if (typeof instance.settingsLocked !== 'boolean')
                     instance.lockError = 'Could not read the settings lock. Retrying automatically.';
                 refreshControls(instance, false);

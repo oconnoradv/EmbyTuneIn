@@ -482,6 +482,18 @@
         .tuneInArtworkPacks code {
             overflow-wrap: anywhere;
         }
+        .tuneInArtworkPacks table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .tuneInArtworkPacks th, .tuneInArtworkPacks td {
+            padding: .25em .5em .25em 0;
+            text-align: left;
+            vertical-align: top;
+        }
+        .tuneInArtworkPacks details {
+            margin-top: .75em;
+        }
         .tuneInArtworkSample {
             float: right;
             width: min(200px, 40%);
@@ -676,20 +688,34 @@
                         </label>
                         <p class="fieldDescription" id="tuneInDirectHlsHint">Off by default. Stations are played through the plugin's relay, which only connects to public internet addresses. A few stations offer only HLS (.m3u8) streams, which the relay cannot carry. Enabling this lets Emby fetch those streams directly, without the relay's address checks. Enable only if you need such a station and trust your network.</p>
                         <aside class="tuneInArtworkPacks">
-                            <figure class="tuneInArtworkSample">
-                                <figcaption>Cartoon sample</figcaption>
-                                <img src="https://raw.githubusercontent.com/oconnoradv/EmbyTuneInArt/main/docs/samples/cartoon.jpg" alt="Cartoon-style Punk, Smooth Jazz, Christmas Music and Classic Hip Hop genre artwork" loading="lazy" referrerpolicy="no-referrer">
-                            </figure>
-                            <strong>Optional Music Genre Artwork Packs</strong>
-                            <p>You may customize the music genre artwork used by Emby with a <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt/releases" target="_blank" rel="noopener noreferrer">pre-made pack</a> or use the <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt" target="_blank" rel="noopener noreferrer">EmbyTuneInArt tool</a> to build your own.</p>
-                            <div class="tuneInArtworkInstall">
+                            <strong>Custom Artwork Packs</strong>
+                            <table aria-label="Custom artwork packs">
+                                <thead><tr><th scope="col">Artwork</th><th scope="col">Installed pack</th><th scope="col">Images</th></tr></thead>
+                                <tbody>
+                                   <tr><th scope="row">Music genres</th><td><strong class="artworkGenresName">Loading...</strong></td><td class="artworkGenresImages">Loading...</td></tr>
+                                   <tr><th scope="row">Languages</th><td><strong class="artworkLanguagesName">Loading...</strong></td><td class="artworkLanguagesImages">Loading...</td></tr>
+                                   <tr><th scope="row">Locations</th><td><strong class="artworkLocationsName">Loading...</strong></td><td class="artworkLocationsImages">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                            <details>
+                                <summary>Details &amp; installation</summary>
+                                <figure class="tuneInArtworkSample">
+                                   <figcaption>Cartoon sample</figcaption>
+                                   <img src="https://raw.githubusercontent.com/oconnoradv/EmbyTuneInArt/main/docs/samples/cartoon.jpg" alt="Cartoon-style Punk, Smooth Jazz, Christmas Music and Classic Hip Hop genre artwork" loading="lazy" referrerpolicy="no-referrer">
+                                </figure>
+                                <p>Customize artwork with a <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt/releases" target="_blank" rel="noopener noreferrer">pre-made pack</a> or use the <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt" target="_blank" rel="noopener noreferrer">EmbyTuneInArt tool</a> to build your own.</p>
                                 <ol>
-                                    <li>Place the edited files into:<br><code class="tuneInArtworkFolder">Loading artwork folder...</code></li>
-                                    <li>Run the Music library refresh via Catalog Refresh.</li>
+                                   <li>Place the files in the corresponding server folder:
+                                       <ul>
+                                           <li>Music genres: <code class="artworkGenresPath">Loading...</code> <span class="artworkGenresChanges"></span></li>
+                                           <li>Languages: <code class="artworkLanguagesPath">Loading...</code> <span class="artworkLanguagesChanges"></span></li>
+                                           <li>Locations: <code class="artworkLocationsPath">Loading...</code> <span class="artworkLocationsChanges"></span></li>
+                                       </ul>
+                                   </li>
+                                   <li>Run Catalog Refresh for the affected categories.</li>
                                 </ol>
                                 <p>Include <code>tunein-artwork.json</code> to identify the pack.</p>
-                                <p class="tuneInArtworkCount" role="status">Artwork pack installed in this Emby Instance: <strong class="tuneInArtworkPackName">Loading...</strong><span class="tuneInArtworkCustomCount"></span></p>
-                            </div>
+                            </details>
                         </aside>
                     </details>
                 </fieldset>
