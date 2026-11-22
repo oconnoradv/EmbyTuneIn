@@ -295,6 +295,16 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
+        internal bool UpdateLibraryArtwork(CancellationToken token)
+        {
+            if (serverHost == null || library == null) return false;
+            var channel = library.GetItemList(new InternalItemsQuery { IncludeItemTypes = new[] { nameof(Channel) } }, token)
+                .OfType<Channel>().SingleOrDefault(item => string.Equals(item.Name, Name, StringComparison.Ordinal));
+            if (channel == null) return false;
+            UpdateLibraryArtwork(channel);
+            return true;
+        }
+
         private void UpdateLibraryArtwork(Channel channel)
         {
             const string provider = "TuneInLibraryArtwork";

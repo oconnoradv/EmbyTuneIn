@@ -173,6 +173,27 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public void StartupReplacesOutdatedLibraryArtworkWithoutAnImport()
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true };
+            var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("Unexpected provider request."));
+            var library = DispatchProxy.Create<ILibraryManager, LibraryProxy>();
+            var proxy = (LibraryProxy)library;
+            var channel = new TuneInChannel(directory, serverHost: DispatchProxy.Create<IServerApplicationHost, HostProxy>(), library: library);
+
+            Assert.False(channel.UpdateLibraryArtwork(CancellationToken.None));
+            var item = new Channel { InternalId = 10, Name = "TuneIn" };
+            item.SetImage(new ItemImageInfo { Type = ImageType.Primary, Path = "old.png" }, 0);
+            item.SetProviderId("TuneInLibraryArtwork", "1");
+            proxy.Channels = new BaseItem[] { new Channel { InternalId = 11, Name = "Other" }, item };
+
+            Assert.True(channel.UpdateLibraryArtwork(CancellationToken.None));
+            Assert.True(channel.UpdateLibraryArtwork(CancellationToken.None));
+            Assert.Single(proxy.Updated, updated => updated == item);
+            Assert.EndsWith("/TuneIn/CategoryArtwork/channel?v=2", item.GetImagePath(ImageType.Primary, 0));
+        }
+
+        [Fact]
         public void MusicGenreFoldersUseInstalledArtworkPackCards()
         {
             var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tunein-art-" + Guid.NewGuid().ToString("N"));
@@ -317,6 +338,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             public BaseItem Root { get; set; }
             public BaseItem Parent { get; set; }
             public BaseItem[] Descendants { get; set; } = Array.Empty<BaseItem>();
+            public BaseItem[] Channels { get; set; } = Array.Empty<BaseItem>();
             public List<BaseItem> Updated { get; } = new List<BaseItem>();
             public bool FailNextUpdate { get; set; }
             public InternalItemsQuery LastInventoryQuery { get; private set; }
@@ -325,6 +347,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 if (method.Name == "GetItemList")
                 {
                     var query = (InternalItemsQuery)args[0];
+                    if (query.IncludeItemTypes?.Contains(nameof(Channel)) == true) return Channels;
                     if (query.ExternalId != null) return Root == null ? Array.Empty<BaseItem>() : new[] { Root };
                     Assert.Equal(new[] { Root.InternalId }, query.ParentIds);
                     if (query.IsFolder == false) LastInventoryQuery = query;

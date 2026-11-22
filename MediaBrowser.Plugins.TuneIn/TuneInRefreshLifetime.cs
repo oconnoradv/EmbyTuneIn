@@ -14,6 +14,8 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         private readonly TuneInRefresh refresh;
         private readonly ILogger logger;
+        private readonly IChannelManager manager;
+        private bool libraryArtworkCurrent;
         private Timer timer;
 
         public TuneInRefreshLifetime(IHttpClient client, IApplicationHost host, IApplicationPaths paths,
@@ -21,13 +23,23 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             refresh = TuneInRefreshService.GetShared(client, host, paths, manager, logManager, library);
             logger = logManager.GetLogger(nameof(TuneInRefreshLifetime));
+            this.manager = manager;
         }
 
         public void Run() => timer = new Timer(_ =>
         {
+            UpdateLibraryArtwork();
             try { refresh.CheckSchedules(); }
             catch (Exception error) { logger.Error("TuneIn could not check refresh schedules ({0}).", error.GetType().Name); }
         }, null, TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(1));
+
+        // Plugin updates replace the library image without waiting for a catalog import.
+        private void UpdateLibraryArtwork()
+        {
+            if (libraryArtworkCurrent) return;
+            try { libraryArtworkCurrent = manager.GetChannel<TuneInChannel>()?.UpdateLibraryArtwork(CancellationToken.None) == true; }
+            catch (Exception error) { logger.Error("TuneIn could not update its library artwork ({0}).", error.GetType().Name); }
+        }
 
         public void Dispose()
         {
