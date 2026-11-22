@@ -225,7 +225,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         {
             var config = Ready();
             config.ImportDeadlineHours = hours;
-            Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+            var error = Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+            Assert.Equal("TuneIn import deadline must be between 1 and 100 hours.", error.Message);
         }
 
         [Fact]

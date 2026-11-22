@@ -281,7 +281,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 throw new ArgumentException("TuneIn API request interval must be between 1 and 30 seconds.");
             if (value.ImportDeadlineHours < PluginConfiguration.MinImportDeadlineHours
                 || value.ImportDeadlineHours > PluginConfiguration.MaxImportDeadlineHours)
-                throw new ArgumentException("TuneIn import deadline must be between 1 and 10 hours.");
+                throw new ArgumentException($"TuneIn import deadline must be between {PluginConfiguration.MinImportDeadlineHours} and {PluginConfiguration.MaxImportDeadlineHours} hours.");
             if (value.DiscoveryDeadlineHours < PluginConfiguration.MinDiscoveryDeadlineHours
                 || value.DiscoveryDeadlineHours > PluginConfiguration.MaxDiscoveryDeadlineHours)
                 throw new ArgumentException("TuneIn discovery deadline must be between 1 and 10 hours.");
