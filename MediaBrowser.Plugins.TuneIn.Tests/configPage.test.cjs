@@ -228,7 +228,7 @@ test('Catalog Refresh uses the native submit theme for its actions and inherits 
 
 test('main settings, refresh, and maintenance share one width container', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    assert.match(html, /<div class="auto-center tuneInPanelLayout">\s*<form>[\s\S]*?<\/form>\s*<details class="tuneInSection tuneInNeutralPanel tuneInRefresh"/);
+    assert.match(html, /<div class="auto-center tuneInPanelLayout">\s*<div class="tuneInHero" hidden>[\s\S]*?<\/div>\s*<form>[\s\S]*?<\/form>\s*<details class="tuneInSection tuneInNeutralPanel tuneInRefresh"/);
     assert.match(html, /<\/details>\s*<details class="tuneInSection tuneInNeutralPanel">\s*<summary class="maintenanceSummary">/);
     assert.match(html, /\.tuneInPanelLayout\s*\{\s*max-width:\s*80ch/);
     assert.match(html, /\.tuneInActivity\s*\{[^}]*animation:\s*tuneInActivityPulse/);

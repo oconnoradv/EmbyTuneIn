@@ -467,10 +467,100 @@
             font-size: .85em;
             opacity: .7;
         }
-    </style>
-    <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
+        .tuneInHero {
+            position: relative;
+            max-width: 40rem;
+            aspect-ratio: 16 / 9;
+            margin: 0 auto 1.5em;
+            border-radius: .75em;
+            overflow: hidden;
+            background: #05050f;
+        }
+        .tuneInHero[hidden] {
+            display: none;
+        }
+        .tuneInHeroArt {
+            display: block;
+            width: 100%;
+            height: 100%;
+            transition: transform .6s ease, filter .6s ease;
+        }
+        .tuneInHeroWave {
+            position: absolute;
+            left: 32.8%;
+            top: 41.7%;
+            width: 12%;
+            aspect-ratio: 1;
+            border: 2px solid #18d6cc;
+            border-radius: 50%;
+            opacity: 0;
+            transform: translate(-50%, -50%) scale(.3);
+            pointer-events: none;
+        }
+        .tuneInHeroWave + .tuneInHeroWave {
+            border-color: #ff3fc8;
+        }
+        .tuneInHeroPanel {
+            position: absolute;
+            left: 56.25%;
+            top: 23.33%;
+            width: 36.72%;
+            height: 41.67%;
+            border-radius: 5.5% / 8.7%;
+            overflow: hidden;
+            pointer-events: none;
+        }
+        .tuneInHeroPanel::before {
+            content: "";
+            position: absolute;
+            inset: -20% auto -20% 0;
+            width: 35%;
+            background: linear-gradient(100deg, transparent, rgba(255, 255, 255, .35), transparent);
+            transform: translateX(-150%) skewX(-15deg);
+        }
+        .tuneInHero:hover .tuneInHeroArt {
+            transform: scale(1.03);
+            filter: brightness(1.12) saturate(1.15);
+        }
+        .tuneInHero:hover .tuneInHeroWave {
+            animation: tuneInHeroWave 1.8s ease-out infinite;
+        }
+        .tuneInHero:hover .tuneInHeroWave + .tuneInHeroWave {
+            animation-delay: .9s;
+        }
+        .tuneInHero:hover .tuneInHeroPanel {
+            animation: tuneInHeroGlow 1.6s ease-in-out infinite alternate;
+        }
+        .tuneInHero:hover .tuneInHeroPanel::before {
+            animation: tuneInHeroShine 1.2s ease-in-out .15s;
+        }
+        @keyframes tuneInHeroWave {
+            from { opacity: .9; transform: translate(-50%, -50%) scale(.3); }
+            to { opacity: 0; transform: translate(-50%, -50%) scale(5); }
+        }
+        @keyframes tuneInHeroGlow {
+            from { box-shadow: 0 0 0 rgba(24, 214, 204, 0); }
+            to { box-shadow: 0 0 1.5em rgba(24, 214, 204, .75), inset 0 0 1em rgba(24, 214, 204, .25); }
+        }
+        @keyframes tuneInHeroShine {
+            to { transform: translateX(400%) skewX(-15deg); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .tuneInHeroArt { transition: none; }
+            .tuneInHero:hover .tuneInHeroArt { transform: none; }
+            .tuneInHero:hover .tuneInHeroWave,
+            .tuneInHero:hover .tuneInHeroPanel,
+            .tuneInHero:hover .tuneInHeroPanel::before { animation: none; }
+        }
+    </style>    <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
 
         <div class="auto-center tuneInPanelLayout">
+        <div class="tuneInHero" hidden>
+            <img class="tuneInHeroArt" alt="TuneIn library artwork, Powered by TuneIn" width="1280" height="720" decoding="async">
+            <span class="tuneInHeroWave" aria-hidden="true"></span>
+            <span class="tuneInHeroWave" aria-hidden="true"></span>
+            <span class="tuneInHeroPanel" aria-hidden="true"></span>
+        </div>
         <form>
             <p class="tuneInPluginVersion" hidden></p>
             <p class="status" role="status" aria-live="polite"></p>

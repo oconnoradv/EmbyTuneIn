@@ -1463,6 +1463,16 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         });
     }
 
+    function showLibraryArtwork(view) {
+        var hero = view.querySelector('.tuneInHero');
+        var art = hero && hero.querySelector('.tuneInHeroArt');
+        if (!art || art.getAttribute('src') || typeof ApiClient.accessToken !== 'function') return;
+        art.onload = function () { hero.hidden = false; };
+        art.onerror = function () { hero.hidden = true; };
+        // An img request cannot send Emby's auth header, so pass the session token like Emby's own image URLs.
+        art.src = ApiClient.getUrl('TuneIn/CategoryArtwork/channel', { v: '2', api_key: ApiClient.accessToken() });
+    }
+
     Object.assign(View.prototype, BaseView.prototype);
 
     View.prototype.onResume = function () {
@@ -1470,6 +1480,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var instance = this;
         var epoch = instance.viewEpoch = (instance.viewEpoch || 0) + 1;
         instance.refreshVisible = true;
+        showLibraryArtwork(instance.view);
         instance.refreshDefaultPending = true;
         instance.refreshSection.open = false;
         instance.selectionDeletionPending = false;
