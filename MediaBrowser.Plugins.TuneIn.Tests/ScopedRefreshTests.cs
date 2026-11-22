@@ -168,6 +168,48 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public async Task MoreStationsPagesAreListedInTheirGenreInsteadOfAsFolders()
+        {
+            var directory = new TuneInDirectory(() => new PluginConfiguration(), (_, _) => throw new InvalidOperationException());
+            var channel = new TuneInChannel(directory);
+            var root = new ChannelItemInfo { Id = "root", Name = "Music", Type = ChannelItemType.Folder };
+            ChannelItemInfo Item(string id, ChannelItemType type) => new ChannelItemInfo { Id = id, Name = id, Type = type };
+            var graph = new Dictionary<string, ChannelItemResult>
+            {
+                ["root"] = new ChannelItemResult { Items = new List<ChannelItemInfo> { Item("genre", ChannelItemType.Folder) } },
+                ["genre"] = new ChannelItemResult { Items = new List<ChannelItemInfo>
+                    { Item("s1", ChannelItemType.Media), Item("sub", ChannelItemType.Folder), Item("page-1", ChannelItemType.Folder) } },
+                ["sub"] = new ChannelItemResult { Items = new List<ChannelItemInfo> { Item("s4", ChannelItemType.Media) } },
+                ["page-1"] = new ChannelItemResult { Items = new List<ChannelItemInfo>
+                    { Item("s2", ChannelItemType.Media), Item("page-2", ChannelItemType.Folder) } },
+                ["page-2"] = new ChannelItemResult { Items = new List<ChannelItemInfo>
+                    { Item("s1", ChannelItemType.Media), Item("s3", ChannelItemType.Media) } }
+            };
+            var staged = await TuneInStagedImport.DiscoverAsync(channel, root,
+                new TuneInCatalogueSession(null, TimeSpan.FromMinutes(1), () => DateTime.UtcNow), CancellationToken.None,
+                (id, _, _, _) => Task.FromResult(graph[id]), null, null,
+                (parent, child) => child.StartsWith("page", StringComparison.Ordinal) || child == "old-page");
+            var snapshot = staged.CreateSnapshot("music");
+            Assert.Equal(new[] { "genre", "root", "sub" }, snapshot.Folders.Select(folder => folder.Id));
+            Assert.Equal(new[] { "s1", "sub", "s2", "s3" },
+                snapshot.Folders.Single(folder => folder.Id == "genre").Items.Select(item => item.Id));
+
+            var old = new TuneInCategorySnapshot { Category = "music", RootId = "root" };
+            old.Folders.Add(new TuneInFolderSnapshot { Id = "root", Items = new List<TuneInItemSnapshot>
+                { new TuneInItemSnapshot { Id = "genre", Name = "genre", Type = "Folder", ContentType = "Song", MediaType = "Audio" } } });
+            old.Folders.Add(new TuneInFolderSnapshot { Id = "genre", Items = new List<TuneInItemSnapshot>
+                { new TuneInItemSnapshot { Id = "old-page", Name = "More Stations", Type = "Folder", ContentType = "Song", MediaType = "Audio" } } });
+            old.Folders.Add(new TuneInFolderSnapshot { Id = "old-page", Items = new List<TuneInItemSnapshot>
+                { new TuneInItemSnapshot { Id = "s9", Name = "s9", Type = "Media", ContentType = "Song", MediaType = "Audio" } } });
+            var merged = staged.MergeRetainedCategory("music", old, id => id, false);
+            Assert.DoesNotContain(merged.Folders, folder => folder.Id.Contains("page"));
+            Assert.Contains(merged.Folders.Single(folder => folder.Id == "genre").Items, item => item.Id == "s9");
+            var import = TuneInStagedImport.ForChannel(new[] { root }, new[] { merged }, CancellationToken.None, null, null);
+            ReadStagedTree(import, CancellationToken.None);
+            import.Verify();
+        }
+
+        [Fact]
         public async Task RetentionKeepsMissingStationsAndDeepFoldersAndUpdatesMetadataWithoutMovingIds()
         {
             var directory = new TuneInDirectory(() => new PluginConfiguration(), (_, _) => throw new InvalidOperationException());

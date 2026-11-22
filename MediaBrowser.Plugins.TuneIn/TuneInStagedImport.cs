@@ -35,6 +35,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private LinkedList<TuneInImportFolderDetails> pendingOrder;
         private int stationEntriesTotal, stationEntriesServed, subfolderEntriesTotal, subfolderEntriesServed;
         private int? lastFolderStationEntries, lastFolderSubfolderEntries;
+        private Func<string, string, bool> isForwardPage;
 
         internal ChannelItemInfo Root { get; private set; }
         internal int Count => folders.Count;
@@ -65,7 +66,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 throw new ArgumentNullException("A complete TuneIn discovery context is required.");
             if (maxStationCount.HasValue && (maxStationCount < 1 || stationId == null) || traversalDepthLimit < 0)
                 throw new ArgumentException("Valid discovery limits and station identity lookup are required.");
-            var staged = new TuneInStagedImport(token, report, validate) { Root = root };
+            var staged = new TuneInStagedImport(token, report, validate) { Root = root, isForwardPage = isForwardPage };
             var pending = new Queue<KeyValuePair<string, int>>();
             var visited = new HashSet<string>(StringComparer.Ordinal);
             pending.Enqueue(new KeyValuePair<string, int>(root.Id, 0));
@@ -357,9 +358,54 @@ namespace MediaBrowser.Plugins.TuneIn
             MediaType = item.MediaType, ImageUrl = item.ImageUrl, ForceUpdate = item.ForceUpdate
         };
 
+        // Emby shows TuneIn's More Stations/Shows pages as folders; list their entries in the paged folder instead.
+        private Dictionary<string, ChannelItemResult> FoldForwardPages(Dictionary<string, ChannelItemResult> source)
+        {
+            if (isForwardPage == null || Root == null || !source.ContainsKey(Root.Id)) return source;
+            var result = new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal);
+            var folded = new HashSet<string>(StringComparer.Ordinal);
+            var pending = new Queue<string>();
+            pending.Enqueue(Root.Id);
+            while (pending.Count != 0)
+            {
+                token.ThrowIfCancellationRequested();
+                var id = pending.Dequeue();
+                if (result.ContainsKey(id)) continue;
+                var items = new List<ChannelItemInfo>();
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                var pages = new HashSet<string>(StringComparer.Ordinal) { id };
+                var queue = new Queue<string>();
+                queue.Enqueue(id);
+                while (queue.Count != 0)
+                {
+                    var page = queue.Dequeue();
+                    foreach (var item in source[page].Items)
+                    {
+                        if (item.Type == ChannelItemType.Folder && source.ContainsKey(item.Id)
+                            && !pages.Contains(item.Id) && isForwardPage(page, item.Id))
+                        {
+                            pages.Add(item.Id);
+                            folded.Add(item.Id);
+                            queue.Enqueue(item.Id);
+                        }
+                        else if (seen.Add(item.Id))
+                        {
+                            items.Add(item);
+                            if (item.Type == ChannelItemType.Folder && source.ContainsKey(item.Id)) pending.Enqueue(item.Id);
+                        }
+                    }
+                }
+                result.Add(id, new ChannelItemResult { Items = items });
+            }
+            foreach (var folder in source)
+                if (!result.ContainsKey(folder.Key) && !folded.Contains(folder.Key)) result.Add(folder.Key, folder.Value);
+            return result;
+        }
+
         private TuneInCategorySnapshot CreateSnapshot(string category,
             Dictionary<string, ChannelItemResult> source, bool discoveryPartial)
         {
+            source = FoldForwardPages(source);
             var listings = source.OrderBy(folder => folder.Key, StringComparer.Ordinal)
                 .Select(folder => new TuneInFolderSnapshot
                 {

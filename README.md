@@ -223,7 +223,7 @@ invalidates that old scope. Retained totals can exceed Max Station Count, and
 older deeper branches are preserved.
 
 The import asks Emby to traverse the actual merged tree depth, including
-retained branches and forward pagination folders. It is never clamped to the
+retained branches. It is never clamped to the
 new discovery depth. If Emby leaves folders unread, the refresh remains incomplete
 and the diagnostic report records the served and expected folder counts and
 the requested refresh level.
@@ -299,6 +299,11 @@ category, including By Language. Links to a category known to belong to a
 different genre, or any other unexpected jump, are not followed. A refresh
 counts those as skipped entries, so the result is **Partial** and saved
 stations are retained, rather than failing.
+
+Stations and shows from followed **More Stations** or **More Shows** pages are
+listed directly in the genre or folder that links to them; the library does
+not show a separate **More Stations** folder. A refresh also folds any page
+folder imported by an earlier build into its parent folder.
 
 ### Status and station counts
 
