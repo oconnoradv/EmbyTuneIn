@@ -748,8 +748,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (result.Items.Count > 2000) throw new InvalidDataException("Selector response exceeds 2000 choices.");
             }
             result.Items = result.Items.GroupBy(i => i.Id).Select(g => g.First()).ToList();
-            result.Warning = omitted ? "Some TuneIn links could not be shown; this branch is incomplete."
-                : result.ContainsStationMetadata ? "This branch includes stations, which are not selection options." : null;
+            result.Warning = omitted ? "Some TuneIn links could not be shown; this branch is incomplete." : null;
             if (catalogue != null)
             {
                 if (omitted) throw new InvalidDataException("TuneIn language validation returned incomplete links.");
@@ -809,8 +808,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 Items = items.Values.ToList(),
                 ContainsStationMetadata = containsStations,
-                Warning = omitted ? "Some TuneIn links could not be shown; this branch is incomplete."
-                    : containsStations ? "This branch includes stations, which are not selection options." : null
+                Warning = omitted ? "Some TuneIn links could not be shown; this branch is incomplete." : null
             };
         }
 

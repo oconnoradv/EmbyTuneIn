@@ -371,7 +371,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             await Assert.ThrowsAsync<ArgumentException>(() => directory.SelectAsync(category, selected, false, Token));
             var choices = await directory.SelectAsync(category, null, false, Token);
             Assert.True(choices.ContainsStationMetadata);
-            Assert.NotNull(choices.Warning);
+            Assert.Equal("Some TuneIn links could not be shown; this branch is incomplete.", choices.Warning);
             Assert.Equal(new[] { other, selected }.OrderBy(id => id), choices.Items.Select(item => item.Id).OrderBy(id => id));
             Assert.All(choices.Items, item => { Assert.True(item.CanSelect); Assert.False(item.CanExpand); });
             await directory.SelectAsync(category, null, false, Token);
