@@ -824,6 +824,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             var row = rows.get(item.Category);
             row.row.setAttribute('data-outcome', categoryOutcome(state));
             var text = item.Name + ': ' + state;
+            if (item.LimitReason && /^Limited\b/.test(state)) text += ' - ' + item.LimitReason;
             if (!status.Busy && item.Category === status.DirtyCategory) text += ' (reconciliation needed)';
             var metrics = item.StationCounts || {};
             if (item.Category === 'language' && state === 'Imported' && metrics.AvailableStations === 0 && !metrics.AvailablePartial)

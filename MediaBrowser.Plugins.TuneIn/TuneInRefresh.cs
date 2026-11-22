@@ -90,6 +90,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public string Category { get; set; }
         public string Name { get; set; }
         public string State { get; set; }
+        public string LimitReason { get; set; }
         public TuneInStationCounts StationCounts { get; set; }
     }
 
@@ -138,6 +139,7 @@ namespace MediaBrowser.Plugins.TuneIn
             new Dictionary<string, (int, DateTime)>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> categoryStates = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, TuneInStationCounts> categoryCounts = new Dictionary<string, TuneInStationCounts>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> categoryLimitReasons = new Dictionary<string, string>(StringComparer.Ordinal);
         private string categoryStateKey;
         private string dirtyCategory;
         private CommittedCatalogue committed = new CommittedCatalogue(null,
@@ -259,6 +261,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     Name = TuneInBrowsing.CategoryName(category),
                     State = copy.Busy && copy.State == "Running" && copy.Category == category ? copy.Phase :
                         categoryStates.TryGetValue(category, out var state) ? state : "No recorded refresh",
+                    LimitReason = categoryStates.TryGetValue(category, out var limitedState) && limitedState.StartsWith("Limited", StringComparison.Ordinal)
+                        && categoryLimitReasons.TryGetValue(category, out var reason) ? reason : null,
                     StationCounts = categoryCounts.TryGetValue(category, out var counts) ? CountsForStatus(counts) : null
                 }).ToArray();
                 Volatile.Write(ref lastStatus, copy);
@@ -763,6 +767,7 @@ namespace MediaBrowser.Plugins.TuneIn
             if (categoryStateKey == snapshot.Key) return;
             categoryStates.Clear();
             categoryCounts.Clear();
+            categoryLimitReasons.Clear();
             dirtyCategory = null;
             categoryStateKey = snapshot.Key;
             try
@@ -774,6 +779,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     categoryStates[category.Category] = category.DiscoveryPartial ? "Partial (applied)"
                         : category.DiscoveryLimitReason != null ? "Limited (imported)" : "Imported";
+                    categoryLimitReasons[category.Category] = category.DiscoveryLimitReason;
                     if (category.StationCounts != null)
                         categoryCounts[category.Category] = category.StationCounts.Copy();
                 }
@@ -1402,8 +1408,11 @@ namespace MediaBrowser.Plugins.TuneIn
                         pendingImport = null;
                         lock (gate)
                             foreach (var category in appliedCategories)
+                            {
                                 categoryStates[category] = listings[category].DiscoveryPartial ? "Partial (applied)"
                                     : listings[category].DiscoveryLimitReason != null ? "Limited (imported)" : "Imported";
+                                categoryLimitReasons[category] = listings[category].DiscoveryLimitReason;
+                            }
                     }
 
                     if (didImport)
@@ -1435,8 +1444,11 @@ namespace MediaBrowser.Plugins.TuneIn
                         if (!didImport)
                             foreach (var category in categories.Where(category => !progressive
                                 || completed.Contains(category) && !progressivelyApplied.Contains(category)))
+                            {
                                 categoryStates[category] = partial.Contains(category) ? "Partial (unchanged)"
                                     : listings[category].DiscoveryLimitReason != null ? "Limited (unchanged)" : "Unchanged";
+                                categoryLimitReasons[category] = listings[category].DiscoveryLimitReason;
+                            }
                         status.CategoriesSkipped = didImport ? 0 : completed.Count - progressivelyApplied.Count;
                     }
 

@@ -626,6 +626,22 @@ test('limited discovery is not displayed as confirmed full success', async () =>
     assert.match(app.elements['.refreshOverall'].textContent, /limited discovery/);
 });
 
+test('limited category rows are orange and explain which discovery limit was reached', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableMusic: true });
+    app.refresh[0].resolve({ State: 'Limited', SettingsLocked: false, Categories: [{ Category: 'music', Name: 'Music',
+        State: 'Limited (imported)', LimitReason: 'TuneIn traversal depth limit 7 reached (including pagination)' }] });
+    await visit;
+    const row = app.elements['.tuneInRefreshCategories'].childNodes[0];
+    assert.equal(row.attributes['data-outcome'], 'Limited');
+    assert.equal(row.childNodes[0].textContent,
+        'Music: Limited (imported) - TuneIn traversal depth limit 7 reached (including pagination)');
+    const html = fs.readFileSync(path.join(__dirname, '..', 'MediaBrowser.Plugins.TuneIn', 'Configuration', 'configPage.html'), 'utf8');
+    assert.ok(html.includes('.tuneInRefreshCategories [data-outcome="Limited"]'));
+});
+
 for (const setting of ['Import', 'Discovery']) {
 test(`${setting.toLowerCase()} deadline loads saved values, validates whole hours, and saves both bounds`, async () => {
     const app = harness();

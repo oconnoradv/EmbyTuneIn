@@ -2846,6 +2846,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal(1, imports);
                 Assert.Equal(depth == 5 ? music ? 5 : 6 : 12, fetches);
                 if (depth == 5) Assert.Contains("depth limit 5", new TuneInRefreshStore(path).Read().Categories.Single().DiscoveryLimitReason);
+                var limitReason = refresh.Status().Categories.Single(item => item.Category == category).LimitReason;
+                if (depth == 5) Assert.Contains("depth limit 5", limitReason);
+                else Assert.Null(limitReason);
             }
             finally { File.Delete(path); }
         }
