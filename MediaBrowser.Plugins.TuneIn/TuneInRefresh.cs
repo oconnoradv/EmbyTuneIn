@@ -428,6 +428,9 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
+        internal TuneInCleanupStationSearch SearchCleanupStations(string name) =>
+            libraryCleanup.SearchStations(directory.Snapshot(), name);
+
         internal TuneInCleanupPreview PreviewCleanup(string category = null, string stationReference = null)
         {
             lock (gate)

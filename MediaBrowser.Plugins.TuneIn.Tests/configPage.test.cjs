@@ -59,7 +59,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.settingsLockState', '.settingsLockStatus', '.refreshQueueNote', '.tuneInRefreshRecoveryDialog', '.refreshRecoveryText',
         '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
         '.cleanupConfirm', '.cleanupCancel', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.cleanupScope', '.backupStart',
-        '.backupStatus', '.cleanupBackupVerified', '.cleanupStationReference', '.cleanupStationFields', '#tuneInReportHint']) elements[name] = new Element();
+        '.backupStatus', '.cleanupBackupVerified', '.cleanupStationReference', '.cleanupStationFields', '.cleanupStationSearch', '.cleanupStationSearchStatus', '.cleanupStationResults', '#tuneInReportHint']) elements[name] = new Element();
     for (const [section, summary, open] of [
         ['.globalSection', '.globalSummary', true],
         ['.categoriesSection', '.categoriesSummary', true],
@@ -566,6 +566,51 @@ test('station maintenance previews an exact reference and editing it invalidates
     assert.equal(app.instance.cleanupPreview, null);
     assert.equal(app.elements['.cleanupConfirmation'].hidden, true);
     assert.equal(app.elements['.cleanupConfirm'].disabled, true);
+});
+
+test('station maintenance finds entries by name and previews the chosen placement', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true });
+    app.refresh[0].resolve({ SettingsLocked: false, Categories: [{ Category: 'talk', Name: 'Talk' }] });
+    await visit;
+    await settle();
+    await open(app.elements['.maintenanceSection']);
+    app.elements['.cleanupScope'].value = 'station';
+    app.elements['.cleanupScope'].handlers.change();
+    const reference = app.elements['.cleanupStationReference'];
+    reference.value = 'KQED';
+    reference.handlers.input();
+    assert.equal(app.elements['.cleanupPreview'].disabled, true);
+    assert.equal(app.elements['.cleanupStationSearch'].disabled, false);
+    let prevented = false;
+    const search = reference.handlers.keydown({ key: 'Enter', preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+    assert.equal(app.cleanup[0].options.url.route, 'TuneIn/Cleanup/Stations');
+    assert.equal(app.cleanup[0].options.url.params.Name, 'KQED');
+    app.cleanup[0].resolve({ Matches: [
+        { Id: '31', Name: 'KQED <b>', Path: 'Talk › News' },
+        { Id: '32', Name: 'KQED', Path: 'Local Radio' }
+    ] });
+    await search;
+    const matches = app.elements['.cleanupStationResults'].childNodes;
+    assert.equal(matches.length, 2);
+    assert.equal(matches[0].textContent, 'KQED <b>Talk › News');
+    assert.equal(app.elements['.cleanupPreview'].disabled, true);
+    matches[1].handlers.click();
+    assert.equal(matches[1].attributes['aria-pressed'], 'true');
+    assert.equal(matches[0].attributes['aria-pressed'], 'false');
+    assert.equal(app.elements['.cleanupPreview'].disabled, false);
+    const preview = app.elements['.cleanupPreview'].handlers.click();
+    assert.deepEqual(JSON.parse(app.cleanup[1].options.data), { StationReference: '32' });
+    app.cleanup[1].resolve({ Token: 't', Scope: 'Local Radio', Folders: 0, Stations: 1, StationName: 'KQED', StationReference: '32' });
+    await preview;
+    assert.equal(app.elements['.cleanupConfirmation'].hidden, false);
+    reference.value = 'KQ';
+    reference.handlers.input();
+    assert.equal(app.elements['.cleanupStationResults'].childNodes.length, 0);
+    assert.equal(app.elements['.cleanupConfirmation'].hidden, true);
+    assert.equal(app.elements['.cleanupPreview'].disabled, true);
 });
 
 test('limited discovery is not displayed as confirmed full success', async () => {

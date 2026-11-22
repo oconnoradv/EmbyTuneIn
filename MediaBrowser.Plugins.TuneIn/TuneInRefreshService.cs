@@ -51,6 +51,13 @@ namespace MediaBrowser.Plugins.TuneIn
         public string StationReference { get; set; }
     }
 
+    [Route("/TuneIn/Cleanup/Stations", "GET")]
+    [Authenticated(Roles = "Admin")]
+    public sealed class SearchTuneInCleanupStations : IReturn<TuneInCleanupStationSearch>
+    {
+        public string Name { get; set; }
+    }
+
     [Route("/TuneIn/Cleanup/Start", "POST")]
     [Authenticated(Roles = "Admin")]
     public sealed class StartTuneInCleanup : IReturn<TuneInRefreshStatus>
@@ -123,6 +130,12 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             EnsureAdmin();
             return refresh.PreviewCleanup(request.Category, request.StationReference);
+        }
+
+        public TuneInCleanupStationSearch Get(SearchTuneInCleanupStations request)
+        {
+            EnsureAdmin();
+            return refresh.SearchCleanupStations(request.Name);
         }
 
         public TuneInRefreshStatus Post(StartTuneInCleanup request)

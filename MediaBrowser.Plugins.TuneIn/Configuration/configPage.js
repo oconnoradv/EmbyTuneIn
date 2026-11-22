@@ -896,6 +896,79 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.cleanupBackupVerified').checked = false;
     }
 
+    function clearStationMatches(instance) {
+        instance.cleanupStation = null;
+        instance.stationSearchGeneration = (instance.stationSearchGeneration || 0) + 1;
+        instance.stationSearching = false;
+        instance.view.querySelector('.cleanupStationResults').textContent = '';
+        instance.view.querySelector('.cleanupStationSearchStatus').textContent = '';
+    }
+
+    function stationReferenceLike(text) {
+        return /^\d+$/.test(text) || /^[0-9a-f]{8}-?([0-9a-f]{4}-?){3}[0-9a-f]{12}$/i.test(text) || /^https?:\/\//i.test(text);
+    }
+
+    function searchCleanupStations(instance) {
+        var view = instance.view;
+        var name = view.querySelector('.cleanupStationReference').value.trim();
+        if (!instance.refreshVisible || !instance.maintenanceSection.open ||
+            view.querySelector('.cleanupStationSearch').disabled) return;
+        clearCleanupPreview(instance);
+        clearStationMatches(instance);
+        var epoch = instance.viewEpoch;
+        var generation = instance.stationSearchGeneration;
+        var status = view.querySelector('.cleanupStationSearchStatus');
+        var results = view.querySelector('.cleanupStationResults');
+        instance.stationSearching = true;
+        status.textContent = 'Searching TuneIn station entries...';
+        refreshControls(instance, instance.refreshAvailable);
+        return ApiClient.ajax({
+            type: 'GET', dataType: 'json', url: ApiClient.getUrl('TuneIn/Cleanup/Stations', { Name: name })
+        }).then(function (result) {
+            if (epoch !== instance.viewEpoch || generation !== instance.stationSearchGeneration) return;
+            var matches = result && result.Matches || [];
+            status.textContent = !matches.length ? 'No TuneIn station entries match "' + name + '".'
+                : (result.More ? 'Showing the first ' + matches.length + ' matches; enter more of the name to narrow them.'
+                    : matches.length + (matches.length === 1 ? ' match' : ' matches') + '. Choose the entry to delete.');
+            var buttons = [];
+            matches.forEach(function (match) {
+                var button = document.createElement('button');
+                button.type = 'button';
+                button.setAttribute('is', 'emby-button');
+                button.setAttribute('role', 'listitem');
+                button.setAttribute('aria-pressed', 'false');
+                button.className = 'raised cleanupStationMatch';
+                var title = document.createElement('span');
+                title.textContent = match.Name;
+                var where = document.createElement('span');
+                where.className = 'cleanupStationMatchPath';
+                where.textContent = match.Path;
+                button.appendChild(title);
+                button.appendChild(where);
+                button.addEventListener('click', function () {
+                    if (epoch !== instance.viewEpoch || generation !== instance.stationSearchGeneration || button.disabled) return;
+                    clearCleanupPreview(instance);
+                    instance.cleanupStation = match;
+                    buttons.forEach(function (other) {
+                        other.setAttribute('aria-pressed', other === button ? 'true' : 'false');
+                    });
+                    status.textContent = 'Selected "' + match.Name + '" in ' + match.Path + '. Select Preview cleanup.';
+                    refreshControls(instance, instance.refreshAvailable);
+                });
+                buttons.push(button);
+                results.appendChild(button);
+            });
+            $(results).trigger('create');
+        }).catch(function () {
+            if (epoch === instance.viewEpoch && generation === instance.stationSearchGeneration)
+                status.textContent = 'Could not search TuneIn station entries. Try again.';
+        }).finally(function () {
+            if (epoch !== instance.viewEpoch || generation !== instance.stationSearchGeneration) return;
+            instance.stationSearching = false;
+            refreshControls(instance, instance.refreshAvailable);
+        });
+    }
+
     function doCleanup(instance, start) {
         var view = instance.view;
         var summary = view.querySelector('.maintenanceSummary');
@@ -916,11 +989,13 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             contentType: 'application/json',
             data: JSON.stringify(start ? { Token: preview.Token }
                 : view.querySelector('.cleanupScope').value === 'station'
-                    ? { StationReference: view.querySelector('.cleanupStationReference').value.trim() }
+                    ? { StationReference: instance.cleanupStation ? instance.cleanupStation.Id
+                        : view.querySelector('.cleanupStationReference').value.trim() }
                     : { Category: view.querySelector('.cleanupScope').value })
         }).then(function (result) {
             if (epoch !== instance.viewEpoch) return;
             if (start) {
+                clearStationMatches(instance);
                 renderRefresh(instance, result);
                 return;
             }
@@ -1004,8 +1079,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var stationMode = instance.view.querySelector('.cleanupScope').value === 'station';
         instance.view.querySelector('.cleanupStationFields').hidden = !stationMode;
         instance.view.querySelector('.cleanupStationReference').disabled = cannotClean || !stationMode;
+        var stationText = instance.view.querySelector('.cleanupStationReference').value.trim();
+        instance.view.querySelector('.cleanupStationSearch').disabled = cannotClean || !stationMode ||
+            !!instance.stationSearching || stationText.length < 2 || stationText.length > 100;
+        instance.view.querySelector('.cleanupStationResults').childNodes.forEach(function (button) {
+            button.disabled = cannotClean || !stationMode;
+        });
         instance.view.querySelector('.cleanupPreview').disabled = cannotClean || !instance.view.querySelector('.cleanupScope').value ||
-            (stationMode && !instance.view.querySelector('.cleanupStationReference').value.trim());
+            (stationMode && !instance.cleanupStation && !stationReferenceLike(stationText));
         instance.view.querySelector('.cleanupCancel').disabled = !available || !instance.cleanupBusy ||
             !!instance.cleanupAction || !!(status && status.Cleanup && status.Cleanup.Cancelling);
         instance.view.querySelector('.cleanupConfirm').disabled = cannotClean || !instance.cleanupPreview ||
@@ -1301,12 +1382,21 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         view.querySelector('.cleanupCancel').addEventListener('click', function () { return stopCleanup(instance); });
         view.querySelector('.cleanupScope').addEventListener('change', function () {
             clearCleanupPreview(instance);
+            clearStationMatches(instance);
             refreshControls(instance, instance.refreshAvailable);
         });
         view.querySelector('.cleanupStationReference').addEventListener('input', function () {
             clearCleanupPreview(instance);
+            clearStationMatches(instance);
             refreshControls(instance, instance.refreshAvailable);
         });
+        view.querySelector('.cleanupStationReference').addEventListener('keydown', function (event) {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            if (stationReferenceLike(view.querySelector('.cleanupStationReference').value.trim())) return doCleanup(instance, false);
+            return searchCleanupStations(instance);
+        });
+        view.querySelector('.cleanupStationSearch').addEventListener('click', function () { return searchCleanupStations(instance); });
         view.querySelector('.cleanupBackupVerified').addEventListener('change', function () {
             refreshControls(instance, instance.refreshAvailable);
         });
@@ -1317,7 +1407,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.maintenanceSummary').focus();
         });
         instance.maintenanceSection.addEventListener('toggle', function () {
-            if (!instance.maintenanceSection.open) clearCleanupPreview(instance);
+            if (!instance.maintenanceSection.open) { clearCleanupPreview(instance); clearStationMatches(instance); }
             else return readBackup(instance, false);
         });
         dialog.addEventListener('close', function () {

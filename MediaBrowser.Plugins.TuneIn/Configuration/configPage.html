@@ -266,6 +266,25 @@
         .tuneInRefreshActions {
             justify-content: center;
         }
+        .cleanupStationResults {
+            display: grid;
+            gap: .35em;
+            max-height: 20em;
+            overflow-y: auto;
+        }
+        .cleanupStationMatch {
+            text-align: left;
+            margin: 0;
+            overflow-wrap: anywhere;
+        }
+        .cleanupStationMatch[aria-pressed="true"] {
+            outline: 2px solid #52b54b;
+        }
+        .cleanupStationMatchPath {
+            display: block;
+            font-size: .85em;
+            opacity: .75;
+        }
         .tuneInCleanupWarning {
             border-width: 2px;
             border-color: #b97820;
@@ -635,9 +654,14 @@
                     <option value="presets">My Favorites</option>
                 </select>
                 <div class="cleanupStationFields inputContainer" hidden>
-                    <label for="tuneInCleanupStationReference">Emby station reference:</label>
+                    <label for="tuneInCleanupStationReference">Station name:</label>
                     <input is="emby-input" id="tuneInCleanupStationReference" class="cleanupStationReference" type="text" maxlength="2048" aria-describedby="tuneInCleanupStationHint" disabled />
-                    <div class="fieldDescription" id="tuneInCleanupStationHint">Paste the station's Emby details URL or numeric/GUID item ID. Preview verifies that it belongs to TuneIn. Only this entry and its retained snapshot placement are removed; other placements stay. No exclusion is saved, so future discovery may add it again.</div>
+                    <div class="fieldDescription" id="tuneInCleanupStationHint">Enter part of the station name and select Find stations, then choose the entry to delete; its folder path shows where it appears. An Emby item ID or details URL also works. Preview verifies that it belongs to TuneIn. Only this entry and its retained snapshot placement are removed; other placements stay. No exclusion is saved, so future discovery may add it again.</div>
+                    <div class="tuneInCleanupActions">
+                        <button is="emby-button" type="button" class="raised button-submit cleanupStationSearch" disabled>Find stations</button>
+                    </div>
+                    <p class="cleanupStationSearchStatus" role="status"></p>
+                    <div class="cleanupStationResults" role="list"></div>
                 </div>
                 <div class="tuneInCleanupActions">
                     <button is="emby-button" type="button" class="raised button-submit backupStart" disabled>Backup Emby</button>

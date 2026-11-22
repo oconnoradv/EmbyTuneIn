@@ -23,6 +23,19 @@ namespace MediaBrowser.Plugins.TuneIn
         public string StationReference { get; set; }
     }
 
+    public sealed class TuneInCleanupStationMatch
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public string Path { get; set; }
+    }
+
+    public sealed class TuneInCleanupStationSearch
+    {
+        public TuneInCleanupStationMatch[] Matches { get; set; } = Array.Empty<TuneInCleanupStationMatch>();
+        public bool More { get; set; }
+    }
+
     public sealed class TuneInCleanupStatus
     {
         public string State { get; set; } = "Idle";
@@ -102,6 +115,55 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 Root = root.InternalId, Category = category, Targets = new[] { new Target(item) },
                 Ancestors = ancestors.ToArray(), SingleStation = true, StationName = item.Name
+            };
+        }
+
+        internal const int MaxStationMatches = 50;
+
+        internal TuneInCleanupStationSearch SearchStations(ConfigurationSnapshot snapshot, string name)
+        {
+            name = (name ?? "").Trim();
+            if (name.Length < 2 || name.Length > 100) throw new ArgumentException("Enter 2 to 100 characters of the station name.");
+            var root = getRoot();
+            if (root == null) return new TuneInCleanupStationSearch();
+            if (root.InternalId <= 0) throw new InvalidOperationException("The TuneIn channel has no library ID.");
+            var items = library.GetItemList(new InternalItemsQuery
+            {
+                ParentIds = new[] { root.InternalId }, Recursive = true, Limit = TuneInStagedImport.MaxItems + 1
+            }, CancellationToken.None);
+            if (items.Length > TuneInStagedImport.MaxItems)
+                throw new InvalidOperationException("The TuneIn station search exceeds its library item limit.");
+            var byId = new Dictionary<long, BaseItem>();
+            foreach (var item in items) byId[item.InternalId] = item;
+            string PathOf(BaseItem item)
+            {
+                var names = new List<string>();
+                var seen = new HashSet<long> { item.InternalId };
+                var parentId = item.ParentId;
+                while (parentId != root.InternalId)
+                {
+                    if (!seen.Add(parentId) || !byId.TryGetValue(parentId, out var parent)) return null;
+                    names.Add(parent.Name);
+                    parentId = parent.ParentId;
+                }
+                names.Reverse();
+                return names.Count == 0 ? null : string.Join(" › ", names);
+            }
+            var matches = items
+                .Where(item => item is MediaBrowser.Controller.Entities.Audio.Audio && item.InternalId > 0
+                    && (item.Name ?? "").IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0
+                    && TuneInDirectory.GeneratedStation(snapshot, item.ExternalId))
+                .Select(item => new TuneInCleanupStationMatch
+                {
+                    Id = item.InternalId.ToString(CultureInfo.InvariantCulture), Name = item.Name, Path = PathOf(item)
+                })
+                .Where(match => match.Path != null)
+                .OrderBy(match => match.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(match => match.Path, StringComparer.OrdinalIgnoreCase)
+                .Take(MaxStationMatches + 1).ToArray();
+            return new TuneInCleanupStationSearch
+            {
+                Matches = matches.Take(MaxStationMatches).ToArray(), More = matches.Length > MaxStationMatches
             };
         }
 

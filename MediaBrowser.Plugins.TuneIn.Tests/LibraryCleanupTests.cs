@@ -38,6 +38,27 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public void StationSearchListsOnlyVerifiedNameMatchesWithFolderPaths()
+        {
+            var fixture = new Fixture();
+            fixture.Add(2, 1, fixture.SignedId());
+            fixture.Library.Items[2].Name = "Talk";
+            fixture.Add(5, 2, fixture.SignedId());
+            fixture.Library.Items[5].Name = "News";
+            fixture.AddStation(3, 2);
+            fixture.AddStation(4, 5);
+            fixture.Library.Items.Add(6, new MediaBrowser.Controller.Entities.Audio.Audio
+                { InternalId = 6, ParentId = 2, ExternalId = "unsigned", Name = "Radio" });
+            fixture.AddStation(7, 2);
+            fixture.Library.Items[7].Name = "Other";
+            var result = fixture.Cleanup.SearchStations(fixture.Directory.Snapshot(), " rad ");
+            Assert.False(result.More);
+            Assert.Equal(new[] { "3:Radio:Talk", "4:Radio:Talk › News" },
+                result.Matches.Select(m => m.Id + ":" + m.Name + ":" + m.Path).ToArray());
+            Assert.Throws<ArgumentException>(() => fixture.Cleanup.SearchStations(fixture.Directory.Snapshot(), "r"));
+        }
+
+        [Fact]
         public async Task StationPreviewRejectsOtherItemsAndChangedAncestorCannotAuthorizeDeletion()
         {
             var fixture = new Fixture();

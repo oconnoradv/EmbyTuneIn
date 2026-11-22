@@ -393,8 +393,11 @@ targets. Playlists and other references to removed entries may break.
 Concurrent deletion behavior and speed have not been verified on a live Emby
 server.
 
-For a broken individual station, choose **One station entry** and paste its Emby
-details URL or numeric/GUID item ID. **Preview cleanup** verifies its station type,
+For a broken individual station, choose **One station entry**, enter part of the
+station name, and select **Find stations** (or press Enter). Up to 50 verified
+TuneIn station entries are listed with their folder paths, so the same station
+in different folders can be told apart; choose one, then select **Preview
+cleanup**. An Emby item ID or details URL is also accepted. **Preview cleanup** verifies its station type,
 TuneIn ownership and ancestor chain, and identifies the exact entry. Confirm after
 the backup acknowledgement to delete only that Emby item, not every placement of
 the provider station. Its single saved parent placement is removed atomically
