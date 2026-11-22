@@ -201,9 +201,14 @@ namespace MediaBrowser.Plugins.TuneIn
                     var rowKey = TuneInDirectory.Attribute(row, "key") ?? "";
                     if (rowKey.StartsWith("next", StringComparison.Ordinal)
                         && !IsSamePaginationNode(entry, request, next))
-                        throw new InvalidDataException("TuneIn pagination escaped its selected node ("
+                    {
+                        // Unknown page jumps are not followed; refreshes record them so the result is Partial and saved stations are retained.
+                        session?.TrySkipCatalogLink(entry.Category, "TuneIn pagination escaped its selected node ("
                             + (request.Parameters.GetValueOrDefault("id") ?? "(no ID)") + " to "
-                            + (next.Parameters.GetValueOrDefault("id") ?? "(no ID)") + ").");
+                            + (next.Parameters.GetValueOrDefault("id") ?? "(no ID)") + ")", request,
+                            TuneInDirectory.Attribute(row, "URL"));
+                        continue;
+                    }
                     if (snapshot.Value.HideRegionalGenres && HidesGenreAliases(entry.Category)
                         && !rowKey.StartsWith("next", StringComparison.Ordinal) && !next.Parameters.ContainsKey("offset")
                         && !IsGenrePivot(request) && !IsGenrePivot(next)
@@ -267,24 +272,24 @@ namespace MediaBrowser.Plugins.TuneIn
             var from = current.Parameters.GetValueOrDefault("id");
             var to = next.Parameters.GetValueOrDefault("id");
             if (from == to) return true;
-            if (entry.Category != "music" && entry.Category != "language" && entry.MusicSelectionId == null) return false;
-            if (current.Parameters.ContainsKey("c") || next.Parameters.ContainsKey("c")
+            if (from == null || current.Parameters.ContainsKey("c") || next.Parameters.ContainsKey("c")
                 || !int.TryParse(next.Parameters.GetValueOrDefault("offset"), out var offset) || offset <= 0)
                 return false;
-            // TuneIn emits the canonical category ID in More Stations/Shows links for these legacy genre IDs,
-            // including when By Language reaches them through its Music, Talk or Sports branches.
-            switch (from)
-            {
-                case "g3": return to == "c57935";
-                case "g19": return to == "c57951";
-                case "g22": return to == "c57954";
-                case "g71": return to == "c100002515";
-                case "g373": return to == "c100002519";
-                case "g2698": return to == "c100002520";
-                case "g3078": return to == "c100001377";
-                default: return false;
-            }
+            return CanonicalPaginationIds.TryGetValue(from, out var canonical) && canonical == to;
         }
+
+        // TuneIn emits the canonical category ID in More Stations/Shows links for these legacy genre IDs in Music,
+        // Talk and Sports, including when By Language reaches them. Other jumps are skipped, not followed.
+        private static readonly Dictionary<string, string> CanonicalPaginationIds = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["g3"] = "c57935", ["g19"] = "c57951", ["g22"] = "c57954", ["g71"] = "c100002515",
+            ["g214"] = "c100000971", ["g217"] = "c100001374", ["g260"] = "c100001376", ["g307"] = "c100002786",
+            ["g308"] = "c100002785", ["g312"] = "c100002782", ["g313"] = "c100005369", ["g322"] = "c100000899",
+            ["g323"] = "c100000211", ["g326"] = "c100002783", ["g373"] = "c100002519", ["g2698"] = "c100002520",
+            ["g2723"] = "c57933", ["g2733"] = "c100006068", ["g2737"] = "c100001101", ["g2751"] = "c23980497",
+            ["g2762"] = "c100001675", ["g3078"] = "c100001377", ["g3165"] = "c100000599", ["g4161"] = "c100002539",
+            ["g4421"] = "c100006414"
+        };
 
         private static bool EscapesSelection(ConfigurationSnapshot snapshot, NavigationEntry entry, string id)
         {

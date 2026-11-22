@@ -2770,6 +2770,44 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             finally { File.Delete(path); }
         }
 
+        [Fact]
+        public async Task UnexpectedPaginationJumpIsSkippedAndImportsPartialResults()
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true };
+            config.Music.Add(new CatalogSelection { Id = "g71", Enabled = true });
+            var fetches = 0;
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                fetches++;
+                return Task.FromResult(XDocument.Parse("<opml><body><outline type='audio' guide_id='s1' text='Radio'/>"
+                    + "<outline type='link' key='nextStations' text='More' URL='https://opml.radiotime.com/Browse.ashx?offset=26&amp;id=c999&amp;filter=s'/>"
+                    + "</body></opml>"));
+            });
+            var channel = new TuneInChannel(directory);
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-jump-{Guid.NewGuid():N}.xml");
+            var imported = 0;
+            try
+            {
+                using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(path), () => channel,
+                    (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
+                    (_, staged, __, token) =>
+                    {
+                        imported = ReadStagedTree(staged, token, staged.ImportRefreshLevel)[TuneInBrowsing.CategoryName("music")].Count();
+                        staged.Verify();
+                        return Task.CompletedTask;
+                    }, null);
+                refresh.Start("music");
+                await WaitUntilIdle(refresh);
+                var status = refresh.Status();
+                Assert.Equal("Partial", status.State);
+                Assert.Equal(1, status.SkippedBrowseLinks);
+                Assert.Contains("g71 to c999", status.SkippedBrowseLinkDetails);
+                Assert.Equal(1, imported);
+                Assert.Equal(1, fetches);
+            }
+            finally { File.Delete(path); }
+        }
+
         [Theory]
         [InlineData("music", "none")]
         [InlineData("music", "saved")]
@@ -2854,11 +2892,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 
         [Theory]
         [InlineData("talk", "untrusted", "Error", "InvalidDataException")]
-        [InlineData("talk", "pagination", "Error", "InvalidDataException")]
         [InlineData("talk", "transport", "Error", "IOException")]
         [InlineData("talk", "cancelled", "Cancelled", "Cancelled")]
         [InlineData("music", "untrusted", "Error", "InvalidDataException")]
-        [InlineData("music", "pagination", "Error", "InvalidDataException")]
         [InlineData("music", "transport", "Error", "IOException")]
         [InlineData("music", "cancelled", "Cancelled", "Cancelled")]
         public async Task UnrecoverableDiscoveryDoesNotBecomePartialAfterARejectedLink(

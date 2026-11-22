@@ -279,10 +279,18 @@ every affected folder has a compatible saved listing and no rebuild or
 interrupted-import repair is needed. Otherwise incomplete discovery leaves the
 library unchanged. An inconsistent retained tree also prevents import.
 
-The setting never overrides unsafe destinations, selection or pagination scope
+The setting never overrides unsafe destinations, selection scope
 violations, unrecovered request failures, cancellation, timeouts, or catalog
 budgets. Changing it applies to the next manual or scheduled refresh; it cannot
 apply previously fetched results without another discovery.
+
+When a TuneIn **More Stations** or **More Shows** link jumps to an
+unrecognized category instead of the next page of the same one, that page is
+not followed. A refresh counts it as a skipped entry, so the result is
+**Partial** and saved stations are retained, rather than failing. Known
+legacy genre IDs whose pages continue under their canonical category ID, such
+as Talk > Video Games, are followed normally in every category, including
+By Language.
 
 ### Status and station counts
 
