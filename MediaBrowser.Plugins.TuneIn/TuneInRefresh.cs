@@ -67,6 +67,9 @@ namespace MediaBrowser.Plugins.TuneIn
         public string PluginVersion { get; set; } = PluginBuild.Display;
         public string ArtworkFolder { get; set; }
         public int ArtworkCards { get; set; }
+        public string ArtworkPackName { get; set; }
+        public int? ArtworkPackImageCount { get; set; }
+        public string ArtworkPackStatus { get; set; }
         internal TuneInRefreshStatus Copy() => (TuneInRefreshStatus)MemberwiseClone();
     }
 

@@ -605,9 +605,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (artworkInstall && status.ArtworkFolder) {
             instance.view.querySelector('.tuneInArtworkFolder').textContent = status.ArtworkFolder;
             var cards = status.ArtworkCards || 0;
-            instance.view.querySelector('.tuneInArtworkCount').textContent = cards
-                ? cards + (cards === 1 ? ' genre image installed.' : ' genre images installed.')
-                : 'No genre images installed; Music folders use the default icon.';
+            var count = cards + (cards === 1 ? ' custom genre image' : ' custom genre images');
+            var pack = status.ArtworkPackStatus === 'identified' && status.ArtworkPackName
+                ? 'Artwork pack in this Emby instance: ' + status.ArtworkPackName + ' (from pack metadata). '
+                : status.ArtworkPackStatus === 'invalid' ? 'Artwork pack metadata is invalid. '
+                : status.ArtworkPackStatus === 'unavailable' ? 'Artwork pack metadata is unavailable. '
+                : 'Artwork pack is unidentified (no pack metadata). ';
+            instance.view.querySelector('.tuneInArtworkCount').textContent = pack + count
+                + (typeof status.ArtworkPackImageCount === 'number' ? '; ' + status.ArtworkPackImageCount + ' images listed in the pack.' : '.');
             artworkInstall.hidden = false;
         }        if (instance.refreshDefaultPending) {
             instance.refreshDefaultPending = false;

@@ -126,6 +126,34 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public void GenrePackManifestReportsIdentityAndHandlesMissingOrInvalidMetadata()
+        {
+            var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tunein-manifest-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            var previous = TuneInCategoryArtwork.GenreFolder;
+            try
+            {
+                TuneInCategoryArtwork.GenreFolder = folder;
+                Assert.Equal("missing", TuneInCategoryArtwork.ReadPackManifest().Status);
+                var path = System.IO.Path.Combine(folder, "tunein-artwork.json");
+                System.IO.File.WriteAllText(path, "{\"schemaVersion\":1,\"packName\":\"Cartoon\",\"imageCount\":123}");
+                var pack = TuneInCategoryArtwork.ReadPackManifest();
+                Assert.Equal("identified", pack.Status);
+                Assert.Equal("Cartoon", pack.Name);
+                Assert.Equal(123, pack.ImageCount);
+                System.IO.File.WriteAllText(path, "{\"schemaVersion\":2,\"packName\":\"Cartoon\",\"imageCount\":123}");
+                Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackManifest().Status);
+                System.IO.File.WriteAllText(path, "{invalid");
+                Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackManifest().Status);
+            }
+            finally
+            {
+                TuneInCategoryArtwork.GenreFolder = previous;
+                System.IO.Directory.Delete(folder, true);
+            }
+        }
+
+        [Fact]
         public void MigrationUpdatesOnlyValidFoldersInTheRequestedCategoryAndIsIdempotent()
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true, EnableSports = true };

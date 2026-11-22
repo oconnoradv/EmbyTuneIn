@@ -5,7 +5,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
 using System.Text.RegularExpressions;
+using System.Xml;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -135,6 +138,45 @@ namespace MediaBrowser.Plugins.TuneIn
             }
             catch (IOException) { return 0; }
             catch (UnauthorizedAccessException) { return 0; }
+        }
+
+        [DataContract]
+        private sealed class PackManifest
+        {
+            [DataMember(Name = "schemaVersion")] public int SchemaVersion { get; set; }
+            [DataMember(Name = "packName")] public string PackName { get; set; }
+            [DataMember(Name = "imageCount")] public int? ImageCount { get; set; }
+        }
+
+        internal sealed class PackStatus
+        {
+            internal string Name { get; set; }
+            internal int? ImageCount { get; set; }
+            internal string Status { get; set; }
+        }
+
+        internal static PackStatus ReadPackManifest()
+        {
+            var folder = GenreFolder;
+            if (string.IsNullOrEmpty(folder)) return new PackStatus { Status = "unavailable" };
+            try
+            {
+                using (var stream = File.OpenRead(Path.Combine(folder, "tunein-artwork.json")))
+                {
+                    if (stream.Length > 1024 * 1024) return new PackStatus { Status = "invalid" };
+                    var manifest = (PackManifest)new DataContractJsonSerializer(typeof(PackManifest)).ReadObject(stream);
+                    if (manifest == null || manifest.SchemaVersion != 1 || string.IsNullOrWhiteSpace(manifest.PackName)
+                        || manifest.PackName.Length > 128 || manifest.ImageCount < 0 || manifest.ImageCount > 100000)
+                        return new PackStatus { Status = "invalid" };
+                    return new PackStatus { Status = "identified", Name = manifest.PackName.Trim(), ImageCount = manifest.ImageCount };
+                }
+            }
+            catch (FileNotFoundException) { return new PackStatus { Status = "missing" }; }
+            catch (DirectoryNotFoundException) { return new PackStatus { Status = "missing" }; }
+            catch (SerializationException) { return new PackStatus { Status = "invalid" }; }
+            catch (XmlException) { return new PackStatus { Status = "invalid" }; }
+            catch (IOException) { return new PackStatus { Status = "unavailable" }; }
+            catch (UnauthorizedAccessException) { return new PackStatus { Status = "unavailable" }; }
         }
 
         internal static string GenreUrl(string baseUrl, string genreId)

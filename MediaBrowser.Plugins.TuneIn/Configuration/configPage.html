@@ -471,12 +471,27 @@
             opacity: .7;
         }
         .tuneInArtworkPacks {
-            margin: 0 0 .75em;
+            display: flow-root;
+            margin: 1em 0;
+            padding: .8em 1em;
+            border-inline-start: .25em solid #39b9aa;
+            border-radius: .25em;
+            background: color-mix(in srgb, #39b9aa 17%, transparent);
             font-size: .9em;
-            opacity: .85;
         }
         .tuneInArtworkPacks code {
-            word-break: break-all;
+            overflow-wrap: anywhere;
+        }
+        .tuneInArtworkSample {
+            float: right;
+            width: min(200px, 40%);
+            margin: 0 0 .75em .75em;
+            font-size: .85em;
+        }
+        .tuneInArtworkSample img {
+            display: block;
+            width: 100%;
+            height: auto;
         }
         .tuneInHero {            position: relative;
             max-width: 40rem;
@@ -573,11 +588,7 @@
         </div>
         <form>
             <p class="tuneInPluginVersion" hidden></p>
-            <p class="tuneInArtworkPacks">
-                Optional genre artwork packs:
-                <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt/releases" target="_blank" rel="noopener noreferrer">download from EmbyTuneInArt</a>.
-                <span class="tuneInArtworkInstall" hidden>Extract the images into <code class="tuneInArtworkFolder"></code>, then refresh Music in Catalog Refresh. <span class="tuneInArtworkCount"></span></span>
-            </p>            <p class="status" role="status" aria-live="polite"></p>
+            <p class="status" role="status" aria-live="polite"></p>
             <p class="status stationDeletionNotice" role="status" aria-live="polite" hidden></p>
             <p class="status catalogRefreshPrompt" role="status" hidden></p>
             <div class="tuneInSection tuneInSectionBox tuneInGlobalPanel">
@@ -624,6 +635,21 @@
                     <p class="fieldDescription">Hides genre shortcuts in Local Radio, By Location, Talk, Sports and Podcasts. The By Genre folder stays available where TuneIn provides it.</p>
                     <details class="tuneInAdvancedSettings">
                         <summary>Advanced Settings</summary>
+                        <aside class="tuneInArtworkPacks">
+                            <figure class="tuneInArtworkSample">
+                                <figcaption>Cartoon sample</figcaption>
+                                <img src="https://raw.githubusercontent.com/oconnoradv/EmbyTuneInArt/main/docs/samples/cartoon.jpg" alt="Cartoon-style Punk, Smooth Jazz, Christmas Music and Classic Hip Hop genre artwork" loading="lazy" referrerpolicy="no-referrer">
+                            </figure>
+                            <strong>Optional Music Genre Artwork Packs</strong>
+                            <p>You may customize the music genre artwork used by Emby with a <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt/releases" target="_blank" rel="noopener noreferrer">pre-made pack</a> or use the <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt" target="_blank" rel="noopener noreferrer">EmbyTuneInArt tool</a> to build your own.</p>
+                            <div class="tuneInArtworkInstall" hidden>
+                                <ol>
+                                    <li>Place the edited files into:<br><code class="tuneInArtworkFolder"></code></li>
+                                    <li>Run the Music library refresh via Catalog Refresh.</li>
+                                </ol>
+                                <p class="tuneInArtworkCount" role="status"></p>
+                            </div>
+                        </aside>
                         <div class="inputContainer">
                             <label for="tuneInMaxStationCount">Max Station Count:</label>
                             <input id="tuneInMaxStationCount" type="number" class="maxStationCount" min="1" max="4000" step="1" placeholder="Not set" aria-describedby="tuneInMaxStationCountHint" disabled />

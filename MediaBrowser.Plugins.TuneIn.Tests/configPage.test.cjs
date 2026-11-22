@@ -2115,7 +2115,7 @@ test('plugin version label shows the running build reported by refresh status', 
     app.instance.onPause();
 });
 
-test('artwork pack help shows the server folder and installed genre image count', async () => {
+test('artwork pack help shows the server folder, pack metadata and installed image count', async () => {
     const app = harness(true);
     const install = app.elements['.tuneInArtworkInstall'];
     install.hidden = true;
@@ -2125,14 +2125,19 @@ test('artwork pack help shows the server folder and installed genre image count'
     await visit;
     assert.equal(install.hidden, false);
     assert.equal(app.elements['.tuneInArtworkFolder'].textContent, 'C:\\Emby\\plugins\\configurations\\TuneInArtwork\\genres');
-    assert.match(app.elements['.tuneInArtworkCount'].textContent, /No genre images installed/);
+    assert.match(app.elements['.tuneInArtworkCount'].textContent, /unidentified.*0 custom genre images/);
     app.instance.onPause();
     const again = app.instance.onResume();
     app.reads[1].resolve({});
-    app.refresh[1].resolve({ State: 'NeverRun', ArtworkFolder: 'C:\\art', ArtworkCards: 123 });
+    app.refresh[1].resolve({ State: 'NeverRun', ArtworkFolder: 'C:\\art', ArtworkCards: 123,
+        ArtworkPackStatus: 'identified', ArtworkPackName: 'Cartoon', ArtworkPackImageCount: 123 });
     await again;
-    assert.equal(app.elements['.tuneInArtworkCount'].textContent, '123 genre images installed.');
+    assert.equal(app.elements['.tuneInArtworkCount'].textContent,
+        'Artwork pack in this Emby instance: Cartoon (from pack metadata). 123 custom genre images; 123 images listed in the pack.');
     app.instance.onPause();
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /<details class="tuneInAdvancedSettings">\s*<summary>Advanced Settings<\/summary>\s*<aside class="tuneInArtworkPacks">/);
+    assert.doesNotMatch(html, /<\/code>\.<\/li>/);
 });
 
 test('refresh work metric switches to actual folder progress during import', async () => {
