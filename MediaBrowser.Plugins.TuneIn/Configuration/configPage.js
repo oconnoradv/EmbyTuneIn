@@ -494,6 +494,26 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         });
     }
 
+    function isChannelRefreshTask(task) {
+        return !!task && (task.Key === 'RefreshInternetChannels' || task.Name === 'Refresh Internet Channels');
+    }
+
+    function checkChannelRefreshSchedule(instance, epoch) {
+        var notice = instance.view.querySelector('.channelScheduleNotice');
+        return ApiClient.ajax({ type: 'GET', dataType: 'json', url: ApiClient.getUrl('ScheduledTasks') })
+            .then(function (tasks) {
+                if (epoch !== instance.viewEpoch) return;
+                var scheduled = (tasks || []).filter(isChannelRefreshTask)
+                    .some(function (task) { return (task.Triggers || []).length > 0; });
+                notice.textContent = scheduled
+                    ? 'Emby\'s "Refresh Internet Channels" scheduled task has a schedule. Remove its triggers in Advanced > Scheduled Tasks so TuneIn refreshes are scheduled only from this control panel.'
+                    : '';
+                notice.hidden = !scheduled;
+            }, function (error) {
+                console.error('Unable to check the Refresh Internet Channels schedule.', error);
+            });
+    }
+
     function writeSettingsLock(locked) {
         return ApiClient.ajax({
             type: 'POST', dataType: 'json', contentType: 'application/json',
@@ -1216,6 +1236,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     deletionNotice.hidden = false;
                 }
                 instance.selectionDeletionPending = false;
+                checkChannelRefreshSchedule(instance, epoch);
             }
             return writeSettingsLock(true).then(function () {
                 instance.settingsLocked = true;
@@ -1330,6 +1351,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.catalogRefreshPrompt').textContent = '';
         instance.view.querySelector('.stationDeletionNotice').hidden = true;
         instance.view.querySelector('.stationDeletionNotice').textContent = '';
+        instance.view.querySelector('.channelScheduleNotice').hidden = true;
+        instance.view.querySelector('.channelScheduleNotice').textContent = '';
         instance.view.querySelector('.refreshFailureLog').textContent = '';
         instance.view.querySelector('.refreshFailureLog').hidden = true;
         instance.view.querySelector('.refreshLogMessage').textContent = '';

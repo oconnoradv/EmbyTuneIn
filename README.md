@@ -252,6 +252,11 @@ owns these schedules; it does not create, edit, or trigger Emby Scheduled Tasks.
 Emby's native channel refresh can browse the configured catalog, but its
 callbacks are not reported as successful Control Panel imports.
 
+After each successful **Save**, the panel reads Emby's Scheduled Tasks. If
+**Refresh Internet Channels** has any triggers, a red notice at the top of the
+panel asks you to remove them in **Advanced > Scheduled Tasks** so refreshes are
+scheduled only from this Control Panel. The plugin never changes the task itself.
+
 ### Partial results
 
 Malformed queries or fragments on trusted TuneIn child links can be skipped

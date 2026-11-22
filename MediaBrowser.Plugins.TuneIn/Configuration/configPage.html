@@ -129,6 +129,14 @@
             border-radius: .35em;
             background: color-mix(in srgb, #b97820 20%, transparent);
         }
+        .channelScheduleNotice:not([hidden]) {
+            max-width: 80ch;
+            padding: .65em .85em;
+            border: 1px solid #c62828;
+            border-radius: .35em;
+            background: color-mix(in srgb, #c62828 22%, transparent);
+            font-weight: 600;
+        }
         .tuneInSectionBox {
             min-inline-size: 0;
             border: 1px solid currentColor;
@@ -446,6 +454,7 @@
 
         <div class="auto-center tuneInPanelLayout">
         <form>
+            <p class="channelScheduleNotice" role="alert" hidden></p>
             <p class="status" role="status" aria-live="polite"></p>
             <p class="status stationDeletionNotice" role="status" aria-live="polite" hidden></p>
             <p class="status catalogRefreshPrompt" role="status" hidden></p>

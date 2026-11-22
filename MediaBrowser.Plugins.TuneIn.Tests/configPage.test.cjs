@@ -51,7 +51,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.traversalDepthLimit': new Element('input') };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
-        '.catalogRefreshPrompt', '.stationDeletionNotice',
+        '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleNotice',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshImportContents', '.refreshPendingFolders', '.refreshPendingFolderText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
@@ -109,6 +109,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     const locks = [];
     const cleanup = [];
     const backup = [];
+    const scheduledTasks = { tasks: [], requests: [] };
     const timers = new Map();
     let timerId = 0;
     let serverLocked = false;
@@ -147,6 +148,10 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
                 backup.push({ options, ...request });
                 if (!manualBackup && options.type === 'GET') request.resolve({ State: 'Ready' });
             }
+            else if (options.url.route === 'ScheduledTasks') {
+                scheduledTasks.requests.push(options);
+                request.resolve(scheduledTasks.tasks);
+            }
             else selectors.push({ options, ...request });
             return request.promise;
         }
@@ -173,7 +178,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     });
 
     return { instance: new PluginView(view), username, latLon, requestInterval, formHandlers, reads, writes, notices, errors, loader,
-        elements, selectors, enhanced, calls, handlers, refresh, locks, cleanup, backup, timers };
+        elements, selectors, enhanced, calls, handlers, refresh, locks, cleanup, backup, timers, scheduledTasks };
 }
 
 function open(details) {
@@ -1191,6 +1196,42 @@ test('saving opens Catalog Refresh only when Station Filtering settings changed'
     changed.formHandlers.submit({ preventDefault() {} });
     await settle();
     assert.equal(changed.elements['.tuneInRefresh'].open, true);
+});
+
+test('saving warns in red when Emby schedules Refresh Internet Channels', async () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /<form>\s*<p class="channelScheduleNotice" role="alert" hidden><\/p>/);
+    assert.match(html, /\.channelScheduleNotice:not\(\[hidden\]\)\s*\{[^}]*#c62828/);
+
+    const save = async tasks => {
+        const app = harness();
+        app.scheduledTasks.tasks = tasks;
+        const visit = app.instance.onResume();
+        app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true });
+        await visit;
+        assert.equal(app.scheduledTasks.requests.length, 0);
+        app.formHandlers.submit({ preventDefault() {} });
+        await settle();
+        assert.deepEqual(app.scheduledTasks.requests.map(request => request.type), ['GET']);
+        return app;
+    };
+    const other = { Id: 'other', Key: 'RefreshLibrary', Name: 'Scan media library', Triggers: [{ Type: 'IntervalTrigger' }] };
+    const quiet = await save([other, { Id: 'channels', Key: 'RefreshInternetChannels', Name: 'Refresh Internet Channels', Triggers: [] }]);
+    assert.notEqual(quiet.elements['.channelScheduleNotice'].hidden, false);
+
+    const app = await save([other, { Id: 'channels', Key: 'RefreshInternetChannels', Name: 'Refresh Internet Channels',
+        Triggers: [{ Type: 'IntervalTrigger', IntervalTicks: 864000000000 }] }]);
+    const notice = app.elements['.channelScheduleNotice'];
+    assert.equal(notice.hidden, false);
+    assert.match(notice.textContent, /Refresh Internet Channels/);
+    assert.match(notice.textContent, /Advanced > Scheduled Tasks/);
+    assert.equal(app.elements['.status'].textContent.includes('Scheduled Tasks'), false);
+
+    const visit = app.instance.onResume();
+    assert.equal(notice.hidden, true);
+    assert.equal(notice.textContent, '');
+    app.reads[1].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true });
+    await visit;
 });
 
 test('maintenance previews before confirming and blocks settings and refresh until cleanup stops', async () => {
