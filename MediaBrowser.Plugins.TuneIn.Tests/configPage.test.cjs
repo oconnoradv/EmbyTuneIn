@@ -53,7 +53,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
         '.channelScheduleConfirm', '.channelScheduleAdjust', '.tuneInPluginVersion',
-        '.tuneInArtworkInstall', '.tuneInArtworkFolder', '.tuneInArtworkCount',
+        '.tuneInArtworkInstall', '.tuneInArtworkFolder', '.tuneInArtworkCount', '.tuneInArtworkPackName', '.tuneInArtworkCustomCount',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshImportContents', '.refreshPendingFolders', '.refreshPendingFolderText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
@@ -86,6 +86,9 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     }
     elements['.refreshIndicator'].textContent = 'Refreshing';
     elements['.maintenanceIndicator'].textContent = 'Maintenance is active';
+    elements['.tuneInArtworkCount'].textContent = 'Artwork pack installed in this Emby Instance: ';
+    elements['.tuneInArtworkCount'].appendChild(elements['.tuneInArtworkPackName']);
+    elements['.tuneInArtworkCount'].appendChild(elements['.tuneInArtworkCustomCount']);
     elements['.refreshSummaryState'] = elements['.refreshSummary'].appendChild(new Element('span'));
     elements['.refreshSummaryDetails'] = elements['.refreshSummary'].appendChild(new Element('span'));
     elements['.refreshOverall'] = elements['.refreshSummary'].appendChild(new Element('span'));
@@ -1996,6 +1999,8 @@ test('Catalog Refresh clears stale overall success when status becomes unavailab
     await settle();
     assert.equal(app.elements['.tuneInRefresh'].attributes['data-outcome'], '');
     assert.equal(app.elements['.refreshOverall'].textContent, ' - Overall: status unavailable');
+    assert.equal(app.elements['.tuneInArtworkCount'].textContent,
+        'Artwork pack installed in this Emby Instance: status unavailable * image count unavailable');
     [...app.timers.values()].find(timer => timer.delay === 10000).handler();
     app.refresh[2].resolve({ State: 'Completed', SettingsLocked: false,
         Categories: [{ Category: 'talk', Name: 'Talk', State: 'Partial (unchanged)' }] });
@@ -2117,13 +2122,10 @@ test('plugin version label shows the running build reported by refresh status', 
 
 test('artwork pack help shows the server folder, pack metadata and installed image count', async () => {
     const app = harness(true);
-    const install = app.elements['.tuneInArtworkInstall'];
-    install.hidden = true;
     const visit = app.instance.onResume();
     app.reads[0].resolve({});
     app.refresh[0].resolve({ State: 'NeverRun', ArtworkFolder: 'C:\\Emby\\plugins\\configurations\\TuneInArtwork\\genres', ArtworkCards: 0 });
     await visit;
-    assert.equal(install.hidden, false);
     assert.equal(app.elements['.tuneInArtworkFolder'].textContent, 'C:\\Emby\\plugins\\configurations\\TuneInArtwork\\genres');
     assert.match(app.elements['.tuneInArtworkCount'].textContent, /unknown.*0 custom genre images/);
     app.instance.onPause();
@@ -2134,10 +2136,25 @@ test('artwork pack help shows the server folder, pack metadata and installed ima
     await again;
     assert.equal(app.elements['.tuneInArtworkCount'].textContent,
         'Artwork pack installed in this Emby Instance: Cartoon * 123 custom genre images');
+    assert.equal(app.elements['.tuneInArtworkPackName'].textContent, 'Cartoon');
     app.instance.onPause();
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    assert.match(html, /<details class="tuneInAdvancedSettings">\s*<summary>Advanced Settings<\/summary>\s*<aside class="tuneInArtworkPacks">/);
+    assert.match(html, /<details class="tuneInAdvancedSettings">[\s\S]*?id="tuneInDirectHlsHint"[^>]*>[^<]*<\/p>\s*<aside class="tuneInArtworkPacks">[\s\S]*?<\/aside>\s*<\/details>/);
+    assert.match(html, /<strong class="tuneInArtworkPackName">Loading\.\.\.<\/strong>/);
+    assert.doesNotMatch(html, /class="tuneInArtworkInstall"\s+hidden/);
     assert.doesNotMatch(html, /<\/code>\.<\/li>/);
+});
+
+test('artwork status does not invent a count when the server folder is unavailable', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', ArtworkFolder: null, ArtworkPackStatus: 'unavailable', ArtworkCards: 0 });
+    await visit;
+    assert.equal(app.elements['.tuneInArtworkFolder'].textContent, 'Artwork folder unavailable');
+    assert.equal(app.elements['.tuneInArtworkCount'].textContent,
+        'Artwork pack installed in this Emby Instance: pack metadata unavailable * image count unavailable');
+    app.instance.onPause();
 });
 
 test('refresh work metric switches to actual folder progress during import', async () => {

@@ -602,19 +602,20 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             version.hidden = false;
         }
         var artworkInstall = instance.view.querySelector('.tuneInArtworkInstall');
-        if (artworkInstall && status.ArtworkFolder) {
-            instance.view.querySelector('.tuneInArtworkFolder').textContent = status.ArtworkFolder;
-            var cards = status.ArtworkCards || 0;
-            var count = cards + (cards === 1 ? ' custom genre image' : ' custom genre images');
+        if (artworkInstall && (status.ArtworkFolder || status.ArtworkPackStatus)) {
+            instance.view.querySelector('.tuneInArtworkFolder').textContent = status.ArtworkFolder || 'Artwork folder unavailable';
+            var cards = status.ArtworkFolder && typeof status.ArtworkCards === 'number' ? status.ArtworkCards : null;
+            var count = cards == null ? 'image count unavailable'
+                : cards + (cards === 1 ? ' custom genre image' : ' custom genre images');
             var pack = status.ArtworkPackStatus === 'identified' && status.ArtworkPackName
                 ? status.ArtworkPackName
                 : status.ArtworkPackStatus === 'invalid' ? 'invalid pack metadata'
                 : status.ArtworkPackStatus === 'unavailable' ? 'pack metadata unavailable'
                 : 'unknown (no pack metadata)';
-            instance.view.querySelector('.tuneInArtworkCount').textContent =
-                'Artwork pack installed in this Emby Instance: ' + pack + ' * ' + count;
-            artworkInstall.hidden = false;
-        }        if (instance.refreshDefaultPending) {
+            instance.view.querySelector('.tuneInArtworkPackName').textContent = pack;
+            instance.view.querySelector('.tuneInArtworkCustomCount').textContent = ' * ' + count;
+        }
+        if (instance.refreshDefaultPending) {
             instance.refreshDefaultPending = false;
             instance.refreshSection.open = instance.refreshBusy ||
                 status.State === 'NeverRun' && status.HasRefreshBeenStarted === false && !status.StartedUtc;
@@ -1202,6 +1203,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 setRefreshOutcome(instance, '', 'status unavailable');
                 instance.view.querySelector('.refreshStatus').textContent = 'Could not read refresh status. Retrying automatically.';
                 instance.view.querySelector('.refreshCategoryNote').textContent = '';
+                instance.view.querySelector('.tuneInArtworkFolder').textContent = 'Artwork folder unavailable';
+                instance.view.querySelector('.tuneInArtworkPackName').textContent = 'status unavailable';
+                instance.view.querySelector('.tuneInArtworkCustomCount').textContent = ' * image count unavailable';
                 if (typeof instance.settingsLocked !== 'boolean')
                     instance.lockError = 'Could not read the settings lock. Retrying automatically.';
                 refreshControls(instance, false);

@@ -635,22 +635,6 @@
                     <p class="fieldDescription">Hides genre shortcuts in Local Radio, By Location, Talk, Sports and Podcasts. The By Genre folder stays available where TuneIn provides it.</p>
                     <details class="tuneInAdvancedSettings">
                         <summary>Advanced Settings</summary>
-                        <aside class="tuneInArtworkPacks">
-                            <figure class="tuneInArtworkSample">
-                                <figcaption>Cartoon sample</figcaption>
-                                <img src="https://raw.githubusercontent.com/oconnoradv/EmbyTuneInArt/main/docs/samples/cartoon.jpg" alt="Cartoon-style Punk, Smooth Jazz, Christmas Music and Classic Hip Hop genre artwork" loading="lazy" referrerpolicy="no-referrer">
-                            </figure>
-                            <strong>Optional Music Genre Artwork Packs</strong>
-                            <p>You may customize the music genre artwork used by Emby with a <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt/releases" target="_blank" rel="noopener noreferrer">pre-made pack</a> or use the <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt" target="_blank" rel="noopener noreferrer">EmbyTuneInArt tool</a> to build your own.</p>
-                            <div class="tuneInArtworkInstall" hidden>
-                                <ol>
-                                    <li>Place the edited files into:<br><code class="tuneInArtworkFolder"></code></li>
-                                    <li>Run the Music library refresh via Catalog Refresh.</li>
-                                </ol>
-                                <p>Include <code>tunein-artwork.json</code> to identify the pack.</p>
-                                <p class="tuneInArtworkCount" role="status"></p>
-                            </div>
-                        </aside>
                         <div class="inputContainer">
                             <label for="tuneInMaxStationCount">Max Station Count:</label>
                             <input id="tuneInMaxStationCount" type="number" class="maxStationCount" min="1" max="4000" step="1" placeholder="Not set" aria-describedby="tuneInMaxStationCountHint" disabled />
@@ -691,6 +675,22 @@
                             <span>Allow direct HLS playback</span>
                         </label>
                         <p class="fieldDescription" id="tuneInDirectHlsHint">Off by default. Stations are played through the plugin's relay, which only connects to public internet addresses. A few stations offer only HLS (.m3u8) streams, which the relay cannot carry. Enabling this lets Emby fetch those streams directly, without the relay's address checks. Enable only if you need such a station and trust your network.</p>
+                        <aside class="tuneInArtworkPacks">
+                            <figure class="tuneInArtworkSample">
+                                <figcaption>Cartoon sample</figcaption>
+                                <img src="https://raw.githubusercontent.com/oconnoradv/EmbyTuneInArt/main/docs/samples/cartoon.jpg" alt="Cartoon-style Punk, Smooth Jazz, Christmas Music and Classic Hip Hop genre artwork" loading="lazy" referrerpolicy="no-referrer">
+                            </figure>
+                            <strong>Optional Music Genre Artwork Packs</strong>
+                            <p>You may customize the music genre artwork used by Emby with a <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt/releases" target="_blank" rel="noopener noreferrer">pre-made pack</a> or use the <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt" target="_blank" rel="noopener noreferrer">EmbyTuneInArt tool</a> to build your own.</p>
+                            <div class="tuneInArtworkInstall">
+                                <ol>
+                                    <li>Place the edited files into:<br><code class="tuneInArtworkFolder">Loading artwork folder...</code></li>
+                                    <li>Run the Music library refresh via Catalog Refresh.</li>
+                                </ol>
+                                <p>Include <code>tunein-artwork.json</code> to identify the pack.</p>
+                                <p class="tuneInArtworkCount" role="status">Artwork pack installed in this Emby Instance: <strong class="tuneInArtworkPackName">Loading...</strong><span class="tuneInArtworkCustomCount"></span></p>
+                            </div>
+                        </aside>
                     </details>
                 </fieldset>
             </details>
