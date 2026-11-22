@@ -498,20 +498,38 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         return !!task && (task.Key === 'RefreshInternetChannels' || task.Name === 'Refresh Internet Channels');
     }
 
-    function checkChannelRefreshSchedule(instance, epoch) {
-        var notice = instance.view.querySelector('.channelScheduleNotice');
+    function readChannelRefreshScheduled() {
         return ApiClient.ajax({ type: 'GET', dataType: 'json', url: ApiClient.getUrl('ScheduledTasks') })
             .then(function (tasks) {
-                if (epoch !== instance.viewEpoch) return;
-                var scheduled = (tasks || []).filter(isChannelRefreshTask)
+                return (tasks || []).filter(isChannelRefreshTask)
                     .some(function (task) { return (task.Triggers || []).length > 0; });
-                notice.textContent = scheduled
-                    ? 'Emby\'s "Refresh Internet Channels" scheduled task has a schedule. Remove its triggers in Advanced > Scheduled Tasks so TuneIn refreshes are scheduled only from this control panel.'
-                    : '';
-                notice.hidden = !scheduled;
-            }, function (error) {
-                console.error('Unable to check the Refresh Internet Channels schedule.', error);
             });
+    }
+
+    function closeChannelScheduleDialog(instance) {
+        instance.channelSchedulePending = null;
+        var dialog = instance.view.querySelector('.channelScheduleDialog');
+        if (dialog.open) dialog.close();
+    }
+
+    function confirmChannelSchedule(instance, name, category, schedule, previous) {
+        var epoch = instance.viewEpoch;
+        var requested = schedule.value;
+        var label = (Array.prototype.find.call(schedule.childNodes || schedule.options || [], function (option) {
+            return option.value === requested;
+        }) || {}).textContent || '';
+        return readChannelRefreshScheduled().then(function (scheduled) {
+            if (!scheduled || epoch !== instance.viewEpoch || schedule.value !== requested) return;
+            var dialog = instance.view.querySelector('.channelScheduleDialog');
+            instance.channelSchedulePending = { category: category, schedule: schedule, previous: previous };
+            instance.view.querySelector('.channelScheduleText').textContent = name + ' will refresh ' +
+                label.toLowerCase() + ' after you save. Emby\'s "Refresh Internet Channels" scheduled task also has a schedule and will keep running; each time it runs it refreshes all TuneIn categories, not only the ones scheduled here. ' +
+                'Select Keep Both Schedules if that is okay, or Adjust Schedule to change this setting (or change the task\'s triggers in Advanced > Scheduled Tasks). ' +
+                'TuneIn refresh schedules do not refresh any other Internet Channel in Emby, so both schedules may be needed.';
+            if (!dialog.open) dialog.showModal();
+        }, function (error) {
+            console.error('Unable to check the Refresh Internet Channels schedule.', error);
+        });
     }
 
     function writeSettingsLock(locked) {
@@ -785,8 +803,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 });
                 schedule.value = String(instance.refreshSchedules.get(item.Category) || 0);
                 schedule.addEventListener('change', function () {
-                    if (!editingBlocked(instance) && browsingSelected(instance))
-                        instance.refreshSchedules.set(item.Category, Number(schedule.value));
+                    if (editingBlocked(instance) || !browsingSelected(instance)) return;
+                    var previous = instance.refreshSchedules.get(item.Category) || 0;
+                    instance.refreshSchedules.set(item.Category, Number(schedule.value));
+                    if (Number(schedule.value) > 0)
+                        return confirmChannelSchedule(instance, item.Name, item.Category, schedule, previous);
                 });
                 row.appendChild(caption);
                 actions.appendChild(counts);
@@ -1325,7 +1346,6 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     deletionNotice.hidden = false;
                 }
                 instance.selectionDeletionPending = false;
-                checkChannelRefreshSchedule(instance, epoch);
             }
             return writeSettingsLock(true).then(function () {
                 instance.settingsLocked = true;
@@ -1428,6 +1448,17 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     { id: recovery.id, resume: choice[1] });
             });
         });
+        view.querySelector('.channelScheduleConfirm').addEventListener('click', function () {
+            closeChannelScheduleDialog(instance);
+        });
+        view.querySelector('.channelScheduleAdjust').addEventListener('click', function () {
+            var pending = instance.channelSchedulePending;
+            closeChannelScheduleDialog(instance);
+            if (!pending || editingBlocked(instance)) return;
+            pending.schedule.value = String(pending.previous);
+            instance.refreshSchedules.set(pending.category, pending.previous);
+            pending.schedule.focus();
+        });
     }
 
     Object.assign(View.prototype, BaseView.prototype);
@@ -1449,8 +1480,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.catalogRefreshPrompt').textContent = '';
         instance.view.querySelector('.stationDeletionNotice').hidden = true;
         instance.view.querySelector('.stationDeletionNotice').textContent = '';
-        instance.view.querySelector('.channelScheduleNotice').hidden = true;
-        instance.view.querySelector('.channelScheduleNotice').textContent = '';
+        closeChannelScheduleDialog(instance);
         instance.view.querySelector('.refreshFailureLog').textContent = '';
         instance.view.querySelector('.refreshFailureLog').hidden = true;
         instance.view.querySelector('.refreshLogMessage').textContent = '';
@@ -1540,6 +1570,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         this.refreshRecovery = null;
         var dialog = this.view.querySelector('.tuneInRefreshRecoveryDialog');
         if (dialog.open) dialog.close();
+        closeChannelScheduleDialog(this);
         clearTimeout(this.refreshTimer);
         this.view.querySelector('.refreshFailureLog').textContent = '';
         this.view.querySelector('.refreshFailureLog').hidden = true;

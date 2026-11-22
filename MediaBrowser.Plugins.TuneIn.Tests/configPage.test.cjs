@@ -51,7 +51,8 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.traversalDepthLimit': new Element('input') };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
-        '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleNotice', '.tuneInPluginVersion',
+        '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
+        '.channelScheduleConfirm', '.channelScheduleAdjust', '.tuneInPluginVersion',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshImportContents', '.refreshPendingFolders', '.refreshPendingFolderText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
@@ -1247,40 +1248,60 @@ test('saving opens Catalog Refresh only when Station Filtering settings changed'
     assert.equal(changed.elements['.tuneInRefresh'].open, true);
 });
 
-test('saving warns in red when Emby schedules Refresh Internet Channels', async () => {
+test('choosing a category schedule confirms when Emby also schedules Refresh Internet Channels', async () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    assert.match(html, /<form>\s*<p class="tuneInPluginVersion" hidden><\/p>\s*<p class="channelScheduleNotice" role="alert" hidden><\/p>/);
-    assert.match(html, /\.channelScheduleNotice:not\(\[hidden\]\)\s*\{[^}]*#c62828/);
+    assert.doesNotMatch(html, /channelScheduleNotice|#c62828/);
+    assert.match(html, /<dialog class="tuneInRecoveryDialog channelScheduleDialog"/);
 
-    const save = async tasks => {
-        const app = harness();
+    const open = async tasks => {
+        const app = harness(true);
         app.scheduledTasks.tasks = tasks;
         const visit = app.instance.onResume();
-        app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true });
+        app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
+        app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true,
+            RefreshSchedules: [{ Category: 'talk', IntervalHours: 24 }] });
+        app.refresh[0].resolve({ SettingsLocked: false, Categories: [{ Category: 'talk', Name: 'Talk' }] });
         await visit;
-        assert.equal(app.scheduledTasks.requests.length, 0);
-        app.formHandlers.submit({ preventDefault() {} });
-        await settle();
-        assert.deepEqual(app.scheduledTasks.requests.map(request => request.type), ['GET']);
-        return app;
+        const talk = app.elements['.tuneInRefreshCategories'].childNodes[0].childNodes[1].childNodes[2];
+        return { app, talk };
     };
     const other = { Id: 'other', Key: 'RefreshLibrary', Name: 'Scan media library', Triggers: [{ Type: 'IntervalTrigger' }] };
-    const quiet = await save([other, { Id: 'channels', Key: 'RefreshInternetChannels', Name: 'Refresh Internet Channels', Triggers: [] }]);
-    assert.notEqual(quiet.elements['.channelScheduleNotice'].hidden, false);
+    const channels = triggers => ({ Id: 'channels', Key: 'RefreshInternetChannels', Name: 'Refresh Internet Channels', Triggers: triggers });
 
-    const app = await save([other, { Id: 'channels', Key: 'RefreshInternetChannels', Name: 'Refresh Internet Channels',
-        Triggers: [{ Type: 'IntervalTrigger', IntervalTicks: 864000000000 }] }]);
-    const notice = app.elements['.channelScheduleNotice'];
-    assert.equal(notice.hidden, false);
-    assert.match(notice.textContent, /Refresh Internet Channels/);
-    assert.match(notice.textContent, /Advanced > Scheduled Tasks/);
-    assert.equal(app.elements['.status'].textContent.includes('Scheduled Tasks'), false);
+    const quiet = await open([other, channels([])]);
+    quiet.talk.value = '168';
+    await quiet.talk.handlers.change();
+    assert.equal(quiet.app.scheduledTasks.requests.length, 1);
+    assert.notEqual(quiet.app.elements['.channelScheduleDialog'].open, true);
 
-    const visit = app.instance.onResume();
-    assert.equal(notice.hidden, true);
-    assert.equal(notice.textContent, '');
-    app.reads[1].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true });
-    await visit;
+    const { app, talk } = await open([other, channels([{ Type: 'IntervalTrigger', IntervalTicks: 864000000000 }])]);
+    talk.value = '0';
+    await talk.handlers.change();
+    assert.equal(app.scheduledTasks.requests.length, 0);
+
+    const dialog = app.elements['.channelScheduleDialog'];
+    talk.value = '168';
+    await talk.handlers.change();
+    assert.equal(dialog.open, true);
+    const text = app.elements['.channelScheduleText'].textContent;
+    assert.match(text, /^Talk will refresh weekly after you save/);
+    assert.match(text, /refreshes all TuneIn categories/);
+    assert.match(text, /do not refresh any other Internet Channel/);
+    app.elements['.channelScheduleAdjust'].handlers.click();
+    assert.equal(dialog.open, false);
+    assert.equal(talk.value, '0');
+    assert.equal(app.instance.refreshSchedules.get('talk'), 0);
+
+    talk.value = '6';
+    await talk.handlers.change();
+    app.elements['.channelScheduleConfirm'].handlers.click();
+    assert.equal(dialog.open, false);
+    assert.equal(talk.value, '6');
+    assert.equal(app.instance.refreshSchedules.get('talk'), 6);
+    const requests = app.scheduledTasks.requests.length;
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.scheduledTasks.requests.length, requests);
 });
 
 test('maintenance previews before confirming and blocks settings and refresh until cleanup stops', async () => {

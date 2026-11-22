@@ -259,10 +259,15 @@ owns these schedules; it does not create, edit, or trigger Emby Scheduled Tasks.
 Emby's native channel refresh can browse the configured catalog, but its
 callbacks are not reported as successful Control Panel imports.
 
-After each successful **Save**, the panel reads Emby's Scheduled Tasks. If
-**Refresh Internet Channels** has any triggers, a red notice at the top of the
-panel asks you to remove them in **Advanced > Scheduled Tasks** so refreshes are
-scheduled only from this Control Panel. The plugin never changes the task itself.
+When you set a category schedule to anything other than **Schedule: Off**, the
+panel reads Emby's Scheduled Tasks. If **Refresh Internet Channels** has any
+triggers, a dialog explains that both schedules will run: the category's
+schedule here, and Emby's task, which refreshes all TuneIn categories each time
+it runs. TuneIn schedules do not refresh any other Internet Channel in Emby, so
+both may be needed. Select **Keep Both Schedules** to confirm, or **Adjust
+Schedule** to restore the previous setting (you can also change the task's
+triggers in **Advanced > Scheduled Tasks**). Saving does not check the task, and
+the plugin never changes the task itself.
 
 ### Partial results
 

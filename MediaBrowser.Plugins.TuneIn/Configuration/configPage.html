@@ -129,14 +129,6 @@
             border-radius: .35em;
             background: color-mix(in srgb, #b97820 20%, transparent);
         }
-        .channelScheduleNotice:not([hidden]) {
-            max-width: 80ch;
-            padding: .65em .85em;
-            border: 1px solid #c62828;
-            border-radius: .35em;
-            background: color-mix(in srgb, #c62828 22%, transparent);
-            font-weight: 600;
-        }
         .tuneInSectionBox {
             min-inline-size: 0;
             border: 1px solid currentColor;
@@ -481,7 +473,6 @@
         <div class="auto-center tuneInPanelLayout">
         <form>
             <p class="tuneInPluginVersion" hidden></p>
-            <p class="channelScheduleNotice" role="alert" hidden></p>
             <p class="status" role="status" aria-live="polite"></p>
             <p class="status stationDeletionNotice" role="status" aria-live="polite" hidden></p>
             <p class="status catalogRefreshPrompt" role="status" hidden></p>
@@ -638,6 +629,14 @@
                     <button is="emby-button" type="button" class="raised button-submit refreshNewFirst">Prioritize new refresh</button>
                     <button is="emby-button" type="submit" class="raised button-submit refreshDismiss" autofocus>Back</button>
                 </form>
+            </dialog>
+            <dialog class="tuneInRecoveryDialog channelScheduleDialog" aria-labelledby="tuneInChannelScheduleTitle" aria-describedby="tuneInChannelScheduleText">
+                <h3 id="tuneInChannelScheduleTitle">Emby's channel refresh is also scheduled</h3>
+                <p id="tuneInChannelScheduleText" class="channelScheduleText"></p>
+                <div class="tuneInRecoveryActions">
+                    <button is="emby-button" type="button" class="raised button-submit channelScheduleConfirm" autofocus>Keep Both Schedules</button>
+                    <button is="emby-button" type="button" class="raised button-submit channelScheduleAdjust">Adjust Schedule</button>
+                </div>
             </dialog>
         </details>
         <details class="tuneInSection tuneInNeutralPanel">
