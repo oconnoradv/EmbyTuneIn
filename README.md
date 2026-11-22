@@ -65,7 +65,11 @@ the files.
 Download the [music refresh resilience RC1](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.1).
 If you downloaded an earlier RC1, download the replacement assets: the release
 tag and assembly version are unchanged, but the source commit and checksums differ.
-Check `build-info.json` when comparing a download with the branch.
+Check `build-info.json` when comparing a download with the branch. The top
+right of the TuneIn Control Panel shows the running build, for example
+**TuneIn plugin v1.2.8.0 (abcdef0)**, where the value in parentheses is the
+start of the source commit. If it is missing or shows an older commit after a
+restart, Emby is still loading an older DLL.
 
 1. Stop Emby and back up the existing plugin DLL, TuneIn configuration,
    `TuneIn.refresh.xml` (including `.discovery` and `.recovery` sidecars), and
@@ -608,6 +612,10 @@ M3U/PLS responses use the same rule, preserving URL case and query values.
 If an individual nested playlist cannot be fetched or parsed, the resolver
 can try a validated sibling. Resolution bounds and required introductions
 still apply.
+
+Stream requests send an `EmbyTuneIn/<version>` User-Agent, because some
+stream hosts reject requests without one. Legacy SHOUTcast servers that answer
+`ICY 200 OK` instead of HTTP are accepted on public addresses.
 
 Separate-introduction playback uses the server-loopback
 `/TuneIn/Playback/{signed-item}/{attempt}` endpoint and Emby's configured FFmpeg.
