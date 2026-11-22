@@ -577,6 +577,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function renderRefresh(instance, status) {
         instance.refreshBusy = !!status.Busy;
+        var version = instance.view.querySelector('.tuneInPluginVersion');
+        if (version && status.PluginVersion) {
+            version.textContent = 'TuneIn plugin ' + status.PluginVersion;
+            version.hidden = false;
+        }
         if (instance.refreshDefaultPending) {
             instance.refreshDefaultPending = false;
             instance.refreshSection.open = instance.refreshBusy ||

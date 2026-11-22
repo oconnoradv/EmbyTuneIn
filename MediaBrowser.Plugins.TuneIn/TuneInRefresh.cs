@@ -64,7 +64,25 @@ namespace MediaBrowser.Plugins.TuneIn
         public bool HasRefreshBeenStarted { get; set; }
         public DateTime? LastProgressUtc { get; set; }
         public string Activity { get; set; }
+        public string PluginVersion { get; set; } = PluginBuild.Display;
         internal TuneInRefreshStatus Copy() => (TuneInRefreshStatus)MemberwiseClone();
+    }
+
+    internal static class PluginBuild
+    {
+        internal static readonly string Display = Describe(typeof(PluginBuild).Assembly);
+
+        // Every RC shares assembly version 1.2.8.0, so append the source commit to tell builds apart.
+        internal static string Describe(System.Reflection.Assembly assembly)
+        {
+            var version = "v" + assembly.GetName().Version;
+            var informational = assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion;
+            var plus = informational?.IndexOf('+') ?? -1;
+            if (plus < 0 || plus == informational.Length - 1) return version;
+            var commit = informational.Substring(plus + 1);
+            return version + " (" + (commit.Length > 7 ? commit.Substring(0, 7) : commit) + ")";
+        }
     }
 
     public sealed class TuneInCategoryRefreshStatus

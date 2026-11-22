@@ -469,11 +469,18 @@
             z-index: 1;
             margin: .25em 0;
         }
+        .tuneInPluginVersion {
+            margin: 0 0 .25em;
+            text-align: end;
+            font-size: .85em;
+            opacity: .7;
+        }
     </style>
     <div class="scrollSlider flex-grow flex-direction-column padded-left padded-left-page padded-right padded-top-page padded-bottom-page">
 
         <div class="auto-center tuneInPanelLayout">
         <form>
+            <p class="tuneInPluginVersion" hidden></p>
             <p class="channelScheduleNotice" role="alert" hidden></p>
             <p class="status" role="status" aria-live="polite"></p>
             <p class="status stationDeletionNotice" role="status" aria-live="polite" hidden></p>

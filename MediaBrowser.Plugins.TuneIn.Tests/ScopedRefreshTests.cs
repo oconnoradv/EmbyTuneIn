@@ -24,6 +24,15 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
     public sealed class ScopedRefreshTests
     {
         [Fact]
+        public void RefreshStatusReportsRunningPluginVersionAndCommit()
+        {
+            var status = new TuneInRefreshStatus();
+            Assert.Equal(PluginBuild.Display, status.PluginVersion);
+            Assert.Equal(PluginBuild.Display, status.Copy().PluginVersion);
+            Assert.Matches(@"^v1\.2\.8\.0( \([0-9a-f]{1,7}\))?$", status.PluginVersion);
+        }
+
+        [Fact]
         public async Task ChangingSelectedGenresRetainsOnlyAllowedEntriesAndKeepsMissingStations()
         {
             var config = new PluginConfiguration

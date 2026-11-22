@@ -51,7 +51,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.traversalDepthLimit': new Element('input') };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
-        '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleNotice',
+        '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleNotice', '.tuneInPluginVersion',
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshImportContents', '.refreshPendingFolders', '.refreshPendingFolderText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
@@ -1249,7 +1249,7 @@ test('saving opens Catalog Refresh only when Station Filtering settings changed'
 
 test('saving warns in red when Emby schedules Refresh Internet Channels', async () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    assert.match(html, /<form>\s*<p class="channelScheduleNotice" role="alert" hidden><\/p>/);
+    assert.match(html, /<form>\s*<p class="tuneInPluginVersion" hidden><\/p>\s*<p class="channelScheduleNotice" role="alert" hidden><\/p>/);
     assert.match(html, /\.channelScheduleNotice:not\(\[hidden\]\)\s*\{[^}]*#c62828/);
 
     const save = async tasks => {
@@ -2040,6 +2040,19 @@ test('collapsed refresh summary and diagnostics expose live discovery metrics', 
     assert.match(app.elements['.refreshLastProgress'].textContent, /\d+ sec ago/);
     assert.match(app.elements['.refreshDiagnosticsText'].textContent,
         /Provider requests: 25 attempts, 24 successful; 8 cached page replays; 1 active HTTP request; 2 rate-limit retries; Resumed from checkpoint/);
+    app.instance.onPause();
+});
+
+test('plugin version label shows the running build reported by refresh status', async () => {
+    const app = harness(true);
+    const label = app.elements['.tuneInPluginVersion'];
+    label.hidden = true;
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', PluginVersion: 'v1.2.8.0 (e045a80)' });
+    await visit;
+    assert.equal(label.hidden, false);
+    assert.equal(label.textContent, 'TuneIn plugin v1.2.8.0 (e045a80)');
     app.instance.onPause();
 });
 
