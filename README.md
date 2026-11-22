@@ -295,7 +295,6 @@ introductions and changing settings during playback).
 ## License
 
 Based on [MediaBrowser/TuneIn](https://github.com/MediaBrowser/TuneIn) and
-distributed under [LICENSE.md](LICENSE.md). Bundled legacy HtmlAgilityPack code
-is under the [Microsoft Public License](licenses/HtmlAgilityPack-MS-PL.txt).
+distributed under [LICENSE.md](LICENSE.md).
 See [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt). Release ZIPs include
 these documents and the DLL embeds them; keep them when redistributing.

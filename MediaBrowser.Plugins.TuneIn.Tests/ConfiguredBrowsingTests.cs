@@ -579,8 +579,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 
         [Theory]
         [InlineData("MIT.txt", "The above copyright notice and this permission notice shall be included")]
-        [InlineData("ThirdPartyNotices.txt", "Copyright (C) 2003-20012 Simon Mourier")]
-        [InlineData("HtmlAgilityPack-MS-PL.txt", "(E) The software is licensed \"as-is.\"")]
+        [InlineData("ThirdPartyNotices.txt", "Preserve these notices and licenses when redistributing")]
         public void StandalonePluginIncludesRequiredLicenseDocuments(string resource, string notice)
         {
             using var stream = typeof(Plugin).Assembly.GetManifestResourceStream(
