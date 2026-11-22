@@ -94,13 +94,46 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     : new BaseItem[] { new Folder { InternalId = 2, ParentId = 1, ExternalId = root.Id } });
             var retained = channel.ReadCategorySnapshot(snapshot, "talk", CancellationToken.None);
             Assert.Equal(stationId, Assert.Single(Assert.Single(retained.Folders).Items).Id);
-            var rootFolder = new Folder { InternalId = 2, ParentId = 1, ExternalId = root.Id };
-            library.Setup(api => api.GetItemList(It.Is<InternalItemsQuery>(query => query.Recursive), It.IsAny<CancellationToken>()))
-                .Returns(new BaseItem[] { station, rootFolder, station });
-            retained = channel.ReadCategorySnapshot(snapshot, "talk", CancellationToken.None);
-            Assert.Equal(stationId, Assert.Single(Assert.Single(retained.Folders).Items).Id);
             station.ExternalId = "unverified";
             Assert.Throws<InvalidOperationException>(() => channel.ReadCategorySnapshot(snapshot, "talk", CancellationToken.None));
+        }
+
+        [Theory]
+        [InlineData("local")]
+        [InlineData("music")]
+        [InlineData("language")]
+        [InlineData("location")]
+        [InlineData("talk")]
+        [InlineData("sports")]
+        [InlineData("podcast")]
+        [InlineData("presets")]
+        public void LibraryInventoryIgnoresRepeatedItemsInEveryCategory(string category)
+        {
+            var config = new PluginConfiguration
+            {
+                SchemaVersion = 1, ConfigurationCompleted = true, Username = "listener", EnableLocalRadio = true, EnableMusic = true,
+                EnableLanguage = true, EnableLocation = true, EnableTalk = true, EnableSports = true, EnablePodcasts = true,
+                EnableFavorites = true, LocalRadioSource = "coordinates", UseCoordinates = true, LatLon = "40.7,-74.0"
+            };
+            var directory = new TuneInDirectory(() => config, (_, _) => throw new InvalidOperationException());
+            var snapshot = directory.Snapshot();
+            var library = new Mock<ILibraryManager>();
+            var channel = new TuneInChannel(directory, library: library.Object);
+            var root = channel.GetCategoryRoot(snapshot, category);
+            var stationId = directory.Register(snapshot, new NavigationEntry
+            {
+                Category = category, StationId = "s1", Name = "Repeated",
+                SelectionId = category == "local" ? "coordinates" : null, ContentCategory = category == "language" ? "talk" : null
+            });
+            var rootFolder = new Folder { InternalId = 2, ParentId = 1, ExternalId = root.Id };
+            var station = new MediaBrowser.Controller.Entities.Audio.Audio { InternalId = 3, ParentId = 2, ExternalId = stationId, Name = "Repeated" };
+            library.Setup(api => api.GetItemList(It.IsAny<InternalItemsQuery>(), It.IsAny<CancellationToken>()))
+                .Returns((InternalItemsQuery query, CancellationToken _) => query.IncludeItemTypes?.Contains(nameof(Channel)) == true
+                    ? new BaseItem[] { new Channel { InternalId = 1, Name = "TuneIn" } }
+                    : query.Recursive ? new BaseItem[] { station, rootFolder, station }
+                    : new BaseItem[] { rootFolder });
+            var retained = channel.ReadCategorySnapshot(snapshot, category, CancellationToken.None);
+            Assert.Equal(stationId, Assert.Single(Assert.Single(retained.Folders).Items).Id);
         }
 
         [Theory]
