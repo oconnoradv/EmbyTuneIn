@@ -627,7 +627,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.refreshSummaryDetails').textContent = summary.length ? ' - ' + summary.join(' - ') : '';
 
         var description = status.State === 'NeverRun' ? 'No Control Panel refresh has run.' :
-            [status.State, status.Phase, category].filter(Boolean).join(' - ');
+            [status.State, status.Phase !== status.State ? status.Phase : null, category].filter(Boolean).join(' - ');
         if (status.ActiveRequest && status.ActiveRequest !== status.Category)
             description += ' (requested: ' + refreshName(status, status.ActiveRequest) + ')';
         if (status.AutomaticRetry && status.AutomaticRetryLimit)
@@ -710,11 +710,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         diagnosticText.textContent = diagnostics.join('; ');
         diagnosticText.hidden = !diagnostics.length;
         instance.view.querySelector('#tuneInReportHint').hidden = !hasRefreshReport(status) || status.Busy;
-        if (status.LastHttpStatus) {
+        if (status.LastHttpStatus === 429 && status.State === 'Completed')
+            description += '. TuneIn temporarily limited request speed (HTTP 429 Too Many Requests); '
+                + 'the plugin waited, retried and finished normally';
+        else if (status.LastHttpStatus) {
             var label = httpStatusLabels[status.LastHttpStatus] || 'Unexpected response';
             description += '. TuneIn returned HTTP ' + status.LastHttpStatus + ' (' + label + ')';
-            if (status.LastHttpStatus === 429 && status.State === 'Completed')
-                description += ' earlier (recovered; refresh completed normally)';
         }
         else if (status.ErrorCode) description += '. ' + status.ErrorCode;
         if (status.ImportMayHavePartiallyApplied && status.Phase !== 'Importing')

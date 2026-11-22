@@ -2165,11 +2165,14 @@ for (const state of ['Completed', 'Partial', 'Running', 'Error', 'Cancelled', 'T
         });
         await visit;
         const text = app.elements['.refreshStatus'].textContent;
-        assert.match(text, /TuneIn returned HTTP 429 \(Too Many Requests\)/);
-        if (state === 'Completed')
-            assert.match(text, /earlier \(recovered; refresh completed normally\)/);
-        else
-            assert.doesNotMatch(text, /recovered|completed normally/);
+        if (state === 'Completed') {
+            assert.equal(text, 'Completed. TuneIn temporarily limited request speed (HTTP 429 Too Many Requests); '
+                + 'the plugin waited, retried and finished normally');
+        }
+        else {
+            assert.match(text, /TuneIn returned HTTP 429 \(Too Many Requests\)/);
+            assert.doesNotMatch(text, /retried|finished normally/);
+        }
         app.instance.onPause();
     });
 }
