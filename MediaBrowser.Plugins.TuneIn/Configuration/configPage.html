@@ -12,9 +12,9 @@
             gap: 1em;
         }
         .tuneInAdvancedSettings {
-            border: 2px solid #c23e46;
+            border: 2px solid #d9822b;
             border-radius: .5em;
-            background: rgba(194, 62, 70, .08);
+            background: rgba(217, 130, 43, .1);
             padding: 1em;
             margin-block: 1em;
         }
@@ -153,11 +153,12 @@
             color: inherit;
         }
         .tuneInGlobalPanel:has(> .tuneInGlobal[open]), .tuneInNeutralPanel[open] { padding-block-end: 1em; }
-        .tuneInGlobalPanel:has(> .tuneInGlobal[data-saved="true"]), .tuneInRefresh[data-outcome="Completed"],
+        /* Expanded Settings, Station Filtering and Catalog Refresh panels use the theme surface; state colors show when collapsed. */
+        .tuneInGlobalPanel:has(> .tuneInGlobal[data-saved="true"]:not([open])), .tuneInRefresh[data-outcome="Completed"]:not([open]),
         .tuneInRefreshCategories [data-outcome="Completed"] {
             background: color-mix(in srgb, #38864c 17%, transparent);
         }
-        .tuneInNeutralPanel[data-filtering-configured="true"] {
+        .tuneInNeutralPanel[data-filtering-configured="true"]:not([open]) {
             background: color-mix(in srgb, #38864c 17%, transparent);
         }
         .tuneInGlobalPanel {
@@ -186,12 +187,12 @@
             .globalSummary { grid-area: 1 / 1; }
             .tuneInGlobal::details-content { grid-column: 1 / -1; }
         }
-        .tuneInRefresh[data-outcome="Partial"], .tuneInRefreshCategories [data-outcome="Partial"] {
+        .tuneInRefresh[data-outcome="Partial"]:not([open]), .tuneInRefreshCategories [data-outcome="Partial"] {
             background: color-mix(in srgb, #bc6b19 17%, transparent);
             outline: 2px solid #bc6b19;
             outline-offset: -2px;
         }
-        .tuneInRefresh[data-outcome="Error"], .tuneInRefreshCategories [data-outcome="Error"] {
+        .tuneInRefresh[data-outcome="Error"]:not([open]), .tuneInRefreshCategories [data-outcome="Error"] {
             background: color-mix(in srgb, #bf4141 17%, transparent);
             outline: 2px solid #bf4141;
             outline-offset: -2px;
@@ -524,12 +525,12 @@
                         <div class="inputContainer">
                             <label for="tuneInMaxStationCount">Max Station Count:</label>
                             <input id="tuneInMaxStationCount" type="number" class="maxStationCount" min="1" max="4000" step="1" placeholder="Not set" aria-describedby="tuneInMaxStationCountHint" disabled />
-                            <div class="fieldDescription" id="tuneInMaxStationCountHint">Per top-level category: 1 to 4000 unique TuneIn stations (default: 250). All Music genres share one counter; repeated placements count once. Leave blank for Not set. This limits new discovery, not retained station totals.</div>
+                            <div class="fieldDescription" id="tuneInMaxStationCountHint">Per top-level category: 1 to 4000 unique TuneIn stations (default: 200). All Music genres share one counter; repeated placements count once. Leave blank for Not set. This limits new discovery, not retained station totals.</div>
                         </div>
                         <div class="inputContainer">
                             <label for="tuneInTraversalDepthLimit">Traversal depth limit:</label>
                             <input id="tuneInTraversalDepthLimit" type="number" class="traversalDepthLimit" min="3" max="50" step="1" required aria-describedby="tuneInTraversalDepthLimitHint" disabled />
-                            <div class="fieldDescription" id="tuneInTraversalDepthLimitHint">TuneIn levels: 3 to 50 (default: 5). The top-level category is level 0; every folder transition, including More Stations, adds one level. Additional depths allow traversing more stations, subject to Max Station Count. Reaching either limit still imports the limited discovery and retains existing entries allowed by saved filters. Retained deeper folders remain available; Emby import depth is not capped.</div>
+                            <div class="fieldDescription" id="tuneInTraversalDepthLimitHint">TuneIn levels: 3 to 50 (default: 7). The top-level category is level 0; every folder transition, including More Stations, adds one level. Additional depths allow traversing more stations, subject to Max Station Count. Reaching either limit still imports the limited discovery and retains existing entries allowed by saved filters. Retained deeper folders remain available; Emby import depth is not capped.</div>
                         </div>
                         <div class="inputContainer">
                             <div class="tuneInApiIntervalRow">
@@ -543,13 +544,13 @@
                                 <label for="tuneInDiscoveryDeadline">Discovery deadline (hours):</label>
                                 <input id="tuneInDiscoveryDeadline" type="number" class="discoveryDeadlineHours" min="1" max="10" step="1" aria-describedby="tuneInDiscoveryDeadlineHint" required disabled />
                             </div>
-                            <div class="fieldDescription" id="tuneInDiscoveryDeadlineHint">Time allowed for catalog discovery: 1 to 10 hours (default: 3), excluding import time. On timeout, active work drains and the refresh stops without an automatic retry. Saved discovery pages can be reused by a manual refresh.</div>
+                            <div class="fieldDescription" id="tuneInDiscoveryDeadlineHint">Time allowed for catalog discovery: 1 to 10 hours (default: 2), excluding import time. On timeout, active work drains and the refresh stops without an automatic retry. Saved discovery pages can be reused by a manual refresh.</div>
 
                             <div class="inputContainer">
                                 <label for="tuneInImportDeadline">Import deadline (hours):</label>
                                 <input id="tuneInImportDeadline" type="number" class="importDeadlineHours" min="1" max="100" step="1" aria-describedby="tuneInImportDeadlineHint" required disabled />
                             </div>
-                            <div class="fieldDescription" id="tuneInImportDeadlineHint">Time allowed per import: 1 to 100 hours (default: 24), including preparation and verification. Does not change discovery limits. On timeout, active work drains and the refresh stops without an automatic retry. A manual refresh replays the complete traversal, not the last served folder.</div>
+                            <div class="fieldDescription" id="tuneInImportDeadlineHint">Time allowed per import: 1 to 100 hours (default: 8), including preparation and verification. Does not change discovery limits. On timeout, active work drains and the refresh stops without an automatic retry. A manual refresh replays the complete traversal, not the last served folder.</div>
                         </div>
                         <label class="emby-checkbox-label">
                             <input type="checkbox" is="emby-checkbox" class="enableCatalogIdentityDiagnostics" aria-describedby="tuneInIdentityDiagnosticsHint" disabled />
