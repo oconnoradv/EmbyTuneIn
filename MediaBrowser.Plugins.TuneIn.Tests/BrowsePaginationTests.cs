@@ -73,6 +73,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("g373", "c100002519", "26", "s", "nextStations")]
         [InlineData("g373", "c100002519", "6", "p", "nextShows")]
         [InlineData("g2698", "c100002520", "26", "s", "nextStations")]
+        [InlineData("g3078", "c100001377", "26", "p", "nextShows")]
         public async Task LegacyGenrePaginationFollowsItsCanonicalMusicCategory(
             string genre, string category, string offset, string filter, string key)
         {
@@ -98,6 +99,32 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
                 BrowseProviderLink("https://opml.radiotime.com/Browse.ashx?" + query, musicId: genre));
             Assert.Contains("pagination escaped", error.Message);
+        }
+
+        [Theory]
+        [InlineData("offset=26&id=c100001377&filter=p", true)]
+        [InlineData("offset=26&id=c100002519&filter=p", false)]
+        public async Task LanguageBranchPaginationFollowsKnownCanonicalCategory(string query, bool allowed)
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableLanguage = true };
+            config.Languages.Add(new CatalogSelection { Id = "l122", Enabled = true });
+            var calls = 0;
+            var directory = new TuneInDirectory(() => config, (request, token) => Task.FromResult(XDocument.Parse(
+                !request.Parameters.ContainsKey("id")
+                ? "<opml><body><outline type='link' text='Spanish' URL='https://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=l122'/></body></opml>"
+                : calls++ == 0
+                ? "<opml><body><outline type='link' key='nextShows' text='More' URL='https://opml.radiotime.com/Browse.ashx?"
+                    + query.Replace("&", "&amp;") + "'/></body></opml>"
+                : "<opml><body/></opml>")));
+            var snapshot = directory.Snapshot();
+            var folder = directory.Register(snapshot, new NavigationEntry
+            {
+                Category = "language", SelectionId = "l122", ContentCategory = "talk",
+                Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=g3078&filter=l122")
+            });
+            var read = new TuneInChannel(directory).GetChannelItems(new InternalChannelItemQuery { FolderId = folder }, CancellationToken.None);
+            if (allowed) Assert.Single((await read).Items);
+            else Assert.Contains("pagination escaped", (await Assert.ThrowsAsync<InvalidDataException>(() => read)).Message);
         }
 
         private static async Task<string> BrowseProviderLink(string url, bool location = false,

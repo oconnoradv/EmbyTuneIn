@@ -267,11 +267,12 @@ namespace MediaBrowser.Plugins.TuneIn
             var from = current.Parameters.GetValueOrDefault("id");
             var to = next.Parameters.GetValueOrDefault("id");
             if (from == to) return true;
-            if (entry.Category != "music" && entry.MusicSelectionId == null) return false;
+            if (entry.Category != "music" && entry.Category != "language" && entry.MusicSelectionId == null) return false;
             if (current.Parameters.ContainsKey("c") || next.Parameters.ContainsKey("c")
                 || !int.TryParse(next.Parameters.GetValueOrDefault("offset"), out var offset) || offset <= 0)
                 return false;
-            // TuneIn emits the canonical category ID in More Stations/Shows links for these legacy genre IDs.
+            // TuneIn emits the canonical category ID in More Stations/Shows links for these legacy genre IDs,
+            // including when By Language reaches them through its Music, Talk or Sports branches.
             switch (from)
             {
                 case "g3": return to == "c57935";
@@ -280,6 +281,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 case "g71": return to == "c100002515";
                 case "g373": return to == "c100002519";
                 case "g2698": return to == "c100002520";
+                case "g3078": return to == "c100001377";
                 default: return false;
             }
         }
