@@ -16,6 +16,7 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 - [Configure browsing](#configure-browsing)
 - [Refresh the catalog](#refresh-the-catalog)
 - [Status and diagnostics](#status-and-diagnostics)
+- [Control Panel colors](#control-panel-colors)
 - [Clean up the library](#clean-up-the-library)
 - [Artwork](#artwork)
 - [Playback](#playback)
@@ -157,8 +158,8 @@ categories are skipped and reported as partial.
 
 ## Status and diagnostics
 
-Section and row colors show the outcome: green for success (including
-**Limited**), orange for partial, red for error. Live metrics show elapsed
+Section and row colors show the outcome (see
+[Control Panel colors](#control-panel-colors)). Live metrics show elapsed
 time, progress, pages fetched and, during import, folders served.
 
 | Count | Meaning |
@@ -177,6 +178,19 @@ skipped-link examples. Usernames, coordinates, tokens, provider responses and
 signed IDs are omitted. Review reports before sharing; exception traces can
 contain server details. Reports are kept in memory until the next refresh or
 restart.
+
+## Control Panel colors
+
+![Control Panel colors by scenario](docs/images/control-panel-colors.svg)
+
+| Color | Scenario |
+| --- | --- |
+| Green | Saved Global Settings, configured Station Filtering and successful or **Limited** refreshes, shown while collapsed; **Locked** label; imported, unchanged or limited category rows; selected station matches |
+| Orange | **Advanced Settings** (always); partial refreshes and partial or incomplete category rows |
+| Red | Refresh errors and failed or timed-out category rows; **Unlocked** label |
+| Amber | **Refreshing** and **Maintenance is active** badges (pulsing unless reduced motion is on); configuration-required, deletion and cleanup notices |
+| Yellow | First-run prompt to open **Catalog Refresh** |
+| Theme surface | Expanded sections and settings not yet saved |
 
 ## Clean up the library
 

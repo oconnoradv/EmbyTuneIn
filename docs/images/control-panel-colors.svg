@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="842" viewBox="0 0 860 842" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="15">
+  <title>TuneIn Control Panel colors by scenario</title>
+  <rect width="860" height="842" fill="#101010"/>
+  <text x="24" y="34" fill="#f0f0f0" font-size="19" font-weight="600">TuneIn Control Panel — colors by scenario (Emby dark theme)</text>
+
+  <!-- 1 Global settings saved + locked -->
+  <g transform="translate(24,56)">
+    <rect width="540" height="44" rx="6" fill="#38864c" fill-opacity=".17"/>
+    <text x="16" y="28" fill="#e5e5e5" font-weight="600">▸ Global TuneIn Settings</text>
+    <text x="400" y="28" fill="#e5e5e5" font-weight="600">Settings</text>
+    <text x="470" y="28" fill="#74ab84" font-weight="600">Locked</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">Saved and collapsed: green.</text>
+    <text x="580" y="37" fill="#bdbdbd" font-size="13">Locked label: green.</text>
+  </g>
+
+  <!-- 2 Global settings unlocked -->
+  <g transform="translate(24,110)">
+    <rect width="540" height="44" rx="6" fill="#ffffff" fill-opacity=".05"/>
+    <text x="16" y="28" fill="#e5e5e5" font-weight="600">▾ Global TuneIn Settings</text>
+    <text x="400" y="28" fill="#e5e5e5" font-weight="600">Settings</text>
+    <text x="470" y="28" fill="#d1848a" font-weight="600">Unlocked</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">Expanded or not yet saved: theme surface.</text>
+    <text x="580" y="37" fill="#bdbdbd" font-size="13">Unlocked label: red.</text>
+  </g>
+
+  <!-- 3 Station filtering configured -->
+  <g transform="translate(24,164)">
+    <rect width="540" height="44" rx="6" fill="#38864c" fill-opacity=".17"/>
+    <text x="16" y="28" fill="#e5e5e5" font-weight="600">▸ TuneIn Station Filtering</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">Filtering configured and collapsed:</text>
+    <text x="580" y="37" fill="#bdbdbd" font-size="13">green.</text>
+  </g>
+
+  <!-- 4 Advanced settings -->
+  <g transform="translate(24,218)">
+    <rect x="1" y="1" width="538" height="42" rx="8" fill="#d9822b" fill-opacity=".1" stroke="#d9822b" stroke-width="2"/>
+    <text x="16" y="28" fill="#e5e5e5" font-weight="600">▸ Advanced Settings</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">Always outlined in orange as a</text>
+    <text x="580" y="37" fill="#bdbdbd" font-size="13">caution.</text>
+  </g>
+
+  <!-- 5 Refresh successful -->
+  <g transform="translate(24,272)">
+    <rect width="540" height="44" rx="6" fill="#38864c" fill-opacity=".17"/>
+    <text x="16" y="28" fill="#e5e5e5" font-weight="600">▸ Catalog Refresh - Overall: successful</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">Last refresh succeeded (collapsed):</text>
+    <text x="580" y="37" fill="#bdbdbd" font-size="13">green.</text>
+  </g>
+
+  <!-- 6 Refresh limited -->
+  <g transform="translate(24,326)">
+    <rect width="540" height="44" rx="6" fill="#38864c" fill-opacity=".17"/>
+    <text x="16" y="28" fill="#e5e5e5" font-weight="600" font-size="14">▸ Catalog Refresh - Overall: successful (limited by discovery settings)</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">Stopped by Max Station Count or</text>
+    <text x="580" y="37" fill="#bdbdbd" font-size="13">depth: still green.</text>
+  </g>
+
+  <!-- 7 Refresh partial -->
+  <g transform="translate(24,380)">
+    <rect x="1" y="1" width="538" height="42" rx="6" fill="#bc6b19" fill-opacity=".17" stroke="#bc6b19" stroke-width="2"/>
+    <text x="16" y="28" fill="#e5e5e5" font-weight="600">▸ Catalog Refresh - Overall: partial</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">Some pages skipped; saved stations</text>
+    <text x="580" y="37" fill="#bdbdbd" font-size="13">kept: orange outline.</text>
+  </g>
+
+  <!-- 8 Refresh error -->
+  <g transform="translate(24,434)">
+    <rect x="1" y="1" width="538" height="42" rx="6" fill="#bf4141" fill-opacity=".17" stroke="#bf4141" stroke-width="2"/>
+    <text x="16" y="28" fill="#e5e5e5" font-weight="600">▸ Catalog Refresh - Overall: error</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">Refresh failed or timed out:</text>
+    <text x="580" y="37" fill="#bdbdbd" font-size="13">red outline.</text>
+  </g>
+
+  <!-- 9 Activity indicators -->
+  <g transform="translate(24,488)">
+    <rect width="540" height="44" rx="6" fill="#ffffff" fill-opacity=".05"/>
+    <text x="16" y="28" fill="#e5e5e5" font-weight="600">▾ Catalog Refresh</text>
+    <rect x="160" y="11" width="104" height="22" rx="4" fill="#fff0c2"/>
+    <circle cx="173" cy="22" r="4" fill="#302100"/>
+    <text x="183" y="27" fill="#302100" font-size="13">Refreshing</text>
+    <text x="288" y="28" fill="#e5e5e5" font-weight="600">Maintenance</text>
+    <rect x="376" y="11" width="158" height="22" rx="4" fill="#ffcb71"/>
+    <circle cx="388" cy="22" r="4" fill="#302100"/>
+    <text x="397" y="27" fill="#302100" font-size="12">Maintenance is active</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">Work in progress: amber badge that</text>
+    <text x="580" y="37" fill="#bdbdbd" font-size="13">pulses (static with reduced motion).</text>
+  </g>
+
+  <!-- 10 Category rows -->
+  <g transform="translate(24,542)">
+    <rect width="130" height="30" rx="4" fill="#38864c" fill-opacity=".17"/>
+    <text x="10" y="20" fill="#e5e5e5" font-size="13">Music: Imported</text>
+    <rect x="136" width="130" height="30" rx="4" fill="#38864c" fill-opacity=".17"/>
+    <text x="146" y="20" fill="#e5e5e5" font-size="13">Talk: Limited</text>
+    <rect x="273" y="1" width="128" height="28" rx="4" fill="#bc6b19" fill-opacity=".17" stroke="#bc6b19" stroke-width="2"/>
+    <text x="282" y="20" fill="#e5e5e5" font-size="13">Sports: Partial</text>
+    <rect x="409" y="1" width="130" height="28" rx="4" fill="#bf4141" fill-opacity=".17" stroke="#bf4141" stroke-width="2"/>
+    <text x="418" y="20" fill="#e5e5e5" font-size="13">Language: Failed</text>
+    <text x="580" y="13" fill="#bdbdbd" font-size="13">Per-category rows use the same</text>
+    <text x="580" y="30" fill="#bdbdbd" font-size="13">green / orange / red scheme.</text>
+  </g>
+
+  <!-- 11 First-run prompt -->
+  <g transform="translate(24,588)">
+    <rect x=".5" y=".5" width="539" height="43" rx="4" fill="#fff2a8" stroke="#8a6800"/>
+    <text x="14" y="27" fill="#332900" font-size="13">Please go to the Catalog Refresh section to refresh your library's TuneIn catalog</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">First run, before any refresh:</text>
+    <text x="580" y="37" fill="#bdbdbd" font-size="13">yellow prompt.</text>
+  </g>
+
+  <!-- 12 Configuration required / notice -->
+  <g transform="translate(24,642)">
+    <rect x=".5" y=".5" width="539" height="43" rx="6" fill="#b97820" fill-opacity=".2" stroke="#b97820"/>
+    <text x="14" y="27" fill="#e5e5e5" font-size="12">The TuneIn catalog refresh is unavailable until Global Settings have been reviewed and saved.</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">Setup needed or station-deletion</text>
+    <text x="580" y="37" fill="#bdbdbd" font-size="13">notice: amber box.</text>
+  </g>
+
+  <!-- 13 Cleanup warning -->
+  <g transform="translate(24,696)">
+    <rect x="1" y="1" width="538" height="42" rx="6" fill="#b97820" fill-opacity=".1" stroke="#b97820" stroke-width="2"/>
+    <text x="14" y="27" fill="#e5e5e5" font-size="13" font-weight="600">Cleanup cannot be undone. Back up Emby before removing any entries.</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">Cleanup warning: amber outline.</text>
+  </g>
+
+  <!-- 14 Selected station match -->
+  <g transform="translate(24,750)">
+    <rect x="1" y="1" width="538" height="42" rx="4" fill="#ffffff" fill-opacity=".08" stroke="#52b54b" stroke-width="2"/>
+    <text x="14" y="21" fill="#e5e5e5" font-size="13">KEXP 90.3 FM</text>
+    <text x="14" y="36" fill="#a8a8a8" font-size="11">Music › Alternative › KEXP 90.3 FM</text>
+    <text x="580" y="20" fill="#bdbdbd" font-size="13">One-station cleanup: chosen match</text>
+    <text x="580" y="37" fill="#bdbdbd" font-size="13">outlined in green.</text>
+  </g>
+
+  <text x="24" y="824" fill="#8c8c8c" font-size="12">Expanded sections use the Emby theme surface; state colors show while a section is collapsed. Advanced Settings is always orange.</text>
+</svg>
