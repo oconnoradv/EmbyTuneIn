@@ -456,8 +456,8 @@ test('save retains unrelated configuration and converts empty fields to null', a
     assert.equal(app.writes[0].config.SchemaVersion, 1);
     assert.equal(app.writes[0].config.ConfigurationCompleted, true);
     assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 2);
-    assert.equal(app.writes[0].config.ImportDeadlineHours, 24);
-    assert.equal(app.writes[0].config.DiscoveryDeadlineHours, 3);
+    assert.equal(app.writes[0].config.ImportDeadlineHours, 8);
+    assert.equal(app.writes[0].config.DiscoveryDeadlineHours, 2);
     assert.equal(app.writes[0].config.EnableCatalogIdentityDiagnostics, false);
     assert.deepEqual(app.notices, ['saved']);
 });
@@ -489,7 +489,7 @@ test('API request interval validates and saves the shared catalog pacing setting
 });
 
 test('discovery controls distinguish legacy defaults from Not set and preserve saved limits', async () => {
-    for (const [config, maximum, depth] of [[{}, 250, 5], [{ MaxStationCount: null }, '', 5],
+    for (const [config, maximum, depth] of [[{}, 200, 7], [{ MaxStationCount: null }, '', 7],
         [{ MaxStationCount: 4000, TraversalDepthLimit: 50 }, 4000, 50]]) {
         const app = harness();
         const visit = app.instance.onResume();

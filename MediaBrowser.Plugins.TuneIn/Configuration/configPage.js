@@ -1474,13 +1474,13 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.apiRequestIntervalSeconds').value =
                 config.ApiRequestIntervalSeconds == null ? 2 : Math.min(config.ApiRequestIntervalSeconds, 30);
             view.querySelector('.importDeadlineHours').value =
-                config.ImportDeadlineHours == null ? 24 : config.ImportDeadlineHours;
+                config.ImportDeadlineHours == null ? 8 : config.ImportDeadlineHours;
             view.querySelector('.discoveryDeadlineHours').value =
-                config.DiscoveryDeadlineHours == null ? 3 : config.DiscoveryDeadlineHours;
+                config.DiscoveryDeadlineHours == null ? 2 : config.DiscoveryDeadlineHours;
             view.querySelector('.maxStationCount').value =
-                config.MaxStationCount === undefined ? 250 : config.MaxStationCount == null ? '' : config.MaxStationCount;
+                config.MaxStationCount === undefined ? 200 : config.MaxStationCount == null ? '' : config.MaxStationCount;
             view.querySelector('.traversalDepthLimit').value =
-                config.TraversalDepthLimit == null ? 5 : config.TraversalDepthLimit;
+                config.TraversalDepthLimit == null ? 7 : config.TraversalDepthLimit;
             view.querySelector('.enableCatalogIdentityDiagnostics').checked = config.EnableCatalogIdentityDiagnostics === true;
             view.querySelector('.hideRegionalGenres').checked = config.HideRegionalGenres !== false;
             view.querySelector('.allowPartialCatalogImport').checked = config.AllowPartialCatalogImport !== false;

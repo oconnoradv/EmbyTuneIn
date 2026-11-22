@@ -1,4 +1,4 @@
-using MediaBrowser.Controller.Channels;
+﻿using MediaBrowser.Controller.Channels;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Common.Extensions;
@@ -186,7 +186,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData("", 24)]
+        [InlineData("", 8)]
         [InlineData("<ImportDeadlineHours>1</ImportDeadlineHours>", 1)]
         [InlineData("<ImportDeadlineHours>6</ImportDeadlineHours>", 6)]
         [InlineData("<ImportDeadlineHours>10</ImportDeadlineHours>", 10)]
@@ -221,7 +221,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData("", 3)]
+        [InlineData("", 2)]
         [InlineData("<DiscoveryDeadlineHours>1</DiscoveryDeadlineHours>", 1)]
         [InlineData("<DiscoveryDeadlineHours>10</DiscoveryDeadlineHours>", 10)]
         public void DiscoveryDeadlineSurvivesLegacyLoadingWithoutInvalidatingCatalog(string setting, int expected)

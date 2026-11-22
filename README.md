@@ -51,8 +51,8 @@ and compatibility with supported Emby versions still requires verification.
 
 This branch combines configured browsing, partial refreshes, the Control Panel,
 playback improvements, and library maintenance. Discovery and import have
-separate discovery and import deadlines: 1 to 10 hours for discovery (default: 3),
-and 1 to 100 hours for import (default: 24).
+separate discovery and import deadlines: 1 to 10 hours for discovery (default: 2),
+and 1 to 100 hours for import (default: 8).
 Timeouts stop without automatic retries; bounded interruption recovery remains enabled. Restarting Emby alone
 never starts a refresh.
 
@@ -428,18 +428,18 @@ category in settings if it should stay absent.
 
 | Limit | Behavior |
 | --- | --- |
-| Discovery attempt | Configured deadline of 1 to 10 hours (default: 3), independent of import time |
-| Import attempt | A fresh configured deadline of 1 to 100 hours (default: 24) for staging, importing and verification/finalization |
+| Discovery attempt | Configured deadline of 1 to 10 hours (default: 2), independent of import time |
+| Import attempt | A fresh configured deadline of 1 to 100 hours (default: 8) for staging, importing and verification/finalization |
 | Catalog cache | Up to 60,000 pages and 640 MiB per refresh |
 | Discovered category | Up to 1,000,000 items and 1 GiB estimated data |
-| Max Station Count | Not set or 1-4000 unique TuneIn station IDs per top-level category (default: 250); caps discovery, not retained totals |
+| Max Station Count | Not set or 1-4000 unique TuneIn station IDs per top-level category (default: 200); caps discovery, not retained totals |
 | Catalog HTTP response | 90 seconds including body reads, excluding pacing and provider cooldowns |
 | Discovery checkpoint | At a completed folder after five minutes or 3,000 additional station rows when new pages are available, and on interruption or timeout when possible |
 | Automatic refresh retries | Up to 3 for interrupted work within an active refresh, shared across discovery and import |
 | Timeout handling | Drains active work and stops without automatic discovery or import retries |
 | Manual Cancel | Drains active work and stops; never triggers an automatic recovery retry |
 | Checkpoint resume window | 48 hours from discovery start, with matching settings and requested category scope |
-| TuneIn traversal depth | 3-50 (default: 5), category root at level 0; every folder and More Stations transition counts; limited results can be imported |
+| TuneIn traversal depth | 3-50 (default: 7), category root at level 0; every folder and More Stations transition counts; limited results can be imported |
 
 Discovery can overlap up to four independent requests without reducing shared spacing
 between request starts. HTTP 429 responses have a run-wide budget of three
