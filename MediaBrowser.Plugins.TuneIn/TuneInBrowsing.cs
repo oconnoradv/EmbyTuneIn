@@ -17,11 +17,14 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         private readonly TuneInDirectory directory;
         private readonly Func<string, string> image;
+        private readonly Func<NavigationEntry, string> folderImage;
 
-        internal TuneInBrowsing(TuneInDirectory directory, Func<string, string> image)
+        internal TuneInBrowsing(TuneInDirectory directory, Func<string, string> image,
+            Func<NavigationEntry, string> folderImage = null)
         {
             this.directory = directory;
             this.image = image;
+            this.folderImage = folderImage;
         }
 
         public async Task<ChannelItemResult> GetItemsAsync(string folderId, CancellationToken token,
@@ -90,7 +93,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private ChannelItemInfo Folder(ConfigurationSnapshot snapshot, NavigationEntry entry) => new ChannelItemInfo
         {
             Id = directory.Register(snapshot, entry), Name = entry.Name, Type = ChannelItemType.Folder,
-            ImageUrl = image(CategoryName(entry.Category))
+            ImageUrl = folderImage?.Invoke(entry) ?? image(CategoryName(entry.Category))
         };
 
         private async Task<Dictionary<string, SelectorItem>> SelectedTopicsAsync(ConfigurationSnapshot snapshot, string category,

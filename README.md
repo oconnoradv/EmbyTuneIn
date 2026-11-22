@@ -607,6 +607,12 @@ folder artwork even when the catalog is unchanged. Refresh also updates the
 top-level TuneIn library item's Primary, Thumb, and first Backdrop images to
 the **Powered by TuneIn** artwork.
 
+Music genre folders, including music genres shown under **By Language**, use
+bundled 1280×720 artwork built from TuneIn's genre logo. TuneIn publishes a
+logo for only some genres; the others use the Music category artwork.
+Maintainers can rebuild the bundled images on Windows with
+`tools\Build-GenreArtwork.ps1`; the plugin does not download or generate them.
+
 ## Playback
 
 All configured categories share the playback resolver. Ordinary continuous

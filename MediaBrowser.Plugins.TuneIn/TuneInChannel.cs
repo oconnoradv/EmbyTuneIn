@@ -84,15 +84,15 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 session = browseCache;
             }
-            return new TuneInBrowsing(directory, GetDefaultImages).GetItemsAsync(query.FolderId, cancellationToken, session, snapshot);
+            return new TuneInBrowsing(directory, GetDefaultImages, FolderImage).GetItemsAsync(query.FolderId, cancellationToken, session, snapshot);
         }
 
         internal Task<ChannelItemResult> GetRefreshChannelItems(string folder, TuneInCatalogueSession session,
             bool strict, CancellationToken token) =>
-            new TuneInBrowsing(directory, GetDefaultImages).GetItemsAsync(folder, token, session);
+            new TuneInBrowsing(directory, GetDefaultImages, FolderImage).GetItemsAsync(folder, token, session);
 
         internal ChannelItemInfo GetCategoryRoot(ConfigurationSnapshot snapshot, string category) =>
-            new TuneInBrowsing(directory, GetDefaultImages).CategoryRoot(snapshot, category);
+            new TuneInBrowsing(directory, GetDefaultImages, FolderImage).CategoryRoot(snapshot, category);
 
         internal async Task ImportAsync(TuneInStagedImport staged, Func<Task> import)
         {
@@ -275,12 +275,15 @@ namespace MediaBrowser.Plugins.TuneIn
                     return;
                 }
                 if (entry.Category != rootEntry.Category || entry.StationId != null) return;
-                var version = TuneInCategoryArtwork.Revision + ":" + entry.Category;
+                var genre = TuneInCategoryArtwork.GenreId(entry);
+                var version = TuneInCategoryArtwork.Revision + ":" + entry.Category
+                    + (genre == null ? "" : ":" + genre + ":" + TuneInCategoryArtwork.GenreRevision);
                 var previousVersion = folder.GetProviderId("TuneInCategoryArtwork");
                 if (previousVersion == version && folder.HasImage(ImageType.Primary, 0)) return;
                 folder.SetImage(new ItemImageInfo
                 {
-                    Path = CategoryArtworkUrl(entry.Category), Type = ImageType.Primary, DateModified = DateTimeOffset.UtcNow
+                    Path = FolderImage(entry) ?? CategoryArtworkUrl(entry.Category), Type = ImageType.Primary,
+                    DateModified = DateTimeOffset.UtcNow
                 }, 0);
                 folder.SetProviderId("TuneInCategoryArtwork", version);
                 try { library.UpdateItem(folder, library.GetItemById(folder.ParentId), ItemUpdateType.ImageUpdate); }
@@ -309,6 +312,13 @@ namespace MediaBrowser.Plugins.TuneIn
                 channel.SetProviderId(provider, previousRevision ?? "");
                 throw;
             }
+        }
+
+        private string FolderImage(NavigationEntry entry)
+        {
+            var genre = TuneInCategoryArtwork.GenreId(entry);
+            return genre == null || serverHost == null ? null
+                : TuneInCategoryArtwork.GenreUrl(serverHost.GetLocalApiUrl(System.Net.IPAddress.Loopback), genre);
         }
 
         private string CategoryArtworkUrl(string category) =>
