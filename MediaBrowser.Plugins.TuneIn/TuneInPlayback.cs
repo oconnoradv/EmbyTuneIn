@@ -79,8 +79,8 @@ namespace MediaBrowser.Plugins.TuneIn
             Func<TuneInAudioSource, CancellationToken, Stream> decode, CancellationToken token, string attempt = null)
         {
             var snapshot = directory.Snapshot();
-            Validate(snapshot, id);
-            var scope = new PlaybackScope(directory, snapshot, token);
+            var entry = Validate(snapshot, id);
+            var scope = new PlaybackScope(directory, snapshot, token, entry);
             TuneInAudioSource source = null;
             try
             {
@@ -372,8 +372,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (decode == null) throw new InvalidOperationException("The Emby pre-roll audio decoder is unavailable.");
                 var stages = new Queue<Func<CancellationToken, Task<TuneInAudioSource>>>();
                 foreach (var url in plan.PreRolls)
-                    stages.Enqueue(ct => OpenPlanAsync(new PlaybackPlan { Url = url }, snapshot, scope, decode, ct));
-                stages.Enqueue(ct => OpenAlternativesAsync(plan, snapshot, scope, decode, ct));
+                    stages.Enqueue(ct => { scope.Check(); return OpenPlanAsync(new PlaybackPlan { Url = url }, scope.Snapshot, scope, decode, ct); });
+                stages.Enqueue(ct => { scope.Check(); return OpenAlternativesAsync(plan, scope.Snapshot, scope, decode, ct); });
                 var first = await stages.Dequeue()(token).ConfigureAwait(false);
                 return new TuneInAudioSource(new PcmSequenceStream(first, stages, decode, token), "audio/wav");
             }
@@ -574,14 +574,18 @@ namespace MediaBrowser.Plugins.TuneIn
             private static readonly object Gate = new object();
             private static readonly HashSet<PlaybackScope> Active = new HashSet<PlaybackScope>();
             private readonly TuneInDirectory directory;
-            private readonly ConfigurationSnapshot snapshot;
+            private readonly NavigationEntry entry;
+            private volatile ConfigurationSnapshot snapshot;
             private readonly CancellationTokenSource lifetime;
             private int openings;
             internal CancellationToken Token { get; }
-            internal PlaybackScope(TuneInDirectory directory, ConfigurationSnapshot snapshot, CancellationToken token)
+            internal ConfigurationSnapshot Snapshot => snapshot;
+            internal PlaybackScope(TuneInDirectory directory, ConfigurationSnapshot snapshot, CancellationToken token,
+                NavigationEntry entry = null)
             {
                 this.directory = directory;
                 this.snapshot = snapshot;
+                this.entry = entry;
                 lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
                 Token = lifetime.Token;
                 lock (Gate)
@@ -594,7 +598,21 @@ namespace MediaBrowser.Plugins.TuneIn
                     Active.Add(this);
                 }
             }
-            internal void Check() => directory.CheckCurrent(snapshot, Token);
+            internal void Check()
+            {
+                Token.ThrowIfCancellationRequested();
+                if (!Follow(directory.Snapshot())) throw new OperationCanceledException("TuneIn configuration changed.");
+            }
+            private bool Follow(ConfigurationSnapshot current)
+            {
+                lock (this)
+                {
+                    if (current.Key == snapshot.Key) return true;
+                    if (!TuneInDirectory.PlaybackStillAllowed(snapshot, current, entry)) return false;
+                    snapshot = current;
+                    return true;
+                }
+            }
             internal void ConsumeOpening()
             {
                 if (Interlocked.Increment(ref openings) > 16)
@@ -604,7 +622,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 lock (Gate)
                     foreach (var scope in Active)
-                        if (scope.directory.Snapshot().Key != scope.snapshot.Key) scope.lifetime.Cancel();
+                        if (!scope.Follow(scope.directory.Snapshot())) scope.lifetime.Cancel();
             }
             public void Dispose()
             {

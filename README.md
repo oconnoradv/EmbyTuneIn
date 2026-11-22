@@ -631,8 +631,10 @@ unguessable handle bound to the signed item and its configuration allows the
 matching loopback open to reuse that validated plan for up to 30 seconds; the
 server retains at most 64 pending plans. Probes or opens without a reusable
 plan resolve afresh rather than sharing broadcaster or introduction URLs.
-Scope validation retains the Favorites username. Scope changes
-cancel affected handoff sessions; stopping or leaving playback releases
+Scope validation retains the Favorites username. Saving settings stops only
+streams whose station the new settings no longer allow (for example, a disabled
+category, a removed selection, a changed Favorites username or changed local
+coordinates); other streams keep playing. Stopping or leaving playback releases
 responses and decoders. Failed live opening can try another advertised
 alternative. Failures after selection terminate the stream without replaying
 the introduction or cycling alternatives.

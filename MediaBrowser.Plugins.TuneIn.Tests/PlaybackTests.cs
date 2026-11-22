@@ -475,6 +475,31 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
+        [InlineData("music", true)]
+        [InlineData("username", false)]
+        public async Task SaveKeepsPlayingOnlyStationsTheNewSettingsStillAllow(string change, bool keeps)
+        {
+            var fixture = new Fixture(Ad + "\n" + Live);
+            using (var source = await fixture.Playback.OpenAsync(fixture.Id, Own, CancellationToken.None))
+            {
+                await source.Body.ReadExactlyAsync(new byte[44]);
+                if (change == "music") fixture.Config.EnableMusic = false;
+                else fixture.Config.Username = "OtherUser";
+                TuneInPlayback.CancelChangedScopes();
+                if (keeps)
+                {
+                    await Bytes(source.Body);
+                    Assert.Contains(fixture.Requests, request => request.Url == Live);
+                }
+                else
+                {
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Bytes(source.Body));
+                    Assert.DoesNotContain(fixture.Requests, request => request.Url == Live);
+                }
+            }
+        }
+
+        [Theory]
         [InlineData(false)]
         [InlineData(true)]
         public async Task ScopeChangeOrCancellationClosesAdAndPreventsDeferredLive(bool changeScope)

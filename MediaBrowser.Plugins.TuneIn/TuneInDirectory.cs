@@ -634,6 +634,14 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (key != snapshot.Key) throw new OperationCanceledException("TuneIn configuration changed.");
         }
 
+        // A playing station survives a settings save only while the new settings still permit the same station.
+        internal static bool PlaybackStillAllowed(ConfigurationSnapshot previous, ConfigurationSnapshot current,
+            NavigationEntry entry) =>
+            entry != null && previous.Value.NavigationSecret == current.Value.NavigationSecret
+            && Allowed(current, entry)
+            && (entry.Category != "presets" || previous.Value.Username == current.Value.Username)
+            && (entry.SelectionId != "coordinates" || previous.Value.LatLon == current.Value.LatLon);
+
         private static bool Allowed(ConfigurationSnapshot snapshot, NavigationEntry entry) =>
             snapshot.Enabled(entry.Category)
             && (entry.StationId == null || TuneInBrowsing.ValidStation(entry.StationId))
