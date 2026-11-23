@@ -667,13 +667,33 @@
                     <aside class="tuneInArtworkPacks">
                         <strong>Custom Artwork Packs</strong>
                         <table aria-label="Custom artwork packs">
-                            <thead><tr><th scope="col">Artwork</th><th scope="col">Installed pack</th><th scope="col">Images</th></tr></thead>
+                            <thead><tr><th scope="col">Artwork</th><th scope="col">Installed pack</th><th scope="col">Images</th><th scope="col">Server folder</th></tr></thead>
                             <tbody>
-                               <tr><th scope="row">Music genres</th><td><strong class="artworkGenresName">Loading...</strong></td><td class="artworkGenresImages">Loading...</td></tr>
-                               <tr><th scope="row">Languages</th><td><strong class="artworkLanguagesName">Loading...</strong></td><td class="artworkLanguagesImages">Loading...</td></tr>
-                               <tr><th scope="row">Locations</th><td><strong class="artworkLocationsName">Loading...</strong></td><td class="artworkLocationsImages">Loading...</td></tr>
+                               <tr><th scope="row">Music genres</th><td><strong class="artworkGenresName">Loading...</strong></td><td class="artworkGenresImages">Loading...</td><td><code class="artworkGenresPath">Loading...</code> <span class="artworkGenresChanges"></span></td></tr>
+                               <tr><th scope="row">Languages</th><td><strong class="artworkLanguagesName">Loading...</strong></td><td class="artworkLanguagesImages">Loading...</td><td><code class="artworkLanguagesPath">Loading...</code> <span class="artworkLanguagesChanges"></span></td></tr>
+                               <tr><th scope="row">Locations</th><td><strong class="artworkLocationsName">Loading...</strong></td><td class="artworkLocationsImages">Loading...</td><td><code class="artworkLocationsPath">Loading...</code> <span class="artworkLocationsChanges"></span></td></tr>
+                               <tr><th scope="row">Categories</th><td><strong class="artworkCategoriesName">Loading...</strong></td><td class="artworkCategoriesImages">Loading...</td><td><code class="artworkCategoriesPath">Loading...</code> <span class="artworkCategoriesChanges"></span></td></tr>
                             </tbody>
                         </table>
+                        <input type="file" class="artworkFile" accept=".zip,application/zip" hidden />
+                        <button is="emby-button" type="button" class="raised button-submit emby-button artworkUpload">Upload Artwork Pack</button>
+                        <p class="artworkUploadMessage" role="status" aria-live="polite"></p>
+                        <dialog class="artworkConfirmDialog" aria-labelledby="artworkConfirmTitle">
+                            <h3 id="artworkConfirmTitle">Confirm artwork installation</h3>
+                            <p class="artworkConfirmText"></p>
+                            <label class="emby-checkbox-label artworkUnscannedLabel" hidden>
+                                <input type="checkbox" is="emby-checkbox" class="artworkApproveUnscanned" />
+                                <span>I approve installation without an antivirus scan.</span>
+                            </label>
+                            <button is="emby-button" type="button" class="raised button-submit emby-button artworkInstall">Install pack</button>
+                            <button is="emby-button" type="button" class="raised button-submit emby-button artworkDiscard">Cancel</button>
+                        </dialog>
+                        <dialog class="artworkRefreshDialog" aria-labelledby="artworkRefreshTitle">
+                            <h3 id="artworkRefreshTitle">Pack installed successfully. Refresh the affected categories now?</h3>
+                            <p class="artworkRefreshText"></p>
+                            <button is="emby-button" type="button" class="raised button-submit emby-button artworkRefreshNow">Refresh now</button>
+                            <button is="emby-button" type="button" class="raised button-submit emby-button artworkRefreshLater">Later</button>
+                        </dialog>
                         <details>
                             <summary>Details &amp; installation</summary>
                             <figure class="tuneInArtworkSample">
@@ -681,17 +701,10 @@
                                <img src="https://raw.githubusercontent.com/oconnoradv/EmbyTuneInArt/main/docs/samples/cartoon.jpg" alt="Cartoon-style Punk, Smooth Jazz, Christmas Music and Classic Hip Hop genre artwork" loading="lazy" referrerpolicy="no-referrer">
                             </figure>
                             <p>Customize artwork with a <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt/releases" target="_blank" rel="noopener noreferrer">pre-made pack</a> or use the <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt" target="_blank" rel="noopener noreferrer">EmbyTuneInArt tool</a> to build your own.</p>
-                            <ol>
-                               <li>Place the files in the corresponding server folder:
-                                   <ul>
-                                       <li>Music genres: <code class="artworkGenresPath">Loading...</code> <span class="artworkGenresChanges"></span></li>
-                                       <li>Languages: <code class="artworkLanguagesPath">Loading...</code> <span class="artworkLanguagesChanges"></span></li>
-                                       <li>Locations: <code class="artworkLocationsPath">Loading...</code> <span class="artworkLocationsChanges"></span></li>
-                                   </ul>
-                               </li>
-                               <li>Run Catalog Refresh for the affected categories.</li>
-                            </ol>
-                            <p>Include <code>tunein-artwork.json</code> to identify the pack.</p>
+                            <p>Choose a ZIP on this computer. The server validates it and scans staged files with a supported local scanner when available. Review the pack and confirm before replacing the installed scope. If no scanner is available, explicit approval is required; scanner errors or threats block installation. Validation and scanning cannot guarantee malware-free images.</p>
+                            <p>After installation choose Refresh now or Later. Genre artwork can affect both Music and Language; other packs affect their corresponding enabled categories. Refreshes can be blocked by active work or readiness.</p>
+                            <p>Uploads require a flat ZIP containing only a strict <code>tunein-artwork.json</code> and the listed JPEG or PNG images, with matching IDs, counts and SHA256 hashes. Limits include 768 MiB per ZIP, 2 GiB expanded, 16 MiB per image and 4,096 pixels per dimension. The server needs its configured FFmpeg. See the README for the complete schema, limits, scanner requirements and troubleshooting.</p>
+                            <p>Manual installation remains available: place image files and optional <code>tunein-artwork.json</code> in the corresponding server folder above, then refresh affected categories. Uploads require the strict manifest and archive layout documented in the README; older packs may need regeneration.</p>
                         </details>
                     </aside>
                     <details class="tuneInAdvancedSettings">

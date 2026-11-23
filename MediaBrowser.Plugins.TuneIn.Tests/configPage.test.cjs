@@ -32,6 +32,7 @@ class Element {
     appendChild(child) { this.childNodes.push(child); child.parentNode = this; return child; }
     setAttribute(name, value) { this.attributes[name] = value; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
+    click() { if (this.handlers.click) return this.handlers.click.call(this); }
     showModal() { this.open = true; }
     focus() { this.focused = true; }
     close() { this.open = false; if (this.handlers.close) this.handlers.close(); }
@@ -56,7 +57,10 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.tuneInReadiness', '.readinessFiltering', '.readinessCategory', '.readinessRequirements',
         '.readinessSaved', '.readinessChannel', '.favoritesValidation', '.localValidation',
         '.channelScheduleConfirm', '.channelScheduleAdjust', '.tuneInPluginVersion',
-        ...['Genres', 'Languages', 'Locations'].flatMap(scope =>
+        '.artworkFile', '.artworkUpload', '.artworkUploadMessage', '.artworkConfirmDialog', '.artworkConfirmText',
+        '.artworkUnscannedLabel', '.artworkApproveUnscanned', '.artworkInstall', '.artworkDiscard',
+        '.artworkRefreshDialog', '.artworkRefreshText', '.artworkRefreshNow', '.artworkRefreshLater',
+        ...['Genres', 'Languages', 'Locations', 'Categories'].flatMap(scope =>
             ['Name', 'Images', 'Path', 'Changes'].map(field => `.artwork${scope}${field}`)),
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshImportContents', '.refreshPendingFolders', '.refreshPendingFolderText',
@@ -116,6 +120,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     const locks = [];
     const cleanup = [];
     const backup = [];
+    const artwork = [];
     const scheduledTasks = { tasks: [], requests: [] };
     const timers = new Map();
     let timerId = 0;
@@ -150,7 +155,8 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
             else if (options.url.route.startsWith('TuneIn/Refresh/')) {
                 refresh.push({ options, ...request });
                 if (!manualStatus && options.type === 'GET') request.resolve({ SettingsLocked: serverLocked });
-            } else if (options.url.route.startsWith('TuneIn/Cleanup/')) cleanup.push({ options, ...request });
+            } else if (options.url.route.startsWith('TuneIn/Artwork/')) artwork.push({ options, ...request });
+            else if (options.url.route.startsWith('TuneIn/Cleanup/')) cleanup.push({ options, ...request });
             else if (options.url.route.startsWith('TuneIn/Backup/')) {
                 backup.push({ options, ...request });
                 if (!manualBackup && options.type === 'GET') request.resolve({ State: 'Ready' });
@@ -185,7 +191,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     });
 
     return { instance: new PluginView(view), username, latLon, requestInterval, formHandlers, reads, writes, notices, errors, loader,
-        elements, selectors, enhanced, calls, handlers, refresh, locks, cleanup, backup, timers, scheduledTasks };
+        elements, selectors, enhanced, calls, handlers, refresh, locks, cleanup, backup, artwork, timers, scheduledTasks };
 }
 
 function open(details) {
@@ -2248,7 +2254,9 @@ test('scoped artwork packs show detected names, counts and paths safely', async 
         { scope: 'languages', status: 'missing', installedCount: 0, matchedCount: 0,
             modifiedCount: 0, addedCount: 0, path: 'C:\\art\\languages' },
         { scope: 'locations', status: 'invalid', installedCount: 4, matchedCount: 3,
-            modifiedCount: 1, addedCount: 1, path: 'C:\\art\\locations' }
+            modifiedCount: 1, addedCount: 1, path: 'C:\\art\\locations' },
+        { scope: 'categories', status: 'identified', name: 'Category cards', installedCount: 8,
+            matchedCount: 8, modifiedCount: 0, addedCount: 0, path: 'C:\\art\\categories' }
     ] });
     await visit;
     assert.equal(app.elements['.artworkGenresName'].textContent, '<img src=x onerror=alert(1)>');
@@ -2261,6 +2269,9 @@ test('scoped artwork packs show detected names, counts and paths safely', async 
     assert.equal(app.elements['.artworkLocationsImages'].textContent, '4 installed, 3 matched');
     assert.equal(app.elements['.artworkLocationsChanges'].textContent, '(change counts unavailable)');
     assert.equal(app.elements['.artworkLanguagesChanges'].textContent, '(change counts unavailable)');
+    assert.equal(app.elements['.artworkCategoriesName'].textContent, 'Category cards');
+    assert.equal(app.elements['.artworkCategoriesImages'].textContent, '8 installed, 8 matched');
+    assert.equal(app.elements['.artworkCategoriesPath'].textContent, 'C:\\art\\categories');
     app.instance.onPause();
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /class="hideRegionalGenres"[\s\S]*?<aside class="tuneInArtworkPacks">[\s\S]*?<\/aside>\s*<details class="tuneInAdvancedSettings">/);
@@ -2270,11 +2281,96 @@ test('scoped artwork packs show detected names, counts and paths safely', async 
     const artworkStyle = html.match(/\.tuneInArtworkPacks\s*\{([^}]*)\}/)[1];
     assert.match(artworkStyle, /border-inline-start:\s*\.25em solid #39b9aa/);
     assert.doesNotMatch(artworkStyle, /\bbackground(?:-color)?\s*:/);
-    assert.match(html, /<th scope="col">Artwork<\/th><th scope="col">Installed pack<\/th><th scope="col">Images<\/th>/);
-    for (const scope of ['Genres', 'Languages', 'Locations'])
+    assert.match(html, /<th scope="col">Artwork<\/th><th scope="col">Installed pack<\/th><th scope="col">Images<\/th><th scope="col">Server folder<\/th>/);
+    for (const scope of ['Genres', 'Languages', 'Locations', 'Categories'])
         assert.match(html, new RegExp(`<strong class="artwork${scope}Name">Loading\\.\\.\\.<\\/strong>`));
     assert.match(html, /<summary>Details &amp; installation<\/summary>/);
     assert.match(html, /docs\/samples\/cartoon\.jpg/);
+});
+
+async function prepareArtworkUpload(app, scanStatus = 'Not scanned') {
+    const categories = [
+        { Category: 'music', Name: 'Music', State: 'Imported' },
+        { Category: 'language', Name: 'By Language', State: 'Imported' },
+        { Category: 'talk', Name: 'Talk', State: 'Imported' }
+    ];
+    const status = { State: 'Completed', Categories: categories, HasCompleteBaseline: true,
+        ChannelRegistered: true, QueueSlotsAvailable: 2, QueuedRequests: [] };
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve(status);
+    await visit;
+    const file = app.elements['.artworkFile'];
+    file.files = [{ name: 'pack.zip', size: 12 }];
+    const upload = file.handlers.change.call(file, { stopPropagation() {} });
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'validating' });
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').resolve({
+        Token: 'abc', Scope: 'genres', Name: 'Sample', ImageCount: 2, Destination: 'C:\\art\\genres', ScanStatus: scanStatus
+    });
+    await upload;
+    return status;
+}
+
+test('artwork installation requires unscanned approval and Later never starts refresh', async () => {
+    const app = harness(true);
+    const status = await prepareArtworkUpload(app);
+    assert.equal(app.elements['.artworkConfirmDialog'].open, true);
+    assert.match(app.elements['.artworkConfirmText'].textContent, /Sample.*genres.*2 images.*Not scanned/);
+    assert.equal(app.elements['.artworkInstall'].disabled, true);
+    const approve = app.elements['.artworkApproveUnscanned'];
+    approve.checked = true;
+    approve.handlers.change.call(approve, { stopPropagation() {} });
+    const install = app.elements['.artworkInstall'].handlers.click();
+    const request = app.artwork.find(value => value.options.url.route === 'TuneIn/Artwork/Install');
+    assert.equal(JSON.parse(request.options.data).ApproveUnscanned, true);
+    request.resolve({ Scope: 'genres', AffectedCategories: ['music', 'language'] });
+    await settle();
+    app.refresh[1].resolve(status);
+    await install;
+    assert.match(app.elements['.artworkRefreshText'].textContent, /Music, By Language/);
+    app.elements['.artworkRefreshLater'].handlers.click();
+    assert.equal(app.refresh.filter(value => value.options.type === 'POST').length, 0);
+    assert.match(app.elements['.artworkUploadMessage'].textContent, /No refresh was started/);
+    app.instance.onPause();
+});
+
+test('artwork refresh queues affected enabled categories including language for genres', async () => {
+    const app = harness(true);
+    const status = await prepareArtworkUpload(app, 'Clean');
+    const install = app.elements['.artworkInstall'].handlers.click();
+    app.artwork.find(value => value.options.url.route === 'TuneIn/Artwork/Install')
+        .resolve({ Scope: 'genres', AffectedCategories: ['music', 'language'] });
+    await settle();
+    app.refresh[1].resolve(status);
+    await install;
+    const refresh = app.elements['.artworkRefreshNow'].handlers.click();
+    const starts = () => app.refresh.filter(value => value.options.type === 'POST');
+    assert.equal(starts()[0].options.url.params.Category, 'music');
+    starts()[0].resolve({ ...status, Busy: true, ActiveRequest: 'music', QueueSlotsAvailable: 2 });
+    await settle();
+    assert.equal(starts()[1].options.url.params.Category, 'language');
+    starts()[1].resolve({ ...status, Busy: true, ActiveRequest: 'music', QueueSlotsAvailable: 1, QueuedRequests: ['language'] });
+    await refresh;
+    assert.match(app.elements['.artworkUploadMessage'].textContent, /started or queued/);
+    assert.equal(starts().length, 2);
+    app.instance.onPause();
+});
+
+test('artwork refresh reports every affected category that could not start', async () => {
+    const app = harness(true);
+    const status = await prepareArtworkUpload(app, 'Clean');
+    const install = app.elements['.artworkInstall'].handlers.click();
+    app.artwork.find(value => value.options.url.route === 'TuneIn/Artwork/Install')
+        .resolve({ Scope: 'genres', AffectedCategories: ['music', 'language'] });
+    await settle();
+    app.refresh[1].resolve(status);
+    await install;
+    const refresh = app.elements['.artworkRefreshNow'].handlers.click();
+    app.refresh.find(value => value.options.type === 'POST').reject(new Error('unavailable'));
+    await refresh;
+    assert.match(app.elements['.artworkUploadMessage'].textContent, /Pack installed.*Music, By Language/);
+    assert.equal(app.refresh.filter(value => value.options.type === 'POST').length, 1);
+    app.instance.onPause();
 });
 
 test('artwork status handles missing, unavailable and incomplete server data without retaining stale values', async () => {

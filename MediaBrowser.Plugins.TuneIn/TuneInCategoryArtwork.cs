@@ -58,21 +58,34 @@ namespace MediaBrowser.Plugins.TuneIn
             this.resultFactory = resultFactory ?? throw new ArgumentNullException(nameof(resultFactory));
         }
 
-        public object Get(GetTuneInCategoryArtwork request) =>
-            Respond(() => TuneInCategoryArtwork.Open(request.Category), "image/png");
+        public object Get(GetTuneInCategoryArtwork request)
+        {
+            lock (TuneInCategoryArtwork.PackGate)
+            {
+                var path = TuneInCategoryArtwork.PackFile("categories", request.Category);
+                return Respond(() => path == null ? TuneInCategoryArtwork.OpenBundled(request.Category) : File.OpenRead(path),
+                    path != null && path.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ? "image/jpeg" : "image/png");
+            }
+        }
 
         public object Get(GetTuneInGenreArtwork request)
         {
-            var path = TuneInCategoryArtwork.LegacyGenreFile(request.GenreId)
-                ?? throw new ArgumentException("Unknown TuneIn genre artwork.", nameof(request));
-            return Respond(() => File.OpenRead(path), path.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "image/jpeg");
+            lock (TuneInCategoryArtwork.PackGate)
+            {
+                var path = TuneInCategoryArtwork.LegacyGenreFile(request.GenreId)
+                    ?? throw new ArgumentException("Unknown TuneIn genre artwork.", nameof(request));
+                return Respond(() => File.OpenRead(path), path.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "image/jpeg");
+            }
         }
 
         public object Get(GetTuneInPackArtwork request)
         {
-            var path = TuneInCategoryArtwork.PackFile(request.Scope, request.Id)
-                ?? throw new ArgumentException("Unknown TuneIn pack artwork.", nameof(request));
-            return Respond(() => File.OpenRead(path), path.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "image/jpeg");
+            lock (TuneInCategoryArtwork.PackGate)
+            {
+                var path = TuneInCategoryArtwork.PackFile(request.Scope, request.Id)
+                    ?? throw new ArgumentException("Unknown TuneIn pack artwork.", nameof(request));
+                return Respond(() => File.OpenRead(path), path.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "image/jpeg");
+            }
         }
 
         public object Get(GetTuneInLibraryArtwork request) =>
@@ -106,27 +119,33 @@ namespace MediaBrowser.Plugins.TuneIn
         internal const string ChannelArtwork = "channel";
         internal const int MaxPackManifestBytes = 4 * 1024 * 1024;
         private static readonly string[] Categories = { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
-        internal static readonly string[] Scopes = { "genres", "languages", "locations" };
+        internal static readonly string[] Scopes = { "genres", "languages", "locations", "categories" };
+        internal static readonly object PackGate = new object();
         private static readonly string[] Extensions = { ".jpg", ".png" };
 
         // Optional artwork packs (for example from oconnoradv/EmbyTuneInArt) are extracted here as <guide id>.jpg or .png.
         internal static string GenreFolder { get; set; }
         internal static string LanguageFolder { get; set; }
         internal static string LocationFolder { get; set; }
+        internal static string CategoryFolder { get; set; }
 
         private static string Folder(string scope) => scope == "genres" ? GenreFolder
-            : scope == "languages" ? LanguageFolder : scope == "locations" ? LocationFolder : null;
+            : scope == "languages" ? LanguageFolder : scope == "locations" ? LocationFolder
+            : scope == "categories" ? CategoryFolder : null;
 
-        private static bool ValidId(string scope, string id) =>
+        internal static bool ValidId(string scope, string id) =>
             scope == "genres" ? ConfigurationSnapshot.ValidId(id, "music")
             : scope == "languages" ? ConfigurationSnapshot.ValidId(id, "language")
-            : scope == "locations" && ConfigurationSnapshot.ValidId(id, "location");
+            : scope == "locations" ? ConfigurationSnapshot.ValidId(id, "location")
+            : scope == "categories" && Categories.Contains(id, StringComparer.Ordinal);
 
         internal static string Url(string baseUrl, string category)
         {
             ResourceName(category);
             if (string.IsNullOrEmpty(baseUrl)) throw new InvalidOperationException("The local Emby API URL is unavailable.");
-            return baseUrl.TrimEnd('/') + "/TuneIn/CategoryArtwork/" + category + "?v=" + (category == ChannelArtwork ? LibraryRevision : Revision);
+            var version = category == ChannelArtwork ? LibraryRevision : PackRevision("categories", category);
+            if (version == "missing") version = Revision;
+            return baseUrl.TrimEnd('/') + "/TuneIn/CategoryArtwork/" + category + "?v=" + version;
         }
 
         // Music genre folders, including music genres listed under a language, use pack artwork when installed.
@@ -165,28 +184,37 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal static string LegacyGenreFile(string genreId)
         {
-            if (string.IsNullOrEmpty(GenreFolder) || genreId == null
-                || !Regex.IsMatch(genreId, @"\A[cg][0-9]{1,12}\z")) return null;
-            return Extensions.Select(extension => Path.Combine(GenreFolder, genreId + extension)).FirstOrDefault(File.Exists);
+            lock (PackGate)
+            {
+                if (string.IsNullOrEmpty(GenreFolder) || genreId == null
+                    || !Regex.IsMatch(genreId, @"\A[cg][0-9]{1,12}\z")) return null;
+                return Extensions.Select(extension => Path.Combine(GenreFolder, genreId + extension)).FirstOrDefault(File.Exists);
+            }
         }
 
         internal static string PackFile(string scope, string id)
         {
-            var folder = Folder(scope);
-            if (string.IsNullOrEmpty(folder) || !ValidId(scope, id)) return null;
-            return Extensions.Select(extension => Path.Combine(folder, id + extension)).FirstOrDefault(File.Exists);
+            lock (PackGate)
+            {
+                var folder = Folder(scope);
+                if (string.IsNullOrEmpty(folder) || !ValidId(scope, id)) return null;
+                return Extensions.Select(extension => Path.Combine(folder, id + extension)).FirstOrDefault(File.Exists);
+            }
         }
 
         internal static string GenreRevision(string genreId) => PackRevision("genres", genreId);
 
         internal static string PackRevision(string scope, string id)
         {
-            var path = PackFile(scope, id);
-            if (path == null) return "missing";
-            using (var stream = File.OpenRead(path))
-            using (var sha = SHA256.Create())
-                return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant()
-                    + Path.GetExtension(path).Substring(1);
+            lock (PackGate)
+            {
+                var path = PackFile(scope, id);
+                if (path == null) return "missing";
+                using (var stream = File.OpenRead(path))
+                using (var sha = SHA256.Create())
+                    return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant()
+                        + Path.GetExtension(path).Substring(1);
+            }
         }
 
         internal static int CountGenreFiles() => ReadPackStatus("genres").InstalledCount ?? 0;
@@ -212,6 +240,11 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static TuneInArtworkPackStatus ReadPackManifest() => ReadPackStatus("genres");
 
         internal static TuneInArtworkPackStatus ReadPackStatus(string scope)
+        {
+            lock (PackGate) return ReadPackStatusLocked(scope);
+        }
+
+        private static TuneInArtworkPackStatus ReadPackStatusLocked(string scope)
         {
             if (!Scopes.Contains(scope, StringComparer.Ordinal)) throw new ArgumentException("Unknown artwork scope.", nameof(scope));
             var folder = Folder(scope);
@@ -304,8 +337,20 @@ namespace MediaBrowser.Plugins.TuneIn
             if (string.IsNullOrEmpty(baseUrl)) throw new InvalidOperationException("The local Emby API URL is unavailable.");
             return baseUrl.TrimEnd('/') + "/TuneIn/GenreArtwork/" + genreId + "?v=" + GenreRevision(genreId);
         }
-        internal static Stream Open(string category) =>
-            typeof(TuneInCategoryArtwork).Assembly.GetManifestResourceStream(ResourceName(category))
+        internal static Stream Open(string category)
+        {
+            lock (PackGate)
+            {
+                var resource = ResourceName(category);
+                var path = PackFile("categories", category);
+                return path != null ? File.OpenRead(path) : OpenBundledResource(resource);
+            }
+        }
+
+        internal static Stream OpenBundled(string category) => OpenBundledResource(ResourceName(category));
+
+        private static Stream OpenBundledResource(string resource) =>
+            typeof(TuneInCategoryArtwork).Assembly.GetManifestResourceStream(resource)
             ?? throw new InvalidOperationException("Bundled TuneIn category artwork is missing.");
 
         internal static Stream OpenPanel() =>

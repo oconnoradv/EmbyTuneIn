@@ -698,7 +698,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         [
             { selector: 'Genres', scopes: ['genres', 'genre', 'musicgenres', 'musicgenre'] },
             { selector: 'Languages', scopes: ['languages', 'language'] },
-            { selector: 'Locations', scopes: ['locations', 'location'] }
+            { selector: 'Locations', scopes: ['locations', 'location'] },
+            { selector: 'Categories', scopes: ['categories', 'category'] }
         ].forEach(function (scope) {
             var pack = packs.find(function (item) {
                 var name = field(item, 'scope');
@@ -731,6 +732,172 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             instance.view.querySelector('.artwork' + scope.selector + 'Changes').textContent =
                 changes.length ? '(' + changes.join(', ') + ')' : '(change counts unavailable)';
         });
+    }
+
+    function artworkError(error) {
+        return error && error.responseJSON && error.responseJSON.ResponseStatus &&
+            error.responseJSON.ResponseStatus.Message || 'Check the server logs and try again.';
+    }
+
+    function pollArtwork(instance, epoch) {
+        if (!instance.artworkBusy || epoch !== instance.viewEpoch) return;
+        ApiClient.ajax({ type: 'GET', dataType: 'json', url: ApiClient.getUrl('TuneIn/Artwork/Status') })
+            .then(function (status) {
+                if (!instance.artworkBusy || epoch !== instance.viewEpoch) return;
+                var state = status.State || status.state;
+                var labels = { uploading: 'Uploading artwork pack...', validating: 'Validating artwork pack...',
+                    scanning: 'Scanning staged artwork...', installing: 'Installing artwork pack...' };
+                if (labels[state]) instance.view.querySelector('.artworkUploadMessage').textContent = labels[state];
+            }, function () {
+                if (instance.artworkBusy && epoch === instance.viewEpoch)
+                    instance.view.querySelector('.artworkUploadMessage').textContent = 'Waiting for artwork status...';
+            }).then(function () {
+                if (instance.artworkBusy && epoch === instance.viewEpoch)
+                    instance.artworkTimer = setTimeout(function () { pollArtwork(instance, epoch); }, 1500);
+            });
+    }
+
+    function uploadArtwork(instance, file) {
+        if (!file || instance.artworkBusy) return;
+        var epoch = instance.viewEpoch;
+        if (file.size > 768 * 1024 * 1024) {
+            instance.view.querySelector('.artworkUploadMessage').textContent = 'The ZIP exceeds the 768 MiB upload limit.';
+            return;
+        }
+        instance.artworkBusy = true;
+        instance.view.querySelector('.artworkUpload').disabled = true;
+        instance.view.querySelector('.artworkUploadMessage').textContent = 'Uploading artwork pack...';
+        pollArtwork(instance, epoch);
+        return ApiClient.ajax({ type: 'POST', dataType: 'json', url: ApiClient.getUrl('TuneIn/Artwork/Upload'),
+            data: file, contentType: 'application/zip', processData: false }).then(function (result) {
+            if (epoch !== instance.viewEpoch) return;
+            instance.artworkPending = result;
+            if (result.ScanStatus !== 'Clean' && result.ScanStatus !== 'Not scanned') {
+                discardArtwork(instance).then(function () {
+                    if (epoch === instance.viewEpoch)
+                        instance.view.querySelector('.artworkUploadMessage').textContent = 'Artwork scan status was invalid. Upload the pack again.';
+                });
+                return;
+            }
+            var unscanned = result.ScanStatus === 'Not scanned';
+            instance.view.querySelector('.artworkConfirmText').textContent =
+                result.Name + ' — ' + result.Scope + ', ' + result.ImageCount + ' images. ' + result.ScanStatus +
+                '. Installing replaces the existing pack in ' + result.Destination + '.';
+            instance.view.querySelector('.artworkUnscannedLabel').hidden = !unscanned;
+            instance.view.querySelector('.artworkApproveUnscanned').checked = false;
+            instance.view.querySelector('.artworkInstall').disabled = unscanned;
+            instance.view.querySelector('.artworkConfirmDialog').showModal();
+            instance.view.querySelector('.artworkUploadMessage').textContent = 'Validation complete. Confirm installation.';
+        }, function (error) {
+            if (epoch === instance.viewEpoch)
+                instance.view.querySelector('.artworkUploadMessage').textContent = 'Artwork upload failed: ' + artworkError(error);
+        }).then(function () {
+            instance.artworkBusy = false;
+            clearTimeout(instance.artworkTimer);
+            if (epoch === instance.viewEpoch) instance.view.querySelector('.artworkUpload').disabled = false;
+        });
+    }
+
+    function discardArtwork(instance) {
+        var epoch = instance.viewEpoch;
+        var pending = instance.artworkPending;
+        instance.artworkPending = null;
+        var dialog = instance.view.querySelector('.artworkConfirmDialog');
+        if (dialog.open) dialog.close();
+        if (!pending) return;
+        return ApiClient.ajax({ type: 'POST', dataType: 'json', contentType: 'application/json',
+            url: ApiClient.getUrl('TuneIn/Artwork/Discard'), data: JSON.stringify({ Token: pending.Token }) })
+            .then(function () {
+                if (epoch === instance.viewEpoch) instance.view.querySelector('.artworkUploadMessage').textContent = 'Artwork installation cancelled.';
+            }, function () {
+                if (epoch === instance.viewEpoch) instance.view.querySelector('.artworkUploadMessage').textContent = 'Could not discard staged artwork; it will expire.';
+            });
+    }
+
+    function installArtwork(instance) {
+        var pending = instance.artworkPending;
+        if (!pending || instance.artworkBusy) return;
+        var unscanned = pending.ScanStatus === 'Not scanned';
+        if (unscanned && !instance.view.querySelector('.artworkApproveUnscanned').checked) return;
+        var epoch = instance.viewEpoch;
+        instance.artworkPending = null;
+        instance.view.querySelector('.artworkConfirmDialog').close();
+        instance.artworkBusy = true;
+        instance.view.querySelector('.artworkUpload').disabled = true;
+        instance.view.querySelector('.artworkUploadMessage').textContent = 'Installing artwork pack...';
+        return ApiClient.ajax({ type: 'POST', dataType: 'json', contentType: 'application/json',
+            url: ApiClient.getUrl('TuneIn/Artwork/Install'),
+            data: JSON.stringify({ Token: pending.Token, ApproveUnscanned: unscanned }) }).then(function (result) {
+            if (epoch !== instance.viewEpoch) return;
+            instance.artworkInstalled = result;
+            instance.view.querySelector('.artworkUploadMessage').textContent = result.CleanupPending
+                ? 'Pack installed successfully; server cleanup is pending.' : 'Pack installed successfully.';
+            return ApiClient.ajax({ type: 'GET', dataType: 'json', url: ApiClient.getUrl('TuneIn/Refresh/Status') })
+                .then(function (status) {
+                    if (epoch !== instance.viewEpoch) return;
+                    renderRefresh(instance, status);
+                    var affected = (status.Categories || []).filter(function (category) {
+                        return (result.AffectedCategories || []).includes(category.Category);
+                    });
+                    instance.artworkAffected = affected.map(function (category) { return category.Category; });
+                    instance.view.querySelector('.artworkRefreshText').textContent = affected.length
+                        ? 'Affected enabled categories: ' + affected.map(function (category) { return category.Name; }).join(', ') + '.'
+                        : 'No enabled categories are affected.';
+                }, function () {
+                    if (epoch !== instance.viewEpoch) return;
+                    instance.artworkAffected = null;
+                    instance.view.querySelector('.artworkRefreshText').textContent = 'Could not load affected categories. Refresh status must be available before starting.';
+                }).then(function () {
+                    if (epoch === instance.viewEpoch) instance.view.querySelector('.artworkRefreshDialog').showModal();
+                });
+        }, function (error) {
+            if (epoch === instance.viewEpoch)
+                instance.view.querySelector('.artworkUploadMessage').textContent = 'Could not confirm artwork installation: ' + artworkError(error);
+        }).then(function () {
+            instance.artworkBusy = false;
+            if (epoch === instance.viewEpoch) instance.view.querySelector('.artworkUpload').disabled = false;
+        });
+    }
+
+    function refreshArtwork(instance) {
+        var epoch = instance.viewEpoch;
+        var affected = instance.artworkAffected;
+        instance.view.querySelector('.artworkRefreshDialog').close();
+        if (!affected) {
+            instance.view.querySelector('.artworkUploadMessage').textContent = 'Pack installed, but refresh status is unavailable. Use Catalog Refresh when it is available.';
+            return;
+        }
+        if (!affected.length) return;
+        instance.refreshSection.open = true;
+        renderCategoryRefresh(instance, instance.refreshStatus);
+        refreshControls(instance, instance.refreshAvailable);
+        function remaining(index) {
+            return affected.slice(index).map(function (key) { return refreshName(instance.refreshStatus || {}, key); }).join(', ');
+        }
+        function next(index) {
+            if (epoch !== instance.viewEpoch) return;
+            if (index >= affected.length) {
+                instance.view.querySelector('.artworkUploadMessage').textContent = 'Pack installed; affected category refreshes started or queued.';
+                return;
+            }
+            var key = affected[index];
+            var action = doRefresh(instance, 'Start', key);
+            if (!action) {
+                instance.view.querySelector('.artworkUploadMessage').textContent =
+                    'Pack installed, but refresh could not start for: ' + remaining(index) + '. Check Catalog Refresh.';
+                return;
+            }
+            return action.then(function (status) {
+                if (epoch !== instance.viewEpoch) return;
+                if (!status || status.RecoveryChoiceRequired) {
+                    instance.view.querySelector('.artworkUploadMessage').textContent =
+                        'Pack installed, but refresh could not start for: ' + remaining(index) + '. Check Catalog Refresh.';
+                    return;
+                }
+                return next(index + 1);
+            });
+        }
+        return next(0);
     }
 
     function renderRefresh(instance, status) {
@@ -1401,13 +1568,16 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     if (status.RecoveryChoiceRequired && instance.refreshSection.open)
                         showRecoveryChoice(instance, status, category);
                 }
+                return status;
             }).catch(function () {
                 if (epoch === instance.viewEpoch)
                     instance.view.querySelector('.refreshError').textContent = 'Could not ' + action.toLowerCase() + ' refresh. Check the current status before retrying.';
-            }).then(function () {
+                return null;
+            }).then(function (status) {
                 instance.refreshAction = false;
                 if (epoch === instance.viewEpoch) refreshControls(instance, instance.refreshAvailable);
                 if (instance.refreshVisible) pollStatus(instance, instance.viewEpoch);
+                return status;
             });
     }
 
@@ -1577,6 +1747,27 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         view.querySelector('form').addEventListener('submit', onSubmit.bind(this));
         view.querySelector('form').addEventListener('input', function () { setupChanged(instance); });
         view.querySelector('form').addEventListener('change', function () { setupChanged(instance); });
+        view.querySelector('.artworkUpload').addEventListener('click', function () {
+            if (!instance.artworkBusy) view.querySelector('.artworkFile').click();
+        });
+        view.querySelector('.artworkFile').addEventListener('change', function (event) {
+            event.stopPropagation();
+            var file = this.files && this.files[0];
+            this.value = '';
+            return uploadArtwork(instance, file);
+        });
+        view.querySelector('.artworkApproveUnscanned').addEventListener('change', function (event) {
+            event.stopPropagation();
+            view.querySelector('.artworkInstall').disabled = !this.checked;
+        });
+        view.querySelector('.artworkInstall').addEventListener('click', function () { return installArtwork(instance); });
+        view.querySelector('.artworkDiscard').addEventListener('click', function () { return discardArtwork(instance); });
+        view.querySelector('.artworkConfirmDialog').addEventListener('cancel', function () { return discardArtwork(instance); });
+        view.querySelector('.artworkRefreshNow').addEventListener('click', function () { return refreshArtwork(instance); });
+        view.querySelector('.artworkRefreshLater').addEventListener('click', function () {
+            view.querySelector('.artworkRefreshDialog').close();
+            view.querySelector('.artworkUploadMessage').textContent = 'Pack installed. No refresh was started.';
+        });
         view.querySelector('.refreshStart').addEventListener('click', function () { return doRefresh(instance, 'Start'); });
         view.querySelector('.refreshCancel').addEventListener('click', function () { return doRefresh(instance, 'Cancel'); });
         view.querySelector('.refreshLogButton').addEventListener('click', function () { return retrieveRefreshLog(instance); });
@@ -1771,6 +1962,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (dialog.open) dialog.close();
         closeChannelScheduleDialog(this);
         clearTimeout(this.refreshTimer);
+        clearTimeout(this.artworkTimer);
+        if (this.artworkPending) discardArtwork(this);
+        var artworkRefreshDialog = this.view.querySelector('.artworkRefreshDialog');
+        if (artworkRefreshDialog.open) artworkRefreshDialog.close();
         this.view.querySelector('.refreshFailureLog').textContent = '';
         this.view.querySelector('.refreshFailureLog').hidden = true;
         this.view.querySelector('.refreshLogMessage').textContent = '';

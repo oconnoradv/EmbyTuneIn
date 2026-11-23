@@ -89,6 +89,86 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public void CategoryCardsOverrideAndFallBackWithoutChangingLibraryArtwork()
+        {
+            var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tunein-category-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            var previous = TuneInCategoryArtwork.CategoryFolder;
+            try
+            {
+                TuneInCategoryArtwork.CategoryFolder = folder;
+                var card = System.IO.Path.Combine(folder, "talk.jpg");
+                System.IO.File.WriteAllBytes(card, new byte[] { 1, 2, 3 });
+                Assert.Equal(new byte[] { 1, 2, 3 }, Read(TuneInCategoryArtwork.Open("talk")));
+                var revision = TuneInCategoryArtwork.PackRevision("categories", "talk");
+                Assert.EndsWith("?v=" + revision, TuneInCategoryArtwork.Url("http://localhost", "talk"));
+                Assert.Null(TuneInCategoryArtwork.PackFile("categories", "../talk"));
+                Assert.Null(TuneInCategoryArtwork.PackFile("categories", "channel"));
+                Assert.NotEqual(new byte[] { 1, 2, 3 }, Read(TuneInCategoryArtwork.Open("sports")));
+                Assert.NotEqual(new byte[] { 1, 2, 3 }, Read(TuneInCategoryArtwork.Open("channel")));
+                System.IO.File.WriteAllBytes(card, new byte[] { 4, 5, 6 });
+                Assert.NotEqual(revision, TuneInCategoryArtwork.PackRevision("categories", "talk"));
+                System.IO.File.Delete(card);
+                Assert.EndsWith("?v=1", TuneInCategoryArtwork.Url("http://localhost", "talk"));
+                Assert.NotEqual(new byte[] { 1, 2, 3 }, Read(TuneInCategoryArtwork.Open("talk")));
+            }
+            finally
+            {
+                TuneInCategoryArtwork.CategoryFolder = previous;
+                System.IO.Directory.Delete(folder, true);
+            }
+
+            static byte[] Read(System.IO.Stream stream)
+            {
+                using (stream)
+                using (var buffer = new System.IO.MemoryStream())
+                {
+                    stream.CopyTo(buffer);
+                    return buffer.ToArray();
+                }
+            }
+        }
+
+        [Fact]
+        public void CategoryCardChangesAndRemovalReapplyExistingFolderArtwork()
+        {
+            var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tunein-category-refresh-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            var previous = TuneInCategoryArtwork.CategoryFolder;
+            try
+            {
+                TuneInCategoryArtwork.CategoryFolder = folder;
+                var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true };
+                var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("Unexpected provider request."));
+                var rootId = directory.Register(directory.Snapshot(), new NavigationEntry { Category = "talk", Name = "Talk" });
+                var library = DispatchProxy.Create<ILibraryManager, LibraryProxy>();
+                var proxy = (LibraryProxy)library;
+                proxy.Root = Folder(1, rootId);
+                proxy.Root.SetProviderId("TuneInCategoryArtwork", "1:talk");
+                var channel = new TuneInChannel(directory, serverHost: DispatchProxy.Create<IServerApplicationHost, HostProxy>(), library: library);
+                var card = System.IO.Path.Combine(folder, "talk.jpg");
+                System.IO.File.WriteAllBytes(card, new byte[] { 1, 2, 3 });
+                channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+                Assert.Single(proxy.Updated);
+                Assert.Contains(TuneInCategoryArtwork.PackRevision("categories", "talk"), proxy.Root.GetImagePath(ImageType.Primary, 0));
+                channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+                Assert.Single(proxy.Updated);
+                System.IO.File.WriteAllBytes(card, new byte[] { 4, 5, 6 });
+                channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+                Assert.Equal(2, proxy.Updated.Count);
+                System.IO.File.Delete(card);
+                channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+                Assert.Equal(3, proxy.Updated.Count);
+                Assert.EndsWith("/TuneIn/CategoryArtwork/talk?v=1", proxy.Root.GetImagePath(ImageType.Primary, 0));
+            }
+            finally
+            {
+                TuneInCategoryArtwork.CategoryFolder = previous;
+                System.IO.Directory.Delete(folder, true);
+            }
+        }
+
+        [Fact]
         public void SettingsPageLibraryArtworkIsServedToRemoteAdministrators()
         {
             var request = new Moq.Mock<IRequest>();

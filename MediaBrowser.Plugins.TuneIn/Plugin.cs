@@ -27,10 +27,15 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInCategoryArtwork.GenreFolder = artworkRoot == null ? null : Path.Combine(artworkRoot, "genres");
             TuneInCategoryArtwork.LanguageFolder = artworkRoot == null ? null : Path.Combine(artworkRoot, "languages");
             TuneInCategoryArtwork.LocationFolder = artworkRoot == null ? null : Path.Combine(artworkRoot, "locations");
+            TuneInCategoryArtwork.CategoryFolder = artworkRoot == null ? null : Path.Combine(artworkRoot, "categories");
+            ArtworkRoot = artworkRoot;
+            if (artworkRoot != null)
+                foreach (var scope in TuneInCategoryArtwork.Scopes) TuneInArtworkInstall.Recover(artworkRoot, scope);
             Instance = this;
         }
 
         internal TuneInSettingsLockStore SettingsLock { get; }
+        internal string ArtworkRoot { get; }
 
         public IEnumerable<PluginPageInfo> GetPages()
         {

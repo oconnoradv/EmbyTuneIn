@@ -297,6 +297,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 if (entry.Category != rootEntry.Category || entry.StationId != null) return;
                 var artwork = TuneInCategoryArtwork.ArtworkFor(entry);
+                if (artwork.Id == null && TuneInCategoryArtwork.PackFile("categories", entry.Category) != null)
+                    artwork = ("categories", entry.Category);
                 var version = TuneInCategoryArtwork.Revision + ":" + entry.Category
                     + (artwork.Id == null ? "" : ":" + (artwork.Scope == "genres" ? "" : artwork.Scope + ":")
                         + artwork.Id + ":" + TuneInCategoryArtwork.PackRevision(artwork.Scope, artwork.Id));
@@ -307,7 +309,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 var previousPackVersion = packVersion == null ? null : folder.GetProviderId(packProvider);
                 if (previousVersion == version && folder.HasImage(ImageType.Primary, 0)
                     && (packVersion == null || previousPackVersion == packVersion)) return;
-                var image = FolderImage(entry) ?? CategoryArtworkUrl(entry.Category);
+                var image = artwork.Scope == "categories" ? CategoryArtworkUrl(entry.Category)
+                    : FolderImage(entry) ?? CategoryArtworkUrl(entry.Category);
                 folder.SetImage(new ItemImageInfo
                 {
                     Path = packVersion == null ? image : image + "&packRevision=" + packRevision, Type = ImageType.Primary,

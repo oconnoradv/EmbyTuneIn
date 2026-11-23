@@ -39,7 +39,7 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
   whole TuneIn library.
 - **Playback:** a validated relay for every station, including TuneIn's
   separate introductions, with stalled-stream handling.
-- **Artwork:** bundled category artwork and optional music genre, language and location artwork packs.
+- **Artwork:** bundled category artwork and optional category, music genre, language and location artwork packs.
 
 Planned: Control Panel localization that follows the user's Emby language.
 
@@ -265,22 +265,110 @@ return on the next refresh; disable a category to keep it absent.
 
 ## Artwork
 
-Category folders use bundled artwork, and the top-level TuneIn library item
-uses bundled artwork with the **Powered by TuneIn** mark. Refreshing a
-category updates its artwork.
+Category folders use bundled artwork unless a matching category card is
+installed. The top-level TuneIn library item always uses bundled artwork with
+the **Powered by TuneIn** mark. Refreshing a category updates its artwork.
 
 Music genre, language and location folders use their category artwork unless
 matching cards are installed. Packs are published in
 [EmbyTuneInArt](https://github.com/oconnoradv/EmbyTuneInArt/releases).
-Extract each pack's images and `tunein-artwork.json` into its own directory:
-`<Emby data>\plugins\configurations\TuneInArtwork\genres`, `languages`, or
-`locations`. Install one pack per directory, then refresh the corresponding
-category (refresh Language too for music genres browsed under a language).
-Cards use TuneIn IDs as filenames, for example `c57943.jpg`, `g79.png`,
-`l122.jpg`, or `r101227.png`. Advanced Settings reports the server paths,
+
+### Upload and install
+
+In the administrator settings page, **Custom Artwork Packs** shows the name,
+image count and server folder for each scope. Select **Upload Artwork Pack**
+and choose a ZIP from the computer running the browser. The server validates
+the entire archive and scans the staged files when a supported scanner is
+available. Review its name, scope, image count, scan status and replacement
+warning, then confirm installation or cancel. Installation replaces the entire
+existing scope, not just matching images. Uploads and installation are
+serialized; an active TuneIn refresh or cleanup prevents activation. A failed
+validation or replacement preserves the previous installation. Confirmation
+expires after 30 minutes.
+
+After installation, choose **Refresh now** or **Later**. No refresh begins
+without that consent. The prompt lists affected enabled categories: genres
+affect both Music and Language, language cards affect Language, location cards
+affect Location, and category cards affect their corresponding categories.
+Refreshes use the existing controls and may be refused if work, readiness,
+recovery or queue limits prevent starting them. Installation remains successful
+even if a refresh cannot start.
+
+### Upload format
+
+The ZIP must contain a root `tunein-artwork.json` and only the images explicitly
+listed in it. All names are flat, ASCII, case-sensitive, with no directories,
+extra files, ZIP comments or extra fields. ZIP32 stored or deflated entries are
+accepted; encrypted, multi-volume and ZIP64 archives are not. Duplicate or
+case-colliding entries, links, traversal, absolute paths and network references
+are rejected. Files must be JPEG (`.jpg`) or PNG (`.png`) with a lowercase
+extension. Scripts, executables, shortcuts, HTML, SVG, nested archives and
+other content are not accepted.
+
+The UTF-8 manifest must have exactly the following fields and no duplicates.
+`imageCount` must equal the number of records and the exact ZIP image inventory.
+Each SHA256 is the 64 hexadecimal digits of the actual image bytes. For
+example, copy this repository's `Images/tunein-talk.png` to `talk.png` in the
+ZIP with this manifest:
+
+```json
+{
+  "schemaVersion": 1,
+  "scope": "categories",
+  "packName": "My category cards",
+  "imageCount": 1,
+  "images": [
+    { "id": "talk", "file": "talk.png", "sha256": "c40ef8877643bc6ae6cc4e9c514cb51ca900a2a02efe145df34fd287e7e7e03f" }
+  ]
+}
+```
+
+The scope is exactly one of `categories`, `genres`, `languages`, or `locations`.
+Category IDs are `local`, `music`, `language`, `location`, `talk`, `sports`,
+`podcast`, and `presets`. Genre IDs are `c` or `g` followed by a nonzero digit
+and up to nine more digits; language IDs use `l`, and location IDs use `r`,
+with the same numeric rule. Each filename is its exact ID plus `.jpg` or
+`.png`; IDs and filenames cannot repeat, including case collisions. Pack names
+are 1–128 characters, trimmed, without controls, path separators, colons, `@`
+or `www.`.
+
+Limits are 768 MiB uploaded, 2 GiB expanded, 4 MiB manifest, 20,000 records,
+16 MiB per image, 4,096 pixels per dimension and 16,777,216 pixels total.
+The server's configured FFmpeg must decode each image; each decode is limited
+to 30 seconds, scanning to 30 minutes, and the overall upload/processing to
+45 minutes. Validation checks structure, hashes and decodability, but does not
+guarantee images are malware-free.
+
+The server checks Microsoft Defender on Windows or `clamscan` in supported
+standard installation locations; it does not install software, elevate
+privileges, run arbitrary commands or send packs to an external scanning
+service. Defender is used only when its service-account-readable settings show
+antivirus running normally, cloud reporting disabled and automatic sample
+submission disabled. Otherwise installation is blocked; the plugin does not
+change server security policies. Defender output in an unexpected language or
+format also fails closed. Each file's exclusion status must be verifiable by
+the Emby service account and not excluded from scanning; Defender may deny this
+check without sufficient existing permissions. Scanner errors, threats, timeouts and incomplete scans
+block installation. If neither supported scanner is installed, the pack is
+marked **Not scanned** and requires explicit approval before installation.
+The browser's antivirus is not used.
+
+If validation fails, check the manifest, exact filenames and hashes, ZIP
+format, limits and server FFmpeg configuration. For scanner errors check its
+availability, permissions, health and privacy settings on the Emby server.
+Check the server logs for details. Previously published packs may include
+additional metadata or files and must be regenerated to meet this upload
+format; simply renaming the ZIP is not sufficient.
+
+### Manual installation
+
+Existing manually installed packs remain compatible and need not meet the
+strict upload schema. Extract each pack into the corresponding server directory:
+`<Emby data>\plugins\configurations\TuneInArtwork\categories`, `genres`,
+`languages`, or `locations`. Custom Artwork Packs reports the actual paths,
 installed counts and manifest identity; when hashes are available it also
 distinguishes unchanged, replaced and added cards. The optional Cartoon example
-loads from GitHub. Artwork manifests are limited to 4 MiB.
+loads from GitHub. Refresh the affected categories after manual installation.
 
 Refreshing a category reapplies its installed pack artwork when the artwork
 revision changes, even if an existing primary image is present. Reload the

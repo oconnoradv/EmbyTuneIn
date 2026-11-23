@@ -173,6 +173,15 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
+        internal static T InstallArtwork<T>(Func<T> install)
+        {
+            lock (SharedGate)
+            {
+                if (shared == null) throw new InvalidOperationException("TuneIn refresh status is unavailable; reload settings and try again.");
+                return shared.InstallArtwork(install);
+            }
+        }
+
         internal static bool TryGetCommitted(ConfigurationSnapshot snapshot, string folder, out ChannelItemResult result)
         {
             TuneInRefresh coordinator;

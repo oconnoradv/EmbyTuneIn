@@ -684,6 +684,19 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
+        internal T InstallArtwork<T>(Func<T> install)
+        {
+            if (install == null) throw new ArgumentNullException(nameof(install));
+            lock (gate)
+            {
+                EnsureNoCleanup();
+                if (disposed || work != null && !work.IsCompleted)
+                    throw new InvalidOperationException("Artwork installation cannot run while TuneIn refresh work is active or draining.");
+                cleanupPlan = null;
+                return install();
+            }
+        }
+
         internal void UpdateConfiguration(Action update)
         {
             if (update == null) throw new ArgumentNullException(nameof(update));
