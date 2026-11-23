@@ -832,6 +832,49 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task ConcurrentEmbyChannelTraversalCannotFailOrCompleteAScopedImport(bool importSkipsDescendants)
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            var talkId = fixture.Category("talk").RootId;
+            var sportsId = fixture.Category("sports").RootId;
+            var talkFolders = fixture.Category("talk").Folders.Select(folder => folder.Id).ToArray();
+            var foreignReads = new List<string>();
+            fixture.Manager.SkipDescendants = importSkipsDescendants;
+            fixture.Manager.BeforeImport = async (restriction, token) =>
+            {
+                // Emby's Refresh Internet Channels task and client browsing pass their own tokens.
+                using var foreign = new CancellationTokenSource();
+                foreach (var folder in new string[] { null, sportsId }.Concat(talkFolders))
+                {
+                    var listing = await fixture.Channel.GetChannelItems(
+                        new InternalChannelItemQuery { FolderId = folder }, foreign.Token);
+                    Assert.NotNull(listing.Items);
+                    foreignReads.Add(folder);
+                }
+            };
+            fixture.Version++;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal(2 + talkFolders.Length, foreignReads.Count);
+            Assert.Equal(new[] { null, talkId }, fixture.Manager.Restrictions);
+            if (importSkipsDescendants)
+            {
+                Assert.Equal("Error", refresh.Status().State);
+                Assert.Equal("talk", fixture.Store.Read().DirtyCategory);
+            }
+            else
+            {
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.Null(fixture.Store.Read().DirtyCategory);
+            }
+        }
+
+        [Theory]
         [InlineData("default")]
         [InlineData("topology")]
         [InlineData("unrelated dirty")]
@@ -968,6 +1011,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             internal bool BrokenTalk;
             internal LibraryCleanupTests.LibraryProxy CleanupLibrary;
             internal readonly PluginConfiguration Config;
+            internal TuneInChannel Channel => channel;
 
             internal ExperimentalImportFixture(bool includeMusic = false)
             {
@@ -1097,7 +1141,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var store = new TuneInRefreshStore(path);
             TuneInRefresh Create() => new TuneInRefresh(directory, store, () => channel,
                 (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
-                (c, staged, _, token) => c.ImportAsync(staged, async () =>
+                (c, staged, _, token) => c.ImportAsync(staged, token, async () =>
                 {
                     imports++;
                     Assert.Equal(new[] { "Talk", "Sports" }, ReadStagedTree(staged, token).Keys);
@@ -1280,7 +1324,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             {
                 using var refresh = new TuneInRefresh(directory, store, () => channel,
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
-                    (c, staged, _, token) => c.ImportAsync(staged, async () =>
+                    (c, staged, _, token) => c.ImportAsync(staged, token, async () =>
                     {
                         imports++;
                         if (changed)
@@ -2084,7 +2128,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var store = new TuneInRefreshStore(path);
             TuneInRefresh Create() => new TuneInRefresh(directory, store, () => channel,
                 (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
-                (c, staged, _, token) => c.ImportAsync(staged, async () =>
+                (c, staged, _, token) => c.ImportAsync(staged, token, async () =>
                 {
                     imports++;
                     Assert.Equal(new[] { "Talk", "Sports" }, ReadStagedTree(staged, token).Keys);
@@ -2317,7 +2361,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             {
                 using var refresh = new TuneInRefresh(directory, store, () => channel,
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
-                    (c, staged, _, token) => c.ImportAsync(staged, async () =>
+                    (c, staged, _, token) => c.ImportAsync(staged, token, async () =>
                     {
                         imports++;
                         if (changed)
@@ -2413,7 +2457,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             {
                 using var refresh = new TuneInRefresh(directory, store, () => channel,
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
-                    (c, staged, _, token) => c.ImportAsync(staged, async () =>
+                    (c, staged, _, token) => c.ImportAsync(staged, token, async () =>
                     {
                         imports++;
                         ReadStagedTree(staged, token);
@@ -3414,7 +3458,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var store = new TuneInRefreshStore(path);
                 using var refresh = new TuneInRefresh(directory, store, () => channel,
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
-                    (c, staged, folder, token) => c.ImportAsync(staged, async () =>
+                    (c, staged, folder, token) => c.ImportAsync(staged, token, async () =>
                     {
                         Assert.Null(folder);
                         Task<Dictionary<string, string[]>> callbacks;
@@ -3511,7 +3555,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var interrupt = false;
                 TuneInRefresh Make() => new TuneInRefresh(directory, store, () => channel,
                     (c, folder, session, strict, token) => c.GetRefreshChannelItems(folder, session, strict, token),
-                    (c, staged, folder, token) => c.ImportAsync(staged, async () =>
+                    (c, staged, folder, token) => c.ImportAsync(staged, token, async () =>
                     {
                         Assert.Equal("talk", store.Read().DirtyCategory);
                         var roots = await c.GetChannelItems(new InternalChannelItemQuery { FolderId = folder }, token);

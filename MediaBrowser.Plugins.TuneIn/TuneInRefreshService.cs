@@ -204,7 +204,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal static Task ImportChannel(IChannelManager manager, TuneInChannel channel,
             TuneInStagedImport staged, string restrictTopLevelFolderId, CancellationToken token) =>
-            channel.ImportAsync(staged, () =>
+            channel.ImportAsync(staged, token, () =>
                 manager.RefreshChannelContent(channel, staged.ImportRefreshLevel, restrictTopLevelFolderId, token));
 
         internal static TuneInRefresh GetShared(IHttpClient client, IApplicationHost host, IApplicationPaths paths,

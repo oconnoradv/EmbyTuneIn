@@ -28,7 +28,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly TuneInDirectory directory;
         private readonly IServerApplicationHost serverHost;
         private readonly ILibraryManager library;
-        private TuneInStagedImport stagedImport;
+        private ActiveImport activeImport;
         private readonly object catalogueGate = new object();
         private string browseKey;
         private TuneInCatalogueSession browseCache;
@@ -62,9 +62,11 @@ namespace MediaBrowser.Plugins.TuneIn
             directory.CheckCurrent(snapshot, cancellationToken);
             if (snapshot.Ready && !string.IsNullOrEmpty(query.FolderId))
                 directory.Resolve(snapshot, query.FolderId);
-            var staged = Volatile.Read(ref stagedImport);
-            if (staged != null)
-                return Task.FromResult(staged.Read(query.FolderId, cancellationToken));
+            // Emby forwards the RefreshChannelContent token unchanged; its scheduled channel refresh and
+            // client browsing use other tokens and must not consume or fail the staged import.
+            var active = Volatile.Read(ref activeImport);
+            if (active != null && active.Token == cancellationToken)
+                return Task.FromResult(active.Staged.Read(query.FolderId, cancellationToken));
 
             if (snapshot.Ready && !string.IsNullOrEmpty(query.FolderId))
             {
@@ -94,17 +96,33 @@ namespace MediaBrowser.Plugins.TuneIn
         internal ChannelItemInfo GetCategoryRoot(ConfigurationSnapshot snapshot, string category) =>
             new TuneInBrowsing(directory, GetDefaultImages, FolderImage).CategoryRoot(snapshot, category);
 
-        internal async Task ImportAsync(TuneInStagedImport staged, Func<Task> import)
+        internal async Task ImportAsync(TuneInStagedImport staged, CancellationToken token, Func<Task> import)
         {
+            if (staged == null || import == null) throw new ArgumentNullException(staged == null ? nameof(staged) : nameof(import));
+            // The token identifies the import traversal, so it must be unique to this import.
+            if (!token.CanBeCanceled) throw new ArgumentException("A TuneIn import requires its own cancellation token.", nameof(token));
             // Emby can request listings in a different execution context from the import caller.
-            if (Interlocked.CompareExchange(ref stagedImport, staged, null) != null)
+            var active = new ActiveImport(staged, token);
+            if (Interlocked.CompareExchange(ref activeImport, active, null) != null)
                 throw new InvalidOperationException("A TuneIn channel import is already active.");
             try
             {
                 await import().ConfigureAwait(false);
                 staged.Verify();
             }
-            finally { Volatile.Write(ref stagedImport, null); }
+            finally { Interlocked.CompareExchange(ref activeImport, null, active); }
+        }
+
+        private sealed class ActiveImport
+        {
+            internal ActiveImport(TuneInStagedImport staged, CancellationToken token)
+            {
+                Staged = staged;
+                Token = token;
+            }
+
+            internal TuneInStagedImport Staged { get; }
+            internal CancellationToken Token { get; }
         }
 
         internal int? CountCategoryStations(string folderId, CancellationToken token)
