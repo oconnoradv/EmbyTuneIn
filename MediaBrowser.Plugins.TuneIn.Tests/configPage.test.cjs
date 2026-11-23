@@ -2373,6 +2373,31 @@ test('artwork refresh reports every affected category that could not start', asy
     app.instance.onPause();
 });
 
+test('upload completion after leaving the page discards staging and re-enables upload on return', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', Categories: [] });
+    await visit;
+    const file = app.elements['.artworkFile'];
+    file.files = [{ name: 'pack.zip', size: 12 }];
+    const upload = file.handlers.change.call(file, { stopPropagation() {} });
+    app.instance.onPause();
+    const revisit = app.instance.onResume();
+    app.reads[1].resolve({});
+    app.refresh[1].resolve({ State: 'NeverRun', Categories: [] });
+    await revisit;
+    assert.equal(app.elements['.artworkUpload'].disabled, true);
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload')
+        .resolve({ Token: 'abc', ScanStatus: 'Clean' });
+    await settle();
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Discard').resolve({});
+    await upload;
+    assert.equal(app.elements['.artworkUpload'].disabled, false);
+    assert.equal(app.elements['.artworkConfirmDialog'].open, undefined);
+    app.instance.onPause();
+});
+
 test('artwork status handles missing, unavailable and incomplete server data without retaining stale values', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();

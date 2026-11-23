@@ -770,7 +770,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         pollArtwork(instance, epoch);
         return ApiClient.ajax({ type: 'POST', dataType: 'json', url: ApiClient.getUrl('TuneIn/Artwork/Upload'),
             data: file, contentType: 'application/zip', processData: false }).then(function (result) {
-            if (epoch !== instance.viewEpoch) return;
+            if (epoch !== instance.viewEpoch) {
+                return ApiClient.ajax({ type: 'POST', dataType: 'json', contentType: 'application/json',
+                    url: ApiClient.getUrl('TuneIn/Artwork/Discard'), data: JSON.stringify({ Token: result.Token }) })
+                    .catch(function (error) { console.error('Could not discard staged artwork; it will expire.', error); });
+            }
             instance.artworkPending = result;
             if (result.ScanStatus !== 'Clean' && result.ScanStatus !== 'Not scanned') {
                 discardArtwork(instance).then(function () {
@@ -794,7 +798,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         }).then(function () {
             instance.artworkBusy = false;
             clearTimeout(instance.artworkTimer);
-            if (epoch === instance.viewEpoch) instance.view.querySelector('.artworkUpload').disabled = false;
+            if (instance.refreshVisible) {
+                instance.view.querySelector('.artworkUpload').disabled = false;
+                if (epoch !== instance.viewEpoch)
+                    instance.view.querySelector('.artworkUploadMessage').textContent = 'Artwork operation finished while the page was away. Check the pack status.';
+            }
         });
     }
 
@@ -855,7 +863,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 instance.view.querySelector('.artworkUploadMessage').textContent = 'Could not confirm artwork installation: ' + artworkError(error);
         }).then(function () {
             instance.artworkBusy = false;
-            if (epoch === instance.viewEpoch) instance.view.querySelector('.artworkUpload').disabled = false;
+            if (instance.refreshVisible) {
+                instance.view.querySelector('.artworkUpload').disabled = false;
+                if (epoch !== instance.viewEpoch)
+                    instance.view.querySelector('.artworkUploadMessage').textContent = 'Artwork operation finished while the page was away. Check the pack status.';
+            }
         });
     }
 
@@ -1846,6 +1858,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var instance = this;
         var epoch = instance.viewEpoch = (instance.viewEpoch || 0) + 1;
         instance.refreshVisible = true;
+        instance.view.querySelector('.artworkUpload').disabled = !!instance.artworkBusy;
+        if (instance.artworkBusy) pollArtwork(instance, epoch);
         showLibraryArtwork(instance.view);
         instance.refreshDefaultPending = true;
         instance.refreshSection.open = false;
