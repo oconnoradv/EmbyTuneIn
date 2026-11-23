@@ -33,6 +33,73 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public async Task OptionalCheckEligibilityRequiresPersistedSuccessfulCompletion()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using (var refresh = fixture.Create(allowScoped: true))
+            {
+                Assert.False(refresh.Status().HasSuccessfulCategoryRefresh);
+                fixture.BrokenTalk = true;
+                refresh.Start();
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Partial", refresh.Status().State);
+                Assert.False(refresh.Status().HasSuccessfulCategoryRefresh);
+                fixture.BrokenTalk = false;
+                refresh.Start();
+                await WaitUntilIdle(refresh);
+                Assert.Equal("Completed", refresh.Status().State);
+                Assert.True(refresh.Status().HasSuccessfulCategoryRefresh);
+            }
+
+            using (var restarted = fixture.Create(allowScoped: true))
+                Assert.True(restarted.Status().HasSuccessfulCategoryRefresh);
+            var legacy = fixture.Store.Read();
+            legacy.SuccessfulCategories.Clear();
+            fixture.Store.Write(legacy);
+            using (var legacyRefresh = fixture.Create(allowScoped: true))
+            {
+                Assert.True(legacyRefresh.Status().HasCompleteBaseline);
+                Assert.False(legacyRefresh.Status().HasSuccessfulCategoryRefresh);
+            }
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task InterruptedLegacyRefreshDoesNotCreateSuccessEvidence(bool cancel)
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using (var initial = fixture.Create(allowScoped: true))
+            {
+                initial.Start();
+                await WaitUntilIdle(initial);
+                Assert.Equal("Completed", initial.Status().State);
+            }
+            var legacy = fixture.Store.Read();
+            legacy.SuccessfulCategories.Clear();
+            fixture.Store.Write(legacy);
+            fixture.Version++;
+            var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            fixture.BeforeSports = async token =>
+            {
+                entered.TrySetResult(true);
+                if (!cancel) throw new InvalidOperationException("Simulated failure");
+                await Task.Delay(Timeout.Infinite, token);
+            };
+            using (var refresh = fixture.Create(allowScoped: true))
+            {
+                refresh.Start();
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                if (cancel) refresh.Cancel();
+                await WaitUntilIdle(refresh);
+                Assert.Equal(cancel ? "Cancelled" : "Error", refresh.Status().State);
+                Assert.False(refresh.Status().HasSuccessfulCategoryRefresh);
+            }
+            using var restarted = fixture.Create(allowScoped: true);
+            Assert.False(restarted.Status().HasSuccessfulCategoryRefresh);
+        }
+
+        [Fact]
         public async Task ChangingSelectedGenresRetainsOnlyAllowedEntriesAndKeepsMissingStations()
         {
             var config = new PluginConfiguration
@@ -3709,7 +3776,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             public void RefreshRoutesRequireAdministratorAndRejectMissingRequestContext()
             {
                 foreach (var route in new[] { typeof(GetTuneInRefreshStatus), typeof(StartTuneInRefresh),
-                    typeof(GetTuneInRefreshFailureLog), typeof(CancelTuneInRefresh), typeof(SetTuneInSettingsLock) })
+                    typeof(GetTuneInRefreshFailureLog), typeof(CancelTuneInRefresh), typeof(SetTuneInSettingsLock),
+                    typeof(SetTuneInOptionalChecksPreference) })
                     Assert.Equal("Admin", Assert.Single(route.GetCustomAttributes(typeof(AuthenticatedAttribute), false).Cast<AuthenticatedAttribute>()).Roles);
 
                 var config = new PluginConfiguration();
@@ -3724,6 +3792,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new StartTuneInRefresh { Category = "talk" }));
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new CancelTuneInRefresh()));
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new SetTuneInSettingsLock { Locked = false }));
+                Assert.Throws<UnauthorizedAccessException>(() => service.Post(new SetTuneInOptionalChecksPreference { Skip = true }));
             }
 
             [Fact]

@@ -93,6 +93,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public List<string> CleanedCategories { get; set; } = new List<string>();
         public bool NeedsImport { get; set; }
         public bool? CompleteBaseline { get; set; }
+        public List<string> SuccessfulCategories { get; set; } = new List<string>();
     }
 
     internal sealed class TuneInRefreshStore
@@ -229,6 +230,9 @@ namespace MediaBrowser.Plugins.TuneIn
             if (checkpoint == null || checkpoint.ConfigurationKey?.Length != 64
                 || checkpoint.Categories == null || checkpoint.Categories.Count > 8
                 || checkpoint.PendingCategories == null || checkpoint.PendingCategories.Count > 8
+                || checkpoint.SuccessfulCategories == null || checkpoint.SuccessfulCategories.Count > 8
+                || checkpoint.SuccessfulCategories.Any(category => !validCategories.Contains(category))
+                || checkpoint.SuccessfulCategories.Distinct().Count() != checkpoint.SuccessfulCategories.Count
                 || checkpoint.CleanedCategories == null || checkpoint.CleanedCategories.Count > 8
                 || checkpoint.CleanedCategories.Any(category => !validCategories.Contains(category))
                 || checkpoint.CleanedCategories.Distinct().Count() != checkpoint.CleanedCategories.Count

@@ -10,8 +10,13 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static bool Install(string root, string scope, string staged,
             Action<string, string> move = null)
         {
+            if (!TuneInCategoryArtwork.Scopes.Contains(scope, StringComparer.Ordinal))
+                throw new ArgumentException("Unsupported artwork scope.", nameof(scope));
             lock (TuneInCategoryArtwork.PackGate)
-                return InstallLocked(root, scope, staged, move);
+            {
+                try { return InstallLocked(root, scope, staged, move); }
+                finally { TuneInRefreshService.ArtworkStatusCache.Invalidate(scope); }
+            }
         }
 
         private static bool InstallLocked(string root, string scope, string staged,

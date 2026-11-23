@@ -684,9 +684,81 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.refreshOverall').textContent = ' - Overall: ' + text;
     }
 
+    function renderOptionalChecks(instance, status) {
+        var view = instance.view;
+        var selected = status && status.SkipOptionalStartupChecks;
+        var eligible = !!status && status.OptionalChecksEligible === true;
+        view.querySelector('.optionalChecksPrompt').hidden = !eligible || selected != null || !!instance.optionalSaving;
+        var toggle = view.querySelector('.skipOptionalChecks');
+        toggle.checked = selected === true;
+        toggle.disabled = !!instance.optionalSaving || !status || !!status.Busy
+            || !!(status.Cleanup && status.Cleanup.State === 'Running') || (!eligible && selected !== true);
+        view.querySelector('.optionalChecksSkip').disabled = !!instance.optionalSaving;
+        view.querySelector('.optionalChecksKeep').disabled = !!instance.optionalSaving;
+    }
+
+    function saveOptionalChecks(instance, skip) {
+        if (instance.optionalSaving || !instance.refreshStatus) return;
+        var epoch = instance.viewEpoch;
+        instance.optionalSaving = true;
+        instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
+        renderOptionalChecks(instance, instance.refreshStatus);
+        instance.view.querySelector('.optionalChecksMessage').textContent = 'Saving optional checks preference...';
+        return ApiClient.ajax({
+            type: 'POST', dataType: 'json', contentType: 'application/json',
+            url: ApiClient.getUrl('TuneIn/OptionalChecks/Preference'), data: JSON.stringify({ Skip: skip })
+        }).then(function (result) {
+            if (epoch !== instance.viewEpoch) return;
+            instance.refreshStatus.SkipOptionalStartupChecks = result.SkipOptionalStartupChecks;
+            instance.view.querySelector('.optionalChecksMessage').textContent = skip
+                ? 'Optional startup checks will be skipped.' : 'Optional startup checks are enabled.';
+        }, function () {
+            if (epoch === instance.viewEpoch)
+                instance.view.querySelector('.optionalChecksMessage').textContent =
+                    'Could not confirm the optional checks preference. Checking the server again.';
+        }).then(function () {
+            instance.optionalSaving = false;
+            if (epoch !== instance.viewEpoch) return;
+            renderOptionalChecks(instance, instance.refreshStatus);
+            pollStatus(instance, epoch);
+        });
+    }
+
+    function runOptionalChecks(instance) {
+        if (instance.optionalChecking) return;
+        var epoch = instance.viewEpoch;
+        instance.optionalChecking = true;
+        instance.view.querySelector('.optionalChecksRun').disabled = true;
+        instance.view.querySelector('.optionalChecksStatus').textContent = 'Checking artwork packs...';
+        instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
+        var generation = instance.refreshGeneration;
+        return ApiClient.ajax({
+            type: 'GET', dataType: 'json', url: ApiClient.getUrl('TuneIn/Refresh/Status', { CheckOptional: true })
+        }).then(function (status) {
+            if (epoch === instance.viewEpoch && generation === instance.refreshGeneration) renderRefresh(instance, status);
+        }, function () {
+            if (epoch === instance.viewEpoch && generation === instance.refreshGeneration) {
+                renderArtworkPacks(instance, null);
+                instance.view.querySelector('.optionalChecksStatus').textContent = 'Artwork checks failed; status is unavailable. Try again.';
+            }
+        }).then(function () {
+            instance.optionalChecking = false;
+            instance.view.querySelector('.optionalChecksRun').disabled = false;
+        });
+    }
+
     function renderArtworkPacks(instance, status) {
         var packs = status && (status.artworkPacks || status.ArtworkPacks);
         if (!Array.isArray(packs)) packs = [];
+        var dates = packs.map(function (pack) { return pack && (pack.CheckedUtc || pack.checkedUtc); })
+            .filter(function (value) { return value && !isNaN(Date.parse(value)); });
+        var deferred = !!status && status.ArtworkChecksDeferred === true;
+        instance.view.querySelector('.optionalChecksStatus').textContent = !status ? 'Artwork status unavailable.'
+            : dates.length ? (deferred ? 'Automatic artwork checks deferred. ' : '')
+                + 'Last checked: ' + new Date(Math.min.apply(null, dates.map(Date.parse))).toLocaleString()
+                + '. Results may have changed since then.'
+            : deferred ? 'Artwork checks deferred; run checks now to see pack status.'
+            : 'Artwork check time unavailable.';
         function field(pack, name) {
             return pack && (pack[name] != null ? pack[name] : pack[name.charAt(0).toUpperCase() + name.slice(1)]);
         }
@@ -718,6 +790,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 : state === 'missing' && installed === 0 ? 'Default artwork'
                 : state === 'missing' ? 'No pack metadata'
                 : state === 'invalid' ? 'Invalid pack metadata'
+                : state === 'deferred' ? 'Check deferred'
                 : 'Status unavailable';
             var images = [];
             if (installed !== null) images.push(installed + ' installed');
@@ -958,6 +1031,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         }
         var previousStatus = instance.refreshStatus;
         instance.refreshStatus = status;
+        renderOptionalChecks(instance, status);
         renderCatalogRefreshPrompt(instance);
         renderReadiness(instance);
         var category = ({ local: 'Local Radio', music: 'Music', language: 'By Language', location: 'By Location',
@@ -1518,7 +1592,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (epoch !== instance.viewEpoch || !instance.refreshVisible) return;
         clearTimeout(instance.refreshTimer);
         readBackup(instance, false);
-        if (instance.refreshAction || instance.lockChanging || instance.cleanupAction) return scheduleStatus(instance, epoch);
+        if (instance.refreshAction || instance.lockChanging || instance.cleanupAction || instance.optionalSaving)
+            return scheduleStatus(instance, epoch);
         if (instance.refreshPoll) return instance.refreshPoll;
         var generation = instance.refreshGeneration || 0;
         instance.refreshPoll = ApiClient.ajax({
@@ -1528,6 +1603,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         }).catch(function () {
             if (epoch === instance.viewEpoch && generation === (instance.refreshGeneration || 0)) {
                 instance.refreshStatus = null;
+                renderOptionalChecks(instance, null);
                 renderReadiness(instance);
                 setRefreshOutcome(instance, '', 'status unavailable');
                 instance.view.querySelector('.refreshStatus').textContent = 'Could not read refresh status. Retrying automatically.';
@@ -1758,6 +1834,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         bindDisclosure(view.querySelector('.refreshSummary'), function () { instance.refreshDefaultPending = false; });
         view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });
         view.querySelector('.configurationCompleted').addEventListener('change', function () { editing(instance); setupChanged(instance); });
+        view.querySelector('.optionalChecksSkip').addEventListener('click', function () { return saveOptionalChecks(instance, true); });
+        view.querySelector('.optionalChecksKeep').addEventListener('click', function () { return saveOptionalChecks(instance, false); });
+        view.querySelector('.optionalChecksRun').addEventListener('click', function () { return runOptionalChecks(instance); });
+        view.querySelector('.skipOptionalChecks').addEventListener('input', function (event) { event.stopPropagation(); });
+        view.querySelector('.skipOptionalChecks').addEventListener('change', function (event) {
+            event.stopPropagation();
+            return saveOptionalChecks(instance, this.checked);
+        });
         var dialog = view.querySelector('.tuneInRefreshRecoveryDialog');
         instance.refreshSection.addEventListener('toggle', function () {
             if (!instance.refreshSection.open && dialog.open) dialog.close();
@@ -1870,6 +1954,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var instance = this;
         var epoch = instance.viewEpoch = (instance.viewEpoch || 0) + 1;
         instance.refreshVisible = true;
+        instance.view.querySelector('.optionalChecksRun').disabled = !!instance.optionalChecking;
         instance.view.querySelector('.artworkUpload').disabled = !!instance.artworkBusy;
         if (instance.artworkBusy) pollArtwork(instance, epoch);
         showLibraryArtwork(instance.view);
@@ -1892,6 +1977,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshLogAction = null;
         instance.config = null;
         instance.refreshStatus = null;
+        renderOptionalChecks(instance, null);
         instance.view.querySelector('.tuneInReadiness').hidden = true;
         instance.setupControlsReady = false;
         instance.selectorErrors.clear();

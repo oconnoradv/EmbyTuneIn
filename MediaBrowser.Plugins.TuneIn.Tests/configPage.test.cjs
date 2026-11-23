@@ -55,6 +55,8 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.allowDirectHlsPlayback', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
+        '.optionalChecksPrompt', '.optionalChecksSkip', '.optionalChecksKeep', '.optionalChecksRun',
+        '.optionalChecksStatus', '.optionalChecksMessage', '.skipOptionalChecks',
         '.tuneInReadiness', '.readinessFiltering', '.readinessCategory', '.readinessRequirements',
         '.readinessSaved', '.readinessChannel', '.favoritesValidation', '.localValidation',
         '.channelScheduleConfirm', '.channelScheduleAdjust', '.tuneInPluginVersion',
@@ -122,6 +124,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     const cleanup = [];
     const backup = [];
     const artwork = [];
+    const optionalChecks = [];
     const scheduledTasks = { tasks: [], requests: [] };
     const timers = new Map();
     let timerId = 0;
@@ -157,7 +160,8 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
             else if (options.url.route.startsWith('TuneIn/Refresh/')) {
                 refresh.push({ options, ...request });
                 if (!manualStatus && options.type === 'GET') request.resolve({ SettingsLocked: serverLocked });
-            } else if (options.url.route.startsWith('TuneIn/Artwork/')) artwork.push({ options, ...request });
+            }             else if (options.url.route === 'TuneIn/OptionalChecks/Preference') optionalChecks.push({ options, ...request });
+            else if (options.url.route.startsWith('TuneIn/Artwork/')) artwork.push({ options, ...request });
             else if (options.url.route.startsWith('TuneIn/Cleanup/')) cleanup.push({ options, ...request });
             else if (options.url.route.startsWith('TuneIn/Backup/')) {
                 backup.push({ options, ...request });
@@ -200,7 +204,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     });
 
     return { instance: new PluginView(view), username, latLon, requestInterval, formHandlers, reads, writes, notices, errors, loader,
-        elements, selectors, enhanced, calls, handlers, refresh, locks, cleanup, backup, artwork, timers, scheduledTasks };
+        elements, selectors, enhanced, calls, handlers, refresh, locks, cleanup, backup, artwork, optionalChecks, timers, scheduledTasks };
 }
 
 function open(details) {
@@ -994,6 +998,82 @@ test('first-run checklist follows setup and saving without starting a refresh', 
     assert.ok(app.refresh.every(request => request.options.type === 'GET'));
     app.formHandlers.input();
     assert.equal(app.elements['.readinessSaved'].attributes['data-ready'], 'false');
+});
+
+test('optional checks prompt saves a choice and permits re-enabling', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve({ State: 'Completed', SettingsLocked: false, OptionalChecksEligible: true,
+        SkipOptionalStartupChecks: null });
+    await visit;
+    await settle();
+    assert.equal(app.elements['.optionalChecksPrompt'].hidden, false);
+    const save = app.elements['.optionalChecksSkip'].click();
+    assert.equal(JSON.parse(app.optionalChecks[0].options.data).Skip, true);
+    app.optionalChecks[0].resolve({ SkipOptionalStartupChecks: true });
+    await save;
+    assert.equal(app.elements['.optionalChecksPrompt'].hidden, true);
+    assert.equal(app.elements['.skipOptionalChecks'].checked, true);
+    app.refresh[1].resolve({ State: 'Completed', SettingsLocked: false, OptionalChecksEligible: true,
+        SkipOptionalStartupChecks: true });
+    await settle();
+    const toggle = app.elements['.skipOptionalChecks'];
+    let inputStopped = false;
+    toggle.handlers.input({ stopPropagation() { inputStopped = true; } });
+    assert.equal(inputStopped, true);
+    assert.equal(app.instance.setupDirty, false);
+    toggle.checked = false;
+    const reenable = toggle.handlers.change.call(toggle, { stopPropagation() {} });
+    assert.equal(JSON.parse(app.optionalChecks[1].options.data).Skip, false);
+    app.optionalChecks[1].resolve({ SkipOptionalStartupChecks: false });
+    await reenable;
+    assert.equal(toggle.checked, false);
+    assert.equal(app.elements['.optionalChecksPrompt'].hidden, true);
+});
+
+test('a failed optional preference write is not reported as saved', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve({ State: 'Completed', SettingsLocked: false, OptionalChecksEligible: true,
+        SkipOptionalStartupChecks: null });
+    await visit;
+    await settle();
+    const save = app.elements['.optionalChecksKeep'].click();
+    app.optionalChecks[0].reject(new Error('offline'));
+    await save;
+    assert.match(app.elements['.optionalChecksMessage'].textContent, /Could not confirm/);
+    app.refresh[1].resolve({ State: 'Completed', SettingsLocked: false, OptionalChecksEligible: true,
+        SkipOptionalStartupChecks: null });
+    await settle();
+    assert.equal(app.elements['.optionalChecksPrompt'].hidden, false);
+});
+
+test('optional checks are deferred until explicitly requested, and errors are reported', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve({ State: 'Completed', SettingsLocked: false, OptionalChecksEligible: true,
+        SkipOptionalStartupChecks: true, ArtworkChecksDeferred: true, ArtworkPacks: [] });
+    await visit;
+    await settle();
+    assert.equal(app.elements['.optionalChecksPrompt'].hidden, true);
+    assert.match(app.elements['.optionalChecksStatus'].textContent, /deferred/);
+    const checking = app.elements['.optionalChecksRun'].click();
+    assert.equal(app.refresh[1].options.url.params.CheckOptional, true);
+    app.refresh[1].resolve({ State: 'Completed', SettingsLocked: false, OptionalChecksEligible: true,
+        SkipOptionalStartupChecks: true, ArtworkChecksDeferred: false,
+        ArtworkPacks: [{ Scope: 'genres', Status: 'missing', InstalledCount: 0,
+            CheckedUtc: '2026-01-01T00:00:00Z' }] });
+    await checking;
+    assert.match(app.elements['.optionalChecksStatus'].textContent, /Last checked:/);
+    assert.equal(app.elements['.artworkGenresName'].textContent, 'Default artwork');
+    const retry = app.elements['.optionalChecksRun'].click();
+    app.refresh[2].reject(new Error('offline'));
+    await retry;
+    assert.match(app.elements['.optionalChecksStatus'].textContent, /failed/);
+    assert.equal(app.elements['.artworkGenresName'].textContent, 'Status unavailable');
 });
 
 test('enabled Selected only categories require valid saved choices with inline guidance', async () => {

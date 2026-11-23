@@ -28,6 +28,7 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInCategoryArtwork.LanguageFolder = artworkRoot == null ? null : Path.Combine(artworkRoot, "languages");
             TuneInCategoryArtwork.LocationFolder = artworkRoot == null ? null : Path.Combine(artworkRoot, "locations");
             TuneInCategoryArtwork.CategoryFolder = artworkRoot == null ? null : Path.Combine(artworkRoot, "categories");
+            TuneInRefreshService.ArtworkStatusCache.Invalidate();
             ArtworkRoot = artworkRoot;
             if (artworkRoot != null)
                 foreach (var scope in TuneInCategoryArtwork.Scopes) TuneInArtworkInstall.Recover(artworkRoot, scope);
@@ -69,6 +70,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 // These values are server-owned; clients cannot replace them when saving settings.
                 value.NavigationSecret = Configuration.NavigationSecret;
                 value.HasStartedCatalogRefresh = Configuration.HasStartedCatalogRefresh;
+                value.SkipOptionalStartupChecks = Configuration.SkipOptionalStartupChecks;
                 TuneInRefreshService.UpdateConfiguration(() => SettingsLock.SaveConfiguration(() =>
                 {
                     var previousSaved = value.SettingsSaved;
@@ -93,6 +95,29 @@ namespace MediaBrowser.Plugins.TuneIn
                 value.HasStartedCatalogRefresh = true;
                 // Persist server-owned history without resetting active refresh state or requiring unlocked settings.
                 base.UpdateConfiguration(value);
+            }
+        }
+
+        internal void SetOptionalStartupChecks(bool skip, TuneInRefresh refresh)
+        {
+            lock (configurationGate)
+            {
+                refresh.SetSettingsLock(() =>
+                {
+                    var value = Configuration;
+                    if (skip && !(value.SchemaVersion == 1 && value.ConfigurationCompleted && value.SettingsSaved
+                        && refresh.Status().HasSuccessfulCategoryRefresh))
+                        throw new InvalidOperationException("Save complete settings and finish a successful category refresh before skipping optional checks.");
+                    var previous = value.SkipOptionalStartupChecks;
+                    value.SkipOptionalStartupChecks = skip;
+                    try { base.UpdateConfiguration(value); }
+                    catch
+                    {
+                        value.SkipOptionalStartupChecks = previous;
+                        throw;
+                    }
+                    return true;
+                });
             }
         }
 

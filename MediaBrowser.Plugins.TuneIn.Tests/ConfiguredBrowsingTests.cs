@@ -120,7 +120,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var before = directory.Snapshot();
             var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
             foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "MaximumRateLimitWaitMinutes", "DiscoveryDeadlineHours", "ImportDeadlineHours", "MaxStationCount", "TraversalDepthLimit", "EnableCatalogIdentityDiagnostics", "AllowDirectHlsPlayback", "HideRegionalGenres",
-                "AllowPartialCatalogImport", "HasStartedCatalogRefresh",
+                "AllowPartialCatalogImport", "HasStartedCatalogRefresh", "SkipOptionalStartupChecks",
                 "SettingsSaved", "TalkMode", "TalkIds", "SportsMode", "SportsIds", "PodcastsMode", "PodcastIds" })
                 legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });
             using (var xml = new StringWriter(System.Globalization.CultureInfo.InvariantCulture))
@@ -562,6 +562,22 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal("all", existing.PodcastsMode);
             using var explicitFalse = new StringReader(legacyXml + "<SettingsSaved>false</SettingsSaved></PluginConfiguration>");
             Assert.False(((PluginConfiguration)serializer.Deserialize(explicitFalse)).SettingsSaved);
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void OptionalChecksChoiceSurvivesSerializationWithoutChangingCatalogScope(bool skip)
+        {
+            var config = Ready();
+            var key = new ConfigurationSnapshot(config).Key;
+            config.SkipOptionalStartupChecks = skip;
+            Assert.Equal(key, new ConfigurationSnapshot(config).Key);
+            var serializer = new XmlSerializer(typeof(PluginConfiguration));
+            using var writer = new StringWriter();
+            serializer.Serialize(writer, config);
+            using var reader = new StringReader(writer.ToString());
+            Assert.Equal(skip, ((PluginConfiguration)serializer.Deserialize(reader)).SkipOptionalStartupChecks);
         }
 
         [Fact]

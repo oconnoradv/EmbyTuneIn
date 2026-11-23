@@ -129,7 +129,7 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static string LocationFolder { get; set; }
         internal static string CategoryFolder { get; set; }
 
-        private static string Folder(string scope) => scope == "genres" ? GenreFolder
+        internal static string Folder(string scope) => scope == "genres" ? GenreFolder
             : scope == "languages" ? LanguageFolder : scope == "locations" ? LocationFolder
             : scope == "categories" ? CategoryFolder : null;
 

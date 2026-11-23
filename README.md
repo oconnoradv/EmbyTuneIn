@@ -68,6 +68,25 @@ The top right of the Control Panel shows the running build, for example
 **TuneIn plugin v1.2.8.0 (abcdef0)**. An older commit there means Emby is
 still loading an older DLL.
 
+### Optional startup checks
+
+After settings are saved and a category refresh completes successfully without
+partial or limited results, the Control Panel offers **Skip optional checks**
+or **Keep checks**. Existing installations must complete one new successful
+refresh because older checkpoints cannot prove that a saved category snapshot
+came from a completed refresh. The preference is saved on the server and is
+shared across browsers. Unlock settings to change it later under **Advanced
+Settings**; the choice saves immediately. **Run checks now** checks artwork
+packs without unlocking settings.
+
+The optional startup scan reads artwork pack manifests and hashes installed
+images. Automatic scans are cached for up to five minutes. When skipped, pack
+status can be stale or unavailable after restart; the Control Panel shows the
+last check time, and manual checks or re-enabling automatic checks show
+externally changed artwork. Refresh readiness, authentication, operation
+locks, channel registration, the first-baseline gate and artwork installation
+validation remain in force.
+
 Keep the navigation signing key in the configuration private and keep it
 across upgrades; replacing it invalidates existing item IDs. To roll back,
 restore the previous DLL, configuration and refresh state together.
@@ -82,6 +101,12 @@ channel refreshes and browsing cannot read from or interfere with a
 category-scoped import. The fix was confirmed on a clean Emby server.
 Artwork pack manifests now accept up to 4 MiB, allowing the published
 Futuristic location pack to be identified without changing the pack.
+
+This RC2 refresh also adds the opt-in **Skip optional checks** preference for
+the artwork manifest and image-hash scan on Control Panel startup. The
+preference becomes available only after a newly recorded successful refresh;
+existing checkpoints do not count as evidence. Artwork upload checks and all
+catalog refresh safety gates remain unchanged.
 
 After upgrading, run a full TuneIn refresh to replace any channel items saved
 with stale configuration-bound IDs. If a category refresh runs while Emby's
@@ -157,7 +182,26 @@ not required.
 | Discovery deadline | 1–10 hours | 2 |
 | Import deadline | 1–100 hours | 8 |
 | Enable catalog identity diagnostics | on/off | off |
+| Skip optional startup checks (after a successful refresh) | on/off | off |
 | Allow direct HLS playback | on/off | off |
+| Skip optional startup checks | on/off | off |
+
+After settings are saved and a category refresh completes successfully without
+partial or limited results, the control panel offers **Skip optional checks**
+or **Keep checks**. The choice is saved on the server. Existing installations
+must complete a new successful refresh: older checkpoints do not reliably
+distinguish completed refreshes from interrupted ones. Unlock settings to
+change the choice under Advanced Settings; the choice saves immediately. Use
+**Run checks now** to check immediately without unlocking settings.
+
+The optional checks currently inspect artwork pack metadata and image hashes.
+When enabled, their results are cached for up to five minutes between polls;
+when skipped, no automatic scans run and the last results may be stale or
+unavailable after restart. The panel shows when the oldest displayed result was
+checked. Manual changes to artwork become visible at the next automatic scan
+or immediately with **Run checks now**. Authentication, settings and operation
+locks, channel registration, refresh readiness and artwork upload validation
+remain live and are not bypassed.
 
 Reaching the station count or depth limit produces a **Limited** result that
 can still be imported. Identity diagnostics add aggregate catalog comparisons

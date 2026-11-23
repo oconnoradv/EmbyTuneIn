@@ -63,16 +63,20 @@ namespace MediaBrowser.Plugins.TuneIn
         public bool? SettingsLocked { get; set; }
         public bool HasRefreshBeenStarted { get; set; }
         public bool HasCompleteBaseline { get; set; }
+        public bool HasSuccessfulCategoryRefresh { get; set; }
+        public bool OptionalChecksEligible { get; set; }
+        public bool? SkipOptionalStartupChecks { get; set; }
         public bool? ChannelRegistered { get; set; }
         public DateTime? LastProgressUtc { get; set; }
         public string Activity { get; set; }
         public string PluginVersion { get; set; } = PluginBuild.Display;
         public string ArtworkFolder { get; set; }
-        public int ArtworkCards { get; set; }
+        public int? ArtworkCards { get; set; }
         public string ArtworkPackName { get; set; }
         public int? ArtworkPackImageCount { get; set; }
         public string ArtworkPackStatus { get; set; }
         public TuneInArtworkPackStatus[] ArtworkPacks { get; set; }
+        public bool ArtworkChecksDeferred { get; set; }
         internal TuneInRefreshStatus Copy() => (TuneInRefreshStatus)MemberwiseClone();
     }
 
@@ -87,6 +91,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public int? MatchedCount { get; set; }
         public int? ModifiedCount { get; set; }
         public int? AddedCount { get; set; }
+        public DateTime? CheckedUtc { get; set; }
     }
 
     internal static class PluginBuild
@@ -166,6 +171,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Dictionary<string, string> categoryLimitReasons = new Dictionary<string, string>(StringComparer.Ordinal);
         private string categoryStateKey;
         private bool hasCompleteBaseline;
+        private bool hasSuccessfulCategoryRefresh;
         private string dirtyCategory;
         private CommittedCatalogue committed = new CommittedCatalogue(null,
             new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal));
@@ -256,6 +262,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 var copy = status.Copy();
                 copy.HasRefreshBeenStarted = categoryStates.Count > 0;
                 copy.HasCompleteBaseline = hasCompleteBaseline;
+                copy.HasSuccessfulCategoryRefresh = hasSuccessfulCategoryRefresh;
                 copy.Cleanup = cleanup.Copy();
                 copy.Busy = work != null && !work.IsCompleted;
                 copy.ReportAvailable = !copy.Busy && failureLog != null;
@@ -822,6 +829,7 @@ namespace MediaBrowser.Plugins.TuneIn
             categoryCounts.Clear();
             categoryLimitReasons.Clear();
             hasCompleteBaseline = false;
+            hasSuccessfulCategoryRefresh = false;
             dirtyCategory = null;
             categoryStateKey = snapshot.Key;
             try
@@ -829,6 +837,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 var checkpoint = store.Read();
                 if (checkpoint?.ConfigurationKey != snapshot.Key) return;
                 hasCompleteBaseline = HasCompleteBaseline(checkpoint);
+                hasSuccessfulCategoryRefresh = checkpoint.SuccessfulCategories.Any(snapshot.Enabled);
                 dirtyCategory = checkpoint.DirtyCategory;
                 foreach (var category in checkpoint.Categories)
                 {
@@ -1583,6 +1592,16 @@ namespace MediaBrowser.Plugins.TuneIn
                             recentPages.Clear();
                             recentPagesKey = null;
                             recentPagesCategory = null;
+                        }
+                        linked.Token.ThrowIfCancellationRequested();
+                        if (partial.Count == 0 && limited.Count == 0
+                            && categories.Any(category => !checkpoint.SuccessfulCategories.Contains(category)))
+                        {
+                            foreach (var category in categories)
+                                if (!checkpoint.SuccessfulCategories.Contains(category))
+                                    checkpoint.SuccessfulCategories.Add(category);
+                            Persist(snapshot, checkpoint, started);
+                            hasSuccessfulCategoryRefresh = checkpoint.SuccessfulCategories.Any(snapshot.Enabled);
                         }
                     }
                 }

@@ -609,6 +609,14 @@
             <p class="status" role="status" aria-live="polite"></p>
             <p class="status stationDeletionNotice" role="status" aria-live="polite" hidden></p>
             <p class="status catalogRefreshPrompt" role="status" hidden></p>
+            <section class="optionalChecksPrompt" aria-label="Optional startup checks" hidden>
+                <p>Setup is complete and a category refresh succeeded. Skip optional artwork pack checks on future visits? Refresh status and safety checks remain live.</p>
+                <button is="emby-button" type="button" class="raised button-submit optionalChecksSkip">Skip optional checks</button>
+                <button is="emby-button" type="button" class="raised button-submit optionalChecksKeep">Keep checks</button>
+            </section>
+            <p class="optionalChecksMessage" role="status" aria-live="polite"></p>
+            <p class="optionalChecksStatus" role="status" aria-live="polite">Artwork checks have not run yet.</p>
+            <button is="emby-button" type="button" class="raised button-submit optionalChecksRun">Run checks now</button>
             <section class="tuneInReadiness" aria-label="First catalog refresh readiness" hidden>
                 <strong>First catalog refresh</strong>
                 <ul>
@@ -709,6 +717,11 @@
                     </aside>
                     <details class="tuneInAdvancedSettings">
                         <summary>Advanced Settings</summary>
+                        <label class="emby-checkbox-label">
+                            <input type="checkbox" is="emby-checkbox" class="skipOptionalChecks" aria-describedby="tuneInOptionalChecksHint" />
+                            <span>Skip optional startup checks</span>
+                        </label>
+                        <p class="fieldDescription" id="tuneInOptionalChecksHint">After settings are saved and a refresh completes without partial or limited results, skip automatic artwork pack scans. Existing installations need one new successful refresh because older history cannot prove completion. Results can be stale or unavailable after restart; use Run checks now to scan manually, or unlock settings and clear this setting to re-enable automatic checks. The choice saves immediately. Automatic scan results are cached for up to five minutes. Authentication, refresh readiness, operation locks, registration and installation safety checks remain live.</p>
                         <div class="inputContainer">
                             <label for="tuneInMaxStationCount">Max Station Count:</label>
                             <input id="tuneInMaxStationCount" type="number" class="maxStationCount" min="1" max="4000" step="1" placeholder="Not set" aria-describedby="tuneInMaxStationCountHint" disabled />

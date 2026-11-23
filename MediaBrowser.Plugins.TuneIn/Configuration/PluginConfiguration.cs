@@ -39,6 +39,7 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public int SchemaVersion { get; set; }
         public bool ConfigurationCompleted { get; set; }
         public bool HasStartedCatalogRefresh { get; set; }
+        public bool? SkipOptionalStartupChecks { get; set; }
         private bool? settingsSaved;
         public bool SettingsSaved
         {

@@ -17,7 +17,22 @@ namespace MediaBrowser.Plugins.TuneIn
 {
     [Route("/TuneIn/Refresh/Status", "GET")]
     [Authenticated(Roles = "Admin")]
-    public sealed class GetTuneInRefreshStatus : IReturn<TuneInRefreshStatus> { }
+    public sealed class GetTuneInRefreshStatus : IReturn<TuneInRefreshStatus>
+    {
+        public bool CheckOptional { get; set; }
+    }
+
+    [Route("/TuneIn/OptionalChecks/Preference", "POST")]
+    [Authenticated(Roles = "Admin")]
+    public sealed class SetTuneInOptionalChecksPreference : IReturn<TuneInOptionalChecksPreference>
+    {
+        public bool? Skip { get; set; }
+    }
+
+    public sealed class TuneInOptionalChecksPreference
+    {
+        public bool SkipOptionalStartupChecks { get; set; }
+    }
 
     [Route("/TuneIn/Refresh/Log", "GET")]
     [Authenticated(Roles = "Admin")]
@@ -73,6 +88,7 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         private static readonly object SharedGate = new object();
         private static TuneInRefresh shared;
+        internal static readonly TuneInArtworkPackStatusCache ArtworkStatusCache = new TuneInArtworkPackStatusCache();
         private readonly TuneInRefresh refresh;
 
         public IRequest Request { get; set; }
@@ -89,13 +105,28 @@ namespace MediaBrowser.Plugins.TuneIn
         public TuneInRefreshStatus Get(GetTuneInRefreshStatus request)
         {
             EnsureAdmin();
+            var configuration = Plugin.Instance.Configuration;
+            var deferred = configuration.SkipOptionalStartupChecks == true && !request.CheckOptional;
+            var artworkPacks = TuneInCategoryArtwork.Scopes.Select(scope =>
+            {
+                TuneInArtworkPackStatusSnapshot snapshot;
+                if (request.CheckOptional)
+                    snapshot = ArtworkStatusCache.Read(scope, forceRescan: true);
+                else if (!ArtworkStatusCache.TryRead(scope, scanIfNeeded: !deferred, out snapshot))
+                    deferred = true;
+                var pack = snapshot?.Status ?? new TuneInArtworkPackStatus
+                    { Scope = scope, Path = TuneInCategoryArtwork.Folder(scope), Status = "deferred" };
+                pack.CheckedUtc = snapshot?.CheckedAtUtc.UtcDateTime;
+                return pack;
+            }).ToArray();
             var status = refresh.Status();
             status.ChannelRegistered = refresh.ChannelRegistered();
             status.SettingsLocked = Plugin.Instance.SettingsLock.TryReadStatus();
-            status.ArtworkPacks = TuneInCategoryArtwork.Scopes.Select(TuneInCategoryArtwork.ReadPackStatus).ToArray();
+            status.ArtworkChecksDeferred = deferred;
+            status.ArtworkPacks = artworkPacks;
             var artworkPack = status.ArtworkPacks[0];
             status.ArtworkFolder = artworkPack.Path;
-            status.ArtworkCards = artworkPack.InstalledCount ?? 0;
+            status.ArtworkCards = artworkPack.InstalledCount;
             status.ArtworkPackName = artworkPack.Name;
             status.ArtworkPackImageCount = artworkPack.ImageCount;
             status.ArtworkPackStatus = artworkPack.Status;
@@ -103,7 +134,19 @@ namespace MediaBrowser.Plugins.TuneIn
                 || status.State != "NeverRun"
                 || (status.Categories ?? Array.Empty<TuneInCategoryRefreshStatus>())
                     .Any(category => category.State != "No recorded refresh");
+            status.SkipOptionalStartupChecks = configuration.SkipOptionalStartupChecks;
+            status.OptionalChecksEligible = configuration.SchemaVersion == 1 && configuration.ConfigurationCompleted
+                && configuration.SettingsSaved && status.HasSuccessfulCategoryRefresh && !status.Busy
+                && status.Cleanup?.State != "Running";
             return status;
+        }
+
+        public object Post(SetTuneInOptionalChecksPreference request)
+        {
+            EnsureAdmin();
+            if (!request.Skip.HasValue) throw new ArgumentException("Specify whether to skip optional startup checks.");
+            Plugin.Instance.SetOptionalStartupChecks(request.Skip.Value, refresh);
+            return new TuneInOptionalChecksPreference { SkipOptionalStartupChecks = request.Skip.Value };
         }
 
         public TuneInRefreshFailureLog Get(GetTuneInRefreshFailureLog request)
