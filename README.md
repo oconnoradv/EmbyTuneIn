@@ -139,9 +139,11 @@ not required.
   choices appear in the right column. To remove choices, select
   **Select Items for Delete**, check them, and select **Delete Selected Items**.
 - **Settings lock:** the switch beside Global TuneIn Settings shows
-  **Locked** (green) or **Unlocked** (red). Saving locks settings again;
-  unlocking opens TuneIn Station Filtering. Saved installations without a
-  recorded lock default to locked. Optional-check preferences also require
+  **Locked** (green) or **Unlocked** (red). Once settings have been saved,
+  opening or reloading the control panel locks them; initial setup remains
+  editable before the first save. Saving locks settings again; unlocking opens
+  TuneIn Station Filtering. The adjacent **?** explains the lock.
+  Optional-check preferences also require
   manual unlocking and cannot change the lock themselves. Catalog refreshes
   (including scheduled refreshes), cleanup, **Backup Emby**, and artwork
   installation lock settings on the server before starting; settings remain

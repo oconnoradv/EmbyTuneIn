@@ -3900,7 +3900,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             public void RefreshRoutesRequireAdministratorAndRejectMissingRequestContext()
             {
                 foreach (var route in new[] { typeof(GetTuneInRefreshStatus), typeof(StartTuneInRefresh),
-                    typeof(GetTuneInRefreshFailureLog), typeof(CancelTuneInRefresh), typeof(SetTuneInSettingsLock),
+                    typeof(GetTuneInRefreshFailureLog), typeof(CancelTuneInRefresh), typeof(SetTuneInSettingsLock), typeof(OpenTuneInSettingsPanel),
                     typeof(SetTuneInOptionalChecksPreference) })
                     Assert.Equal("Admin", Assert.Single(route.GetCustomAttributes(typeof(AuthenticatedAttribute), false).Cast<AuthenticatedAttribute>()).Roles);
 
@@ -3916,7 +3916,27 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new StartTuneInRefresh { Category = "talk" }));
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new CancelTuneInRefresh()));
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new SetTuneInSettingsLock { Locked = false }));
+                Assert.Throws<UnauthorizedAccessException>(() => service.Post(new OpenTuneInSettingsPanel()));
                 Assert.Throws<UnauthorizedAccessException>(() => service.Post(new SetTuneInOptionalChecksPreference { Skip = true }));
+            }
+
+            [Fact]
+            public void PanelOpenLocksSavedSettingsButLeavesFirstSetupEditable()
+            {
+                var path = Path.Combine(Path.GetTempPath(), $"tunein-panel-lock-{Guid.NewGuid():N}.xml");
+                try
+                {
+                    var store = new TuneInSettingsLockStore(path);
+                    Assert.False(store.OnPanelOpen(false).Locked);
+                    store.SaveConfiguration(() => { });
+                    store.Set(false);
+                    Assert.True(store.OnPanelOpen(true).Locked);
+                    Assert.True(new TuneInSettingsLockStore(path).IsLocked);
+                    Assert.Throws<InvalidOperationException>(() => store.WithUnlockedSettings(() => { }));
+                    store.Set(false);
+                    Assert.False(store.IsLocked);
+                }
+                finally { File.Delete(path); }
             }
 
             [Fact]

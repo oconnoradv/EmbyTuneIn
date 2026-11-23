@@ -598,6 +598,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 typeof(MediaBrowser.Common.Plugins.BasePlugin).GetProperty("AssemblyFilePath").SetValue(plugin, typeof(Plugin).Assembly.Location);
                 plugin.SetStartupInfo(_ => { });
                 var config = plugin.Configuration;
+                Assert.False(plugin.LockSettingsOnPanelOpen().Locked);
                 config.SchemaVersion = 1;
                 config.ConfigurationCompleted = true;
                 config.SettingsSaved = true;
@@ -606,6 +607,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(null), () => null,
                     (_, __, ___, ____, _____) => throw new InvalidOperationException(),
                     (_, __, ___, ____) => throw new InvalidOperationException(), null);
+                Assert.True(plugin.LockSettingsOnPanelOpen().Locked);
                 Assert.True(plugin.SettingsLock.IsLocked);
                 Assert.Throws<InvalidOperationException>(() => plugin.SetOptionalStartupChecks(false, refresh));
                 Assert.True(config.SkipOptionalStartupChecks);
@@ -614,6 +616,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.False(config.SkipOptionalStartupChecks);
                 Assert.False(plugin.SettingsLock.IsLocked);
                 Assert.False(new TuneInSettingsLockStore(Path.Combine(root, "tunein-fork-settings-lock.xml")).IsLocked);
+                Assert.True(plugin.LockSettingsOnPanelOpen().Locked);
+                Assert.Throws<InvalidOperationException>(() => plugin.SetOptionalStartupChecks(false, refresh));
+                plugin.SettingsLock.Set(false);
                 plugin.UpdateConfiguration(new PluginConfiguration
                 {
                     SchemaVersion = 1, ConfigurationCompleted = true, EnableTalk = true

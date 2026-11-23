@@ -59,6 +59,10 @@ namespace MediaBrowser.Plugins.TuneIn
         public bool? Locked { get; set; }
     }
 
+    [Route("/TuneIn/SettingsLock/OnOpen", "POST")]
+    [Authenticated(Roles = "Admin")]
+    public sealed class OpenTuneInSettingsPanel : IReturn<TuneInSettingsLock> { }
+
     [Route("/TuneIn/Cleanup/Preview", "POST")]
     [Authenticated(Roles = "Admin")]
     public sealed class PreviewTuneInCleanup : IReturn<TuneInCleanupPreview>
@@ -176,6 +180,12 @@ namespace MediaBrowser.Plugins.TuneIn
             EnsureAdmin();
             if (!request.Locked.HasValue) throw new ArgumentException("Specify whether to lock TuneIn settings.");
             return refresh.SetSettingsLock(() => Plugin.Instance.SettingsLock.Set(request.Locked.Value));
+        }
+
+        public TuneInSettingsLock Post(OpenTuneInSettingsPanel request)
+        {
+            EnsureAdmin();
+            return Plugin.Instance.LockSettingsOnPanelOpen();
         }
 
         public TuneInCleanupPreview Post(PreviewTuneInCleanup request)

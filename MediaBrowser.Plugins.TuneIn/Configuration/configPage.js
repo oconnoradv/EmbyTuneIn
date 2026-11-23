@@ -422,7 +422,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     }
 
     function editingBlocked(instance) {
-        return !instance.config || instance.settingsLocked !== false || instance.lockChanging || instance.saving || instance.optionalSaving ||
+        return !instance.config || instance.openingLock || instance.openLockFailed || instance.settingsLocked !== false || instance.lockChanging || instance.saving || instance.optionalSaving ||
             !instance.refreshAvailable || instance.refreshBusy || instance.refreshAction || maintenanceInProgress(instance);
     }
 
@@ -548,9 +548,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshCategoryRows.forEach(function (row) { row.schedule.disabled = catalogDisabled; });
         var toggle = instance.view.querySelector('.settingsLocked');
         var active = instance.refreshBusy || instance.refreshAction || maintenanceInProgress(instance);
-        toggle.disabled = typeof instance.settingsLocked !== 'boolean' || !!instance.lockChanging || !!instance.saving || !!instance.optionalSaving ||
+        toggle.disabled = !!instance.openingLock || !!instance.openLockFailed || typeof instance.settingsLocked !== 'boolean' || !!instance.lockChanging || !!instance.saving || !!instance.optionalSaving ||
             !instance.refreshAvailable || !!active;
-        var confirmed = !instance.refreshAvailable ? undefined : active ? true : instance.settingsLocked;
+        var confirmed = !instance.refreshAvailable || instance.openingLock || instance.openLockFailed ? undefined : active ? true : instance.settingsLocked;
         toggle.checked = instance.lockChanging ? instance.lockRequested : confirmed === true;
         var state = instance.view.querySelector('.settingsLockState');
         state.textContent = confirmed === true ? 'Locked' : confirmed === false ? 'Unlocked' : 'Checking';
@@ -575,7 +575,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.lockError = '';
         instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
         editing(instance);
-        return writeSettingsLock(instance.lockRequested).then(function (locked) {
+        var write = writeSettingsLock(instance.lockRequested).then(function (locked) {
             if (epoch === instance.viewEpoch) {
                 instance.settingsLocked = locked;
                 if (!locked) instance.view.querySelector('.browsingSummary').parentNode.open = true;
@@ -590,6 +590,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             editing(instance);
             pollStatus(instance, instance.viewEpoch);
         });
+        instance.lockWriteQueue = write;
+        return write;
     }
 
     function isChannelRefreshTask(task) {
@@ -639,6 +641,33 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             if (result.Locked !== locked) throw new Error('TuneIn did not confirm the requested lock state.');
             return result.Locked;
         });
+    }
+
+    function lockSettingsOnOpen(instance, epoch) {
+        instance.openingLock = true;
+        instance.openLockFailed = false;
+        var previous = Promise.all([instance.openLockQueue || Promise.resolve(), instance.lockWriteQueue || Promise.resolve()]);
+        var request = previous.then(function () {
+            if (epoch !== instance.viewEpoch) return;
+            return ApiClient.ajax({
+                type: 'POST', dataType: 'json', url: ApiClient.getUrl('TuneIn/SettingsLock/OnOpen')
+            }).then(function (result) {
+                if (!result || typeof result.Locked !== 'boolean') throw new Error('Invalid settings lock response.');
+                if (epoch !== instance.viewEpoch) return;
+                instance.settingsLocked = result.Locked;
+                instance.openingLock = false;
+                editing(instance);
+            });
+        }).catch(function (error) {
+            if (epoch !== instance.viewEpoch) return;
+            console.error('Unable to lock TuneIn settings on opening.', error);
+            instance.openingLock = false;
+            instance.openLockFailed = true;
+            instance.settingsLocked = undefined;
+            instance.lockError = 'Could not confirm the settings lock. Reopen this page to retry.';
+            editing(instance);
+        });
+        instance.openLockQueue = request;
     }
 
     var httpStatusLabels = {
@@ -1009,7 +1038,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         return next(0);
     }
 
-    function renderRefresh(instance, status) {
+    function renderRefresh(instance, status, lockStatusCurrent) {
         instance.refreshBusy = !!status.Busy;
         var version = instance.view.querySelector('.tuneInPluginVersion');
         if (version && status.PluginVersion) {
@@ -1038,7 +1067,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.refreshIndicator').hidden = !instance.refreshBusy;
         renderCleanup(instance, status.Cleanup);
         instance.maintenanceBusy = status.MaintenanceBusy === true;
-        if (!instance.lockChanging && !instance.saving) {
+        if (lockStatusCurrent !== false && !instance.lockChanging && !instance.saving && !instance.openingLock && !instance.openLockFailed) {
             instance.settingsLocked = typeof status.SettingsLocked === 'boolean' ? status.SettingsLocked : undefined;
             instance.lockError = typeof instance.settingsLocked === 'boolean' ? '' : 'Could not read the settings lock. Retrying automatically.';
         }
@@ -1611,10 +1640,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             return scheduleStatus(instance, epoch);
         if (instance.refreshPoll) return instance.refreshPoll;
         var generation = instance.refreshGeneration || 0;
+        var lockStatusCurrent = !instance.openingLock;
         instance.refreshPoll = ApiClient.ajax({
             type: 'GET', dataType: 'json', url: ApiClient.getUrl('TuneIn/Refresh/Status')
         }).then(function (status) {
-            if (epoch === instance.viewEpoch && generation === (instance.refreshGeneration || 0)) renderRefresh(instance, status);
+            if (epoch === instance.viewEpoch && generation === (instance.refreshGeneration || 0)) renderRefresh(instance, status, lockStatusCurrent);
         }).catch(function () {
             if (epoch === instance.viewEpoch && generation === (instance.refreshGeneration || 0)) {
                 instance.refreshStatus = null;
@@ -1625,7 +1655,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 instance.view.querySelector('.refreshStatus').textContent = 'Could not read refresh status. Retrying automatically.';
                 instance.view.querySelector('.refreshCategoryNote').textContent = '';
                 renderArtworkPacks(instance, null);
-                instance.lockError = 'Could not read the settings lock. Retrying automatically.';
+                if (!instance.openLockFailed)
+                    instance.lockError = 'Could not read the settings lock. Retrying automatically.';
                 refreshControls(instance, false);
             }
         }).then(function () {
@@ -1989,6 +2020,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.settingsLocked = undefined;
         instance.lockError = '';
         instance.loadingConfig = true;
+        lockSettingsOnOpen(instance, epoch);
         editing(instance);
         refreshControls(instance, false);
         pollStatus(instance, epoch);

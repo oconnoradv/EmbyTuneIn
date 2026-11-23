@@ -40,7 +40,7 @@ class Element {
     descendants() { return this.childNodes.flatMap(child => [child, ...child.descendants()]); }
 }
 
-function harness(manualStatus = false, manualSave = false, manualBackup = false) {
+function harness(manualStatus = false, manualSave = false, manualBackup = false, manualOpen = false) {
     const handlers = {};
     const formHandlers = {};
     const username = new Element('input');
@@ -121,6 +121,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     const selectors = [];
     const refresh = [];
     const locks = [];
+    const opens = [];
     const cleanup = [];
     const backup = [];
     const artwork = [];
@@ -129,6 +130,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     const timers = new Map();
     let timerId = 0;
     let serverLocked = false;
+    let initialStatus;
     const loader = { shown: 0, hidden: 0, show() { this.shown++; }, hide() { this.hidden++; } };
     const ApiClient = {
         getPluginConfiguration(id) {
@@ -151,7 +153,12 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         setAuthorizationInfoIntoRequest(request) { request.headers.Authorization = 'test-session'; },
         ajax(options) {
             const request = deferred();
-            if (options.url.route === 'TuneIn/SettingsLock') {
+            if (options.url.route === 'TuneIn/SettingsLock/OnOpen') {
+                opens.push({ options, ...request });
+                if (!manualOpen) request.resolve({ Locked: initialStatus && typeof initialStatus.SettingsLocked === 'boolean'
+                    ? initialStatus.SettingsLocked : serverLocked });
+            }
+            else if (options.url.route === 'TuneIn/SettingsLock') {
                 locks.push({ options, ...request });
                 if (!manualStatus) {
                     serverLocked = JSON.parse(options.data).Locked;
@@ -159,6 +166,10 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
                 }
             }
             else if (options.url.route.startsWith('TuneIn/Refresh/')) {
+                if (options.type === 'GET') {
+                    const resolve = request.resolve;
+                    request.resolve = value => { initialStatus = value; resolve(value); };
+                }
                 refresh.push({ options, ...request });
                 if (!manualStatus && options.type === 'GET') request.resolve({ SettingsLocked: serverLocked });
             }             else if (options.url.route === 'TuneIn/OptionalChecks/Preference') optionalChecks.push({ options, ...request });
@@ -205,7 +216,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     });
 
     return { instance: new PluginView(view), username, latLon, requestInterval, formHandlers, reads, writes, notices, errors, loader,
-        elements, selectors, enhanced, calls, handlers, refresh, locks, cleanup, backup, artwork, optionalChecks, timers, scheduledTasks };
+        elements, selectors, enhanced, calls, handlers, refresh, locks, opens, cleanup, backup, artwork, optionalChecks, timers, scheduledTasks };
 }
 
 function open(details) {
@@ -1120,8 +1131,105 @@ test('skip-enabled reopening requires manual unlock for settings and optional pr
     app.reads[1].resolve({ SettingsSaved: true, SchemaVersion: 1, ConfigurationCompleted: true });
     app.refresh[3].resolve({ ...locked, SkipOptionalStartupChecks: false });
     await reopen;
+    await settle();
     assert.equal(lock.checked, true);
     assert.equal(app.elements['.globalFields'].disabled, true);
+});
+
+test('opening saved settings waits for server lock and ignores older unlocked status', async () => {
+    const app = harness(true, false, false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SettingsSaved: true, SchemaVersion: 1, ConfigurationCompleted: true });
+    await settle();
+    assert.equal(app.opens.length, 1);
+    assert.equal(app.elements['.settingsLocked'].disabled, true);
+    app.opens[0].resolve({ Locked: true });
+    await settle();
+    app.refresh[0].resolve({ SettingsLocked: false });
+    await visit;
+    await settle();
+    assert.equal(app.elements['.settingsLocked'].checked, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    const toggle = app.elements['.settingsLocked'];
+    toggle.checked = false;
+    const unlocking = toggle.handlers.change();
+    app.locks[0].resolve({ Locked: false });
+    await unlocking;
+    app.refresh[1].resolve({ SettingsLocked: false });
+    await settle();
+    assert.equal(app.elements['.globalFields'].disabled, false);
+    app.instance.onPause();
+    const reopen = app.instance.onResume();
+    app.reads[1].resolve({ SettingsSaved: true, SchemaVersion: 1 });
+    await settle();
+    app.opens[1].resolve({ Locked: true });
+    app.refresh[2].resolve({ SettingsLocked: false });
+    await reopen;
+    await settle();
+    assert.equal(toggle.checked, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+});
+
+test('first setup stays editable and an open-lock failure fails closed', async () => {
+    const app = harness(true, false, false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SettingsSaved: false, SchemaVersion: 0 });
+    app.refresh[0].resolve({ SettingsLocked: false });
+    await settle();
+    app.opens[0].resolve({ Locked: false });
+    await visit;
+    await settle();
+    assert.equal(app.elements['.globalFields'].disabled, false);
+    app.instance.onPause();
+    const reopen = app.instance.onResume();
+    app.reads[1].resolve({ SettingsSaved: true, SchemaVersion: 1 });
+    app.refresh[1].resolve({ SettingsLocked: false });
+    await settle();
+    app.opens[1].reject(new Error('offline'));
+    await reopen;
+    await settle();
+    assert.equal(app.elements['.settingsLocked'].disabled, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    assert.match(app.elements['.settingsLockStatus'].textContent, /Reopen this page to retry/);
+});
+
+test('reopening waits for an earlier unlock request before locking', async () => {
+    const app = harness(true, false, false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SettingsSaved: true, SchemaVersion: 1 });
+    app.refresh[0].resolve({ SettingsLocked: true });
+    await settle();
+    app.opens[0].resolve({ Locked: true });
+    await visit;
+    await settle();
+    const toggle = app.elements['.settingsLocked'];
+    toggle.checked = false;
+    const unlocking = toggle.handlers.change();
+    app.instance.onPause();
+    const reopen = app.instance.onResume();
+    app.reads[1].resolve({ SettingsSaved: true, SchemaVersion: 1 });
+    await settle();
+    assert.equal(app.opens.length, 1);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    app.locks[0].resolve({ Locked: false });
+    await unlocking;
+    await settle();
+    assert.equal(app.opens.length, 2);
+    app.opens[1].resolve({ Locked: true });
+    app.refresh.at(-1).resolve({ SettingsLocked: false });
+    await reopen;
+    await settle();
+    assert.equal(toggle.checked, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+});
+
+test('settings lock explanation is in the adjacent accessible help disclosure', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const controls = html.match(/<div class="tuneInLockControls">([\s\S]*?)<p id="tuneInLockStatus"/)[1];
+    assert.match(controls, /class="settingsLocked"/);
+    assert.match(controls, /<summary aria-label="About the settings lock">\?<\/summary>/);
+    assert.match(controls, /<div class="tuneInArtworkTooltip">Manually unlock to edit saved settings/);
+    assert.equal((html.match(/Manually unlock to edit saved settings/g) || []).length, 1);
 });
 
 test('artwork preference respects the settings lock and unknown lock status', async () => {

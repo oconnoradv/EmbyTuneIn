@@ -69,6 +69,15 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (!IsLocked) Set(true);
         }
 
+        internal TuneInSettingsLock OnPanelOpen(bool settingsSaved)
+        {
+            lock (gate)
+            {
+                if (settingsSaved) EnsureLocked();
+                return new TuneInSettingsLock { Locked = IsLocked };
+            }
+        }
+
         internal TuneInSettingsLock Set(bool value)
         {
             lock (gate)

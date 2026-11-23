@@ -39,6 +39,12 @@ namespace MediaBrowser.Plugins.TuneIn
         internal TuneInSettingsLockStore SettingsLock { get; }
         internal string ArtworkRoot { get; }
 
+        internal TuneInSettingsLock LockSettingsOnPanelOpen()
+        {
+            lock (configurationGate)
+                return SettingsLock.OnPanelOpen(Configuration.SettingsSaved);
+        }
+
         public IEnumerable<PluginPageInfo> GetPages()
         {
             return new[]

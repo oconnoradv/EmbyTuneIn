@@ -173,8 +173,11 @@
             grid-column: 1 / -1;
             margin: 0;
         }
-        .tuneInGlobalPanel > .tuneInLockToggle {
+        .tuneInGlobalPanel > .tuneInLockControls {
             grid-area: 1 / 2;
+            display: flex;
+            align-items: center;
+            gap: .4em;
             max-inline-size: 47vw;
             min-inline-size: 0;
         }
@@ -840,14 +843,19 @@
                     </details>
                 </fieldset>
             </details>
-                <label class="tuneInLockToggle">
-                    <span class="settingsLockCaption" id="tuneInLockCaption">Settings</span>
-                    <input type="checkbox" role="switch" class="settingsLocked" aria-labelledby="tuneInLockCaption" aria-describedby="tuneInLockStatus" disabled />
-                    <span class="tuneInLockTrack" aria-hidden="true"></span>
-                    <span class="settingsLockState" aria-hidden="true">Checking</span>
-                </label>
+                <div class="tuneInLockControls">
+                    <label class="tuneInLockToggle">
+                        <span class="settingsLockCaption" id="tuneInLockCaption">Settings</span>
+                        <input type="checkbox" role="switch" class="settingsLocked" aria-labelledby="tuneInLockCaption" aria-describedby="tuneInLockStatus" disabled />
+                        <span class="tuneInLockTrack" aria-hidden="true"></span>
+                        <span class="settingsLockState" aria-hidden="true">Checking</span>
+                    </label>
+                    <details class="tuneInArtworkHelp">
+                        <summary aria-label="About the settings lock">?</summary>
+                        <div class="tuneInArtworkTooltip">Manually unlock to edit saved settings, including optional checks. Saving, catalog refreshes, cleanup, Backup Emby and artwork installation lock settings on the server. Settings stay locked afterward; unlocking and edits are blocked while work is active.</div>
+                    </details>
+                </div>
                 <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
-                <p class="fieldDescription">Manually unlock to edit saved settings, including optional checks. Saving, catalog refreshes, cleanup, Backup Emby and artwork installation lock settings on the server. Settings stay locked afterward; unlocking and edits are blocked while work is active.</p>
             </div>
             <details class="tuneInSection tuneInNeutralPanel" open>
             <summary class="browsingSummary" id="tuneInBrowsingTitle">TuneIn Station Filtering</summary>
