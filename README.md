@@ -297,8 +297,11 @@ matching cards are installed. Packs are published in
 
 ### Automatic artwork checks
 
-The **Automatic Artwork Checks** option is in **Custom Artwork Packs**. It
-controls only automatic scans of artwork pack manifests and image hashes.
+Expand the collapsed **Custom Artwork Packs** section to manage packs. The
+**Upload Artwork Pack** and **Run Checks Now** buttons sit together, with the
+**Skip automatic artwork pack status checks** option directly below and a **?**
+hover/focus help icon. The setting controls only automatic scans of artwork
+pack manifests and image hashes.
 After settings are saved and a category refresh succeeds without partial or
 limited results, the option becomes available. Existing installations need one
 new successful refresh because older checkpoints cannot prove completion.

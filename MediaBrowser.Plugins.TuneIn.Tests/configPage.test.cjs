@@ -769,19 +769,29 @@ test('advanced settings start collapsed and group the controls in order', () => 
     assert.match(advanced[1], /Off by default/);
 });
 
-test('automatic artwork check preference and status are grouped in the artwork section', () => {
+test('artwork scan actions and preference are grouped beside artwork pack controls with help', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    const artwork = html.match(/<aside class="tuneInArtworkPacks">([\s\S]*?)<\/aside>/);
-    const advanced = html.match(/<details class="tuneInAdvancedSettings">([\s\S]*?)<\/details>/);
-    const checks = artwork && artwork[1].match(/<section class="tuneInArtworkChecks"[\s\S]*?<\/section>/);
+    const artworkStart = html.indexOf('<details class="tuneInArtworkPacks">');
+    const advancedStart = html.indexOf('<details class="tuneInAdvancedSettings">');
+    const artwork = artworkStart >= 0 && html.slice(artworkStart, advancedStart);
+    const actions = artwork && artwork.match(/<div class="tuneInArtworkActions">([\s\S]*?)<\/div>/);
+    const preference = artwork && artwork.match(/<div class="tuneInArtworkCheckPreference">([\s\S]*?)<\/div>/);
     assert.ok(artwork);
-    assert.ok(checks);
+    assert.match(artwork, /<summary>Custom Artwork Packs<\/summary>/);
+    assert.doesNotMatch(artwork.slice(0, artwork.indexOf('>') + 1), /\bopen\b/);
+    assert.ok(actions);
+    assert.ok(preference);
     assert.doesNotMatch(html, /optionalChecksPrompt|optionalChecksSkip|optionalChecksKeep/);
-    assert.match(checks[0], /<h3 id="tuneInArtworkChecksTitle">Automatic Artwork Checks<\/h3>/);
-    for (const selector of ['skipOptionalChecks', 'optionalChecksUnlockHint', 'optionalChecksMessage', 'optionalChecksStatus', 'optionalChecksRun'])
-        assert.match(checks[0], new RegExp(`class="[^"]*\\b${selector}\\b`));
-    assert.doesNotMatch(advanced[1], /skipOptionalChecks|optionalChecksMessage|optionalChecksStatus|optionalChecksRun/);
-    for (const selector of ['optionalChecksRun', 'optionalChecksStatus'])
+    assert.ok(actions[1].indexOf('class="raised button-submit emby-button artworkUpload"') <
+        actions[1].indexOf('class="raised button-submit optionalChecksRun"'));
+    assert.ok(artwork.indexOf(actions[0]) < artwork.indexOf(preference[0]));
+    assert.match(preference[0], /Skip automatic artwork pack status checks/);
+    assert.match(preference[0], /aria-describedby="tuneInOptionalChecksHint"/);
+    assert.match(preference[0], /id="tuneInOptionalChecksHint" role="tooltip"/);
+    assert.match(html, /\.tuneInArtworkHelp:hover \.tuneInArtworkTooltip,[\s\S]*?\.tuneInArtworkHelp:focus-within \.tuneInArtworkTooltip/);
+    assert.match(artwork, /class="optionalChecksStatus"/);
+    assert.doesNotMatch(html.slice(advancedStart), /skipOptionalChecks|optionalChecksMessage|optionalChecksStatus|optionalChecksRun/);
+    for (const selector of ['optionalChecksRun', 'optionalChecksStatus', 'artworkUpload'])
         assert.equal((html.match(new RegExp(`class="[^"]*\\b${selector}\\b[^"]*"`, 'g')) || []).length, 1);
 });
 
@@ -2500,8 +2510,8 @@ test('scoped artwork packs show detected names, counts and paths safely', async 
     assert.equal(app.elements['.artworkCategoriesPath'].textContent, 'C:\\art\\categories');
     app.instance.onPause();
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    assert.match(html, /class="hideRegionalGenres"[\s\S]*?<aside class="tuneInArtworkPacks">[\s\S]*?<\/aside>\s*<details class="tuneInAdvancedSettings">/);
-    assert.equal((html.match(/<aside class="tuneInArtworkPacks">/g) || []).length, 1);
+    assert.match(html, /class="hideRegionalGenres"[\s\S]*?<details class="tuneInArtworkPacks">\s*<summary>Custom Artwork Packs<\/summary>[\s\S]*?<\/details>\s*<details class="tuneInAdvancedSettings">/);
+    assert.equal((html.match(/<details class="tuneInArtworkPacks">/g) || []).length, 1);
     assert.match(html, /<fieldset class="loginFields" disabled>\s*<legend>TuneIn Favorites and Location<\/legend>/);
     assert.match(html, /\.loginFields\s*\{[^}]*border:\s*1px solid var\(--tunein-neutral-border\)/);
     const artworkStyle = html.match(/\.tuneInArtworkPacks\s*\{([^}]*)\}/)[1];

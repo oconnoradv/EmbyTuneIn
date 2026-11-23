@@ -485,6 +485,13 @@
             border-radius: .25em;
             font-size: .9em;
         }
+        .tuneInArtworkPacks > summary {
+            cursor: pointer;
+            font-weight: 700;
+        }
+        .tuneInArtworkPacks[open] > summary {
+            margin-block-end: .75em;
+        }
         .tuneInArtworkPacks code {
             overflow-wrap: anywhere;
         }
@@ -499,6 +506,65 @@
         }
         .tuneInArtworkPacks details {
             margin-top: .75em;
+        }
+        .tuneInArtworkActions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: .5em;
+            margin: .75em 0;
+        }
+        .tuneInArtworkCheckPreference {
+            display: flex;
+            align-items: center;
+            gap: .4em;
+            margin: .5em 0;
+        }
+        .tuneInArtworkHelp {
+            position: relative;
+            display: inline-flex;
+            margin: 0;
+        }
+        .tuneInArtworkHelp > summary {
+            display: inline-flex;
+            min-width: 1.5em;
+            min-height: 1.5em;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid currentColor;
+            border-radius: 50%;
+            cursor: help;
+            font-weight: 700;
+            line-height: 1;
+            list-style: none;
+        }
+        .tuneInArtworkHelp > summary::-webkit-details-marker {
+            display: none;
+        }
+        .tuneInArtworkTooltip {
+            position: absolute;
+            z-index: 2;
+            inset-inline-end: 0;
+            inset-block-end: calc(100% + .4em);
+            width: min(20rem, 75vw);
+            padding: .65em .8em;
+            border: 1px solid currentColor;
+            border-radius: .25em;
+            background: var(--card-background-color, var(--background, #222));
+            color: var(--primary-text-color, currentColor);
+            font-size: .95em;
+            font-weight: 400;
+            line-height: 1.4;
+            visibility: hidden;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .tuneInArtworkHelp:hover .tuneInArtworkTooltip,
+        .tuneInArtworkHelp:focus-within .tuneInArtworkTooltip,
+        .tuneInArtworkHelp[open] .tuneInArtworkTooltip {
+            visibility: visible;
+            opacity: 1;
+            pointer-events: auto;
         }
         .tuneInArtworkSample {
             float: right;
@@ -664,8 +730,8 @@
                         <span>Hide the Individual Genre Folders</span>
                     </label>
                     <p class="fieldDescription">Hides genre shortcuts in Local Radio, By Location, Talk, Sports and Podcasts. The By Genre folder stays available where TuneIn provides it.</p>
-                    <aside class="tuneInArtworkPacks">
-                        <strong>Custom Artwork Packs</strong>
+                    <details class="tuneInArtworkPacks">
+                        <summary>Custom Artwork Packs</summary>
                         <table aria-label="Custom artwork packs">
                             <thead><tr><th scope="col">Artwork</th><th scope="col">Installed pack</th><th scope="col">Images</th><th scope="col">Server folder</th></tr></thead>
                             <tbody>
@@ -676,7 +742,23 @@
                             </tbody>
                         </table>
                         <input type="file" class="artworkFile" accept=".zip,application/zip" hidden />
-                        <button is="emby-button" type="button" class="raised button-submit emby-button artworkUpload">Upload Artwork Pack</button>
+                        <div class="tuneInArtworkActions">
+                            <button is="emby-button" type="button" class="raised button-submit emby-button artworkUpload">Upload Artwork Pack</button>
+                            <button is="emby-button" type="button" class="raised button-submit optionalChecksRun">Run Checks Now</button>
+                        </div>
+                        <div class="tuneInArtworkCheckPreference">
+                            <label class="emby-checkbox-label">
+                                <input type="checkbox" is="emby-checkbox" class="skipOptionalChecks" aria-describedby="tuneInOptionalChecksHint" />
+                                <span>Skip automatic artwork pack status checks</span>
+                            </label>
+                            <details class="tuneInArtworkHelp">
+                                <summary aria-label="Artwork status check information" aria-describedby="tuneInOptionalChecksHint">?</summary>
+                                <span class="tuneInArtworkTooltip" id="tuneInOptionalChecksHint" role="tooltip">Skips only automatic artwork manifest/image-hash scans. Available after settings are saved and a new category refresh succeeds (existing installations need one; partial or limited results do not qualify). Results can be stale; automatic scans cache up to five minutes. Run Checks Now scans on demand. Other readiness, lock, registration, and installation-safety checks remain live.</span>
+                            </details>
+                        </div>
+                        <p class="optionalChecksUnlockHint" role="status" hidden>Unlock Settings to change this option. Changes are unavailable while refresh or maintenance work is active.</p>
+                        <p class="optionalChecksMessage" role="status" aria-live="polite"></p>
+                        <p class="optionalChecksStatus" role="status" aria-live="polite">Artwork checks have not run yet.</p>
                         <p class="artworkUploadMessage" role="status" aria-live="polite"></p>
                         <dialog class="artworkConfirmDialog" aria-labelledby="artworkConfirmTitle">
                             <h3 id="artworkConfirmTitle">Confirm artwork installation</h3>
@@ -706,19 +788,7 @@
                             <p>Uploads require a flat ZIP containing only a strict <code>tunein-artwork.json</code> and the listed JPEG or PNG images, with matching IDs, counts and SHA256 hashes. Limits include 768 MiB per ZIP, 2 GiB expanded, 16 MiB per image and 4,096 pixels per dimension. The server needs its configured FFmpeg. See the README for the complete schema, limits, scanner requirements and troubleshooting.</p>
                             <p>Manual installation remains available: place image files and optional <code>tunein-artwork.json</code> in the corresponding server folder above, then refresh affected categories. Uploads require the strict manifest and archive layout documented in the README; older packs may need regeneration.</p>
                         </details>
-                        <section class="tuneInArtworkChecks" aria-labelledby="tuneInArtworkChecksTitle">
-                            <h3 id="tuneInArtworkChecksTitle">Automatic Artwork Checks</h3>
-                            <label class="emby-checkbox-label">
-                                <input type="checkbox" is="emby-checkbox" class="skipOptionalChecks" aria-describedby="tuneInOptionalChecksHint" />
-                                <span>Skip automatic artwork pack checks</span>
-                            </label>
-                            <p class="fieldDescription" id="tuneInOptionalChecksHint">Available after settings are saved and a category refresh succeeds without partial or limited results. Existing installations need one new successful refresh. This skips only automatic artwork manifest and image-hash scans; results are cached for up to five minutes. Unlock Settings to change this option; it saves immediately. Authentication, refresh readiness, operation locks, registration and installation safety checks remain live.</p>
-                            <p class="optionalChecksUnlockHint" role="status" hidden>Unlock Settings to change this option. Changes are unavailable while refresh or maintenance work is active.</p>
-                            <p class="optionalChecksMessage" role="status" aria-live="polite"></p>
-                            <p class="optionalChecksStatus" role="status" aria-live="polite">Artwork checks have not run yet.</p>
-                            <button is="emby-button" type="button" class="raised button-submit optionalChecksRun">Run checks now</button>
-                        </section>
-                    </aside>
+                    </details>
                     <details class="tuneInAdvancedSettings">
                         <summary>Advanced Settings</summary>
                         <div class="inputContainer">
