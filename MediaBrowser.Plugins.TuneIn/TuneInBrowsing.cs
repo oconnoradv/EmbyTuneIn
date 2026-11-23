@@ -180,9 +180,11 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
                 else if (type == "link")
                 {
-                    var link = DirectoryRequest.ParseLink(TuneInDirectory.Attribute(row, "URL"),
+                    var url = TuneInDirectory.Attribute(row, "URL");
+                    if (TuneInDirectory.IsPlaybackLink(url)) continue;
+                    var link = DirectoryRequest.ParseLink(url,
                         reason => session?.TrySkipCatalogLink(entry.Category, reason, request,
-                            TuneInDirectory.Attribute(row, "URL")) == true,
+                            url) == true,
                         allowSkippingTune: entry.Category == "music" || snapshot.Value.AllowPartialCatalogImport);
                     if (link == null || link.Method != "Browse.ashx") continue;
                     var next = ScopedRequest(snapshot, entry, link);

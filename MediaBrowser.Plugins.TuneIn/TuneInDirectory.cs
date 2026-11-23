@@ -366,6 +366,13 @@ namespace MediaBrowser.Plugins.TuneIn
             }
 
             var query = HttpUtility.ParseQueryString(uri.Query);
+            // TuneIn encodes the hash alphabet marker as one trailing NUL in some catalog links.
+            var encodedFilter = query["filter"];
+            if (encodedFilter != null && encodedFilter.Length == 4 && encodedFilter[3] == '\0'
+                && query.GetValues("filter")?.Length == 1
+                && (encodedFilter.StartsWith("s:~", StringComparison.Ordinal)
+                    || encodedFilter.StartsWith("p:~", StringComparison.Ordinal)))
+                query["filter"] = encodedFilter.Substring(0, 3) + "#";
             var last = HttpUtility.UrlDecode(uri.Query.Substring(uri.Query.LastIndexOf('&') + 1).TrimStart('?'));
             var region = ConfigurationSnapshot.ValidId(query["id"], "location") && query.GetValues("id")?.Length == 1;
             var alphabetHash = uri.AbsolutePath == "/Browse.ashx"
@@ -832,6 +839,14 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public static string Attribute(XElement element, string name) =>
             element.Attributes().FirstOrDefault(a => a.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))?.Value;
+
+        internal static bool IsPlaybackLink(string value) =>
+            !string.IsNullOrEmpty(value)
+            && Uri.TryCreate(HttpUtility.HtmlDecode(value), UriKind.Absolute, out var uri)
+            && (uri.Scheme == "http" || uri.Scheme == "https")
+            && uri.IsDefaultPort && uri.UserInfo.Length == 0
+            && uri.Host.Equals("opml.radiotime.com", StringComparison.OrdinalIgnoreCase)
+            && uri.AbsolutePath == "/Tune.ashx";
 
         internal static XDocument ParseCatalogue(byte[] bytes)
         {

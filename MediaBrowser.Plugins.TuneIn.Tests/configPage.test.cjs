@@ -492,8 +492,8 @@ test('API request interval validates and saves the shared catalog pacing setting
     assert.equal(app.writes.length, 2);
 });
 
-test('discovery controls distinguish legacy defaults from Not set and preserve saved limits', async () => {
-    for (const [config, maximum, depth] of [[{}, 200, 10], [{ MaxStationCount: null }, '', 10],
+test('discovery controls keep missing and null station limits Not set and preserve saved limits', async () => {
+    for (const [config, maximum, depth] of [[{}, '', 10], [{ MaxStationCount: null }, '', 10],
         [{ MaxStationCount: 4000, TraversalDepthLimit: 50 }, 4000, 50]]) {
         const app = harness();
         const visit = app.instance.onResume();

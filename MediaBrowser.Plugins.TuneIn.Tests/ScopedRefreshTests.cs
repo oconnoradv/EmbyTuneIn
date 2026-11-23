@@ -1268,7 +1268,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var scope = request.Parameters.GetValueOrDefault("id") ?? request.Parameters["c"];
                 requests.Add(scope);
                 var malformed = changed && partial && scope == "g71"
-                    ? "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c1&amp;filter=s:~%00'/>" : "";
+                    ? "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c1&amp;filter=bad%20value'/>" : "";
                 return Task.FromResult(XDocument.Parse("<opml><body>"
                     + $"<outline type='audio' guide_id='s1' text='{(changed ? "Changed" : "Original")}'/>"
                     + malformed + "</body></opml>"));
@@ -1491,7 +1491,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var scope = request.Parameters.TryGetValue("id", out var id) ? id : request.Parameters["c"];
                 requests.Add(scope);
                 var invalid = string.Concat(Enumerable.Repeat(Link("c123", "#" + privateMarker), 4))
-                    + Link("c123", "&amp;filter=private%2F" + privateMarker);
+                    + Link("c123", "&amp;filter=private%2F" + privateMarker)
+                    + "<outline type='link' URL='https://opml.radiotime.com/Tune.ashx?id=s1#invalid'/>";
                 var rows = scope == "g2698"
                     ? (healed ? "" : !skip ? Link("c123") : baseline == "new parent" ? Link("c125") : invalid)
                         + Link("c124", "&amp;filter=s:~A")
@@ -1907,7 +1908,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 requests++;
                 return Task.FromResult(XDocument.Parse("<opml><body>"
                     + "<outline type='audio' guide_id='s1' text='Radio'/>"
-                    + "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c1&amp;filter=s:~%00'/>"
+                    + "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c1&amp;filter=bad%20value'/>"
                     + "</body></opml>"));
             });
             var channel = new TuneInChannel(directory);
@@ -2304,7 +2305,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var scope = request.Parameters.GetValueOrDefault("id") ?? request.Parameters["c"];
                 requests.Add(scope);
                 var malformed = changed && partial && scope == "g71"
-                    ? "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c1&amp;filter=s:~%00'/>" : "";
+                    ? "<outline type='link' URL='https://opml.radiotime.com/Browse.ashx?id=c1&amp;filter=bad%20value'/>" : "";
                 return Task.FromResult(XDocument.Parse("<opml><body>"
                     + $"<outline type='audio' guide_id='s1' text='{(changed ? "Changed" : "Original")}'/>"
                     + malformed + "</body></opml>"));

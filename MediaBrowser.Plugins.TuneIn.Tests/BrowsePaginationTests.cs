@@ -40,6 +40,17 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
+        [InlineData("s:~%00", "s:~#")]
+        [InlineData("p:~%00", "p:~#")]
+        public void NulTerminatedHashFiltersAreRecovered(string filter, string expected)
+        {
+            var link = DirectoryRequest.ParseLink(
+                "https://opml.radiotime.com/Browse.ashx?id=c57941&filter=" + filter);
+
+            Assert.Equal(expected, link.Parameters["filter"]);
+        }
+
+        [Theory]
         [InlineData("http://opml.radiotime.com/Browse.ashx?offset=26&id=c57941&filter=s:~#section")]
         [InlineData("http://opml.radiotime.com/Browse.ashx?filter=s:~&id=c57941#")]
         [InlineData("http://opml.radiotime.com/Browse.ashx?filter=s:~&filter=s:~#")]

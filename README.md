@@ -67,6 +67,12 @@ Keep the navigation signing key in the configuration private and keep it
 across upgrades; replacing it invalidates existing item IDs. To roll back,
 restore the previous DLL, configuration and refresh state together.
 
+### RC2 fixes
+
+This republished RC2 keeps an unset Max Station Count blank and saves it as
+`null`. Catalog browsing also recovers NUL-encoded `#` filters and ignores
+TuneIn playback links instead of reporting them as malformed catalog links.
+
 ## Configure browsing
 
 Open **Advanced → TuneIn** (or **Plugins → TuneIn → Settings**) as an
@@ -106,7 +112,7 @@ administrator, unlock settings, choose categories, and **Save**.
 
 | Setting | Range | Default |
 | --- | --- | --- |
-| Max Station Count (unique stations per top-level category) | blank or 1–4000 | 200 |
+| Max Station Count (unique stations per top-level category) | blank (Not set) or 1–4000 | 200 for new configurations |
 | Traversal depth limit (category root is level 0) | 3–50 | 10 |
 | API request interval | 1–30 seconds | 3 |
 | Discovery deadline | 1–10 hours | 2 |
@@ -275,6 +281,10 @@ directly.
   Logs and reports omit URLs, tokens and provider response text.
 
 ## Limits and recovery
+
+A series-based 429 retry budget that resets after successful pages is deferred
+as a future enhancement. This RC2 retains the current three retries per refresh
+and existing cooldowns.
 
 | Limit | Value |
 | --- | --- |

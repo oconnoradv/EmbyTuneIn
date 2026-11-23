@@ -1581,7 +1581,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.discoveryDeadlineHours').value =
                 config.DiscoveryDeadlineHours == null ? 2 : config.DiscoveryDeadlineHours;
             view.querySelector('.maxStationCount').value =
-                config.MaxStationCount === undefined ? 200 : config.MaxStationCount == null ? '' : config.MaxStationCount;
+                config.MaxStationCount == null ? '' : config.MaxStationCount;
             view.querySelector('.traversalDepthLimit').value =
                 config.TraversalDepthLimit == null ? 10 : config.TraversalDepthLimit;
             view.querySelector('.enableCatalogIdentityDiagnostics').checked = config.EnableCatalogIdentityDiagnostics === true;
