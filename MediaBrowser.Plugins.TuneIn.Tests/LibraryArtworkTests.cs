@@ -478,7 +478,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var channel = new TuneInChannel(directory, serverHost: DispatchProxy.Create<IServerApplicationHost, HostProxy>(), library: library);
                 channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
                 var revision = TuneInCategoryArtwork.GenreRevision("c900001");
-                Assert.Equal("http://127.0.0.1:8096/emby/TuneIn/GenreArtwork/c900001?v=" + revision, rock.GetImagePath(ImageType.Primary, 0));
+                Assert.Equal("http://127.0.0.1:8096/emby/TuneIn/GenreArtwork/c900001?v=" + revision + "&packRevision=1", rock.GetImagePath(ImageType.Primary, 0));
                 Assert.Equal("1:music:c900001:" + revision, rock.GetProviderId("TuneInCategoryArtwork"));
                 Assert.EndsWith("/TuneIn/CategoryArtwork/music?v=1", dubstep.GetImagePath(ImageType.Primary, 0));
                 Assert.Equal("1:music", dubstep.GetProviderId("TuneInCategoryArtwork"));
@@ -492,6 +492,88 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             finally
             {
                 TuneInCategoryArtwork.GenreFolder = previous;
+                System.IO.Directory.Delete(folder, true);
+            }
+        }
+
+        [Theory]
+        [InlineData("music", "genres", "g2698", false)]
+        [InlineData("language", "genres", "g2698", true)]
+        [InlineData("language", "languages", "l122", false)]
+        [InlineData("location", "locations", "r101227", false)]
+        public void PackRevisionReappliesExistingCardsOnce(string category, string scope, string id, bool languageGenre)
+        {
+            var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tunein-art-test-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            var oldGenre = TuneInCategoryArtwork.GenreFolder;
+            var oldLanguage = TuneInCategoryArtwork.LanguageFolder;
+            var oldLocation = TuneInCategoryArtwork.LocationFolder;
+            try
+            {
+                TuneInCategoryArtwork.GenreFolder = scope == "genres" ? folder : null;
+                TuneInCategoryArtwork.LanguageFolder = scope == "languages" ? folder : null;
+                TuneInCategoryArtwork.LocationFolder = scope == "locations" ? folder : null;
+                var card = System.IO.Path.Combine(folder, id + ".jpg");
+                System.IO.File.WriteAllBytes(card, new byte[] { 1, 2, 3 });
+                var config = new PluginConfiguration
+                {
+                    SchemaVersion = 1, ConfigurationCompleted = true,
+                    EnableMusic = true, EnableLanguage = true, EnableLocation = true
+                };
+                var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("Unexpected provider request."));
+                var snapshot = directory.Snapshot();
+                var rootId = directory.Register(snapshot, new NavigationEntry { Category = category, Name = category });
+                var library = DispatchProxy.Create<ILibraryManager, LibraryProxy>();
+                var proxy = (LibraryProxy)library;
+                proxy.Root = Folder(1, rootId);
+                proxy.Root.SetProviderId("TuneInCategoryArtwork", "1:" + category);
+                var request = scope == "languages"
+                    ? DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?c=lang&filter=" + id)
+                    : DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=" + id);
+                var item = Folder(2, directory.Register(snapshot, new NavigationEntry
+                {
+                    Category = category, ContentCategory = languageGenre ? "music" : null, Name = id, Request = request
+                }));
+                var version = "1:" + category + ":" + (scope == "genres" ? "" : scope + ":")
+                    + id + ":" + TuneInCategoryArtwork.PackRevision(scope, id);
+                item.SetProviderId("TuneInCategoryArtwork", version);
+                if (scope == "genres") item.SetProviderId("TuneInFuturisticSpotlightArtworkTest", version + ":1");
+                var fallback = Folder(3, directory.Register(snapshot, new NavigationEntry
+                {
+                    Category = category, Name = "Fallback",
+                    Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?"
+                        + (category == "language" ? "c=lang&filter=l123"
+                            : "id=" + (category == "location" ? "r101228" : "g4144")))
+                }));
+                fallback.SetProviderId("TuneInCategoryArtwork", "1:" + category);
+                proxy.Descendants = new BaseItem[] { item, fallback };
+                var channel = new TuneInChannel(directory, serverHost: DispatchProxy.Create<IServerApplicationHost, HostProxy>(), library: library);
+
+                proxy.FailNextUpdate = true;
+                Assert.Throws<InvalidOperationException>(() => channel.UpdateCategoryArtwork(rootId, CancellationToken.None));
+                Assert.True(string.IsNullOrEmpty(item.GetProviderId("TuneInPackArtworkRevision")));
+                channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+                Assert.Same(item, Assert.Single(proxy.Updated));
+                Assert.Equal(version, item.GetProviderId("TuneInCategoryArtwork"));
+                Assert.Equal(version + ":1", item.GetProviderId("TuneInPackArtworkRevision"));
+                Assert.EndsWith("&packRevision=1", item.GetImagePath(ImageType.Primary, 0));
+                Assert.Equal("old.png", fallback.GetImagePath(ImageType.Primary, 0));
+                channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+                Assert.Single(proxy.Updated);
+                System.IO.File.WriteAllBytes(card, new byte[] { 4, 5, 6 });
+                channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+                Assert.Equal(2, proxy.Updated.Count);
+                Assert.NotEqual(version, item.GetProviderId("TuneInCategoryArtwork"));
+                System.IO.File.Delete(card);
+                channel.UpdateCategoryArtwork(rootId, CancellationToken.None);
+                Assert.Equal(3, proxy.Updated.Count);
+                Assert.EndsWith("/TuneIn/CategoryArtwork/" + category + "?v=1", item.GetImagePath(ImageType.Primary, 0));
+            }
+            finally
+            {
+                TuneInCategoryArtwork.GenreFolder = oldGenre;
+                TuneInCategoryArtwork.LanguageFolder = oldLanguage;
+                TuneInCategoryArtwork.LocationFolder = oldLocation;
                 System.IO.Directory.Delete(folder, true);
             }
         }

@@ -143,6 +143,49 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             else Assert.Empty(items);
         }
 
+        [Theory]
+        [InlineData("g4150", "offset=26&id=c100002522&filter=s", true)]
+        [InlineData("g4152", "offset=26&id=c100002659&filter=s", true)]
+        [InlineData("g4152", "offset=6&id=c100002659&filter=p", true)]
+        [InlineData("g4150", "offset=26&id=c100002519&filter=s", false)]
+        [InlineData("g4150", "offset=26&id=g4152&filter=s", false)]
+        [InlineData("g4150", "offset=0&id=c100002522&filter=s", false)]
+        [InlineData("g4150", "offset=26&id=c100002522&filter=s:popular", false)]
+        public async Task LanguageGenrePaginationKeepsItsLanguageScope(string genre, string query, bool allowed)
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableLanguage = true };
+            config.Languages.Add(new CatalogSelection { Id = "l122", Enabled = true });
+            var calls = 0;
+            string requestedFilter = null;
+            var directory = new TuneInDirectory(() => config, (request, token) =>
+            {
+                requestedFilter = request.Parameters.GetValueOrDefault("filter");
+                var xml = !request.Parameters.ContainsKey("id")
+                    ? "<opml><body><outline type='link' text='Spanish' URL='https://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=l122'/></body></opml>"
+                    : calls++ == 0
+                    ? "<opml><body><outline type='link' key='nextStations' text='More' URL='https://opml.radiotime.com/Browse.ashx?"
+                        + query.Replace("&", "&amp;") + "'/></body></opml>"
+                    : "<opml><body/></opml>";
+                return Task.FromResult(XDocument.Parse(xml));
+            });
+            var snapshot = directory.Snapshot();
+            var parent = new NavigationEntry
+            {
+                Category = "language", SelectionId = "l122", ContentCategory = "music",
+                Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=" + genre + "&filter=l122")
+            };
+            var channel = new TuneInChannel(directory);
+            var items = (await channel.GetChannelItems(new InternalChannelItemQuery
+            {
+                FolderId = directory.Register(snapshot, parent)
+            }, CancellationToken.None)).Items;
+            if (!allowed) { Assert.Empty(items); return; }
+            var child = directory.Resolve(snapshot, Assert.Single(items).Id);
+            Assert.True(TuneInBrowsing.IsForwardPage(snapshot, parent, child));
+            await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = items[0].Id }, CancellationToken.None);
+            Assert.Equal(query.Contains("filter=p") ? "p:l122" : "s:l122", requestedFilter);
+        }
+
         private static async Task<string> BrowseProviderLink(string url, bool location = false,
             string musicId = "c57941", string key = "nextStations")
         {

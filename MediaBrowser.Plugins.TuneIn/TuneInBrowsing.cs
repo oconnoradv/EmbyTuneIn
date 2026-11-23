@@ -286,9 +286,11 @@ namespace MediaBrowser.Plugins.TuneIn
                 return false;
             if (CanonicalPaginationIds.TryGetValue(from, out var canonical)) return canonical == to;
             // TuneIn pages a genre's More Stations/Shows under that genre's own category ID; refuse IDs owned by another genre.
+            var filter = next.Parameters.GetValueOrDefault("filter");
+            var languageSuffix = entry.Category == "language" && entry.SelectionId != null ? ":" + entry.SelectionId : "";
             return Regex.IsMatch(from, @"\Ag[1-9][0-9]{0,9}\z") && to != null
                 && Regex.IsMatch(to, @"\Ac[1-9][0-9]{0,9}\z") && !CanonicalPaginationIds.ContainsValue(to)
-                && (next.Parameters.GetValueOrDefault("filter") == "s" || next.Parameters.GetValueOrDefault("filter") == "p");
+                && (filter == "s" + languageSuffix || filter == "p" + languageSuffix);
         }
 
         // Known canonical category IDs for legacy genre IDs in Music, Talk and Sports, including when By Language reaches

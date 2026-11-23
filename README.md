@@ -46,7 +46,7 @@ Planned: Control Panel localization that follows the user's Emby language.
 ## Install
 
 Download the
-[music refresh resilience RC1](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.1).
+[music refresh resilience RC2](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.2).
 The assembly version is **1.2.8.0**. `build-info.json` identifies the source
 commit and `SHA256SUMS.txt` verifies the files.
 
@@ -156,7 +156,8 @@ overridden.
 
 TuneIn **More Stations** and **More Shows** pages are followed and their
 stations are listed directly in the linking folder. Unexpected jumps to other
-categories are skipped and reported as partial.
+categories are skipped and reported as partial. Pages under a language retain
+the selected language filter.
 
 ## Status and diagnostics
 
@@ -230,6 +231,10 @@ Cards use TuneIn IDs as filenames, for example `c57943.jpg`, `g79.png`,
 installed counts and manifest identity; when hashes are available it also
 distinguishes unchanged, replaced and added cards. The optional Cartoon example
 loads from GitHub.
+
+Refreshing a category reapplies its installed pack artwork when the artwork
+revision changes, even if an existing primary image is present. Reload the
+client after the refresh if its tiles still show stale artwork or dimensions.
 
 ## Playback
 

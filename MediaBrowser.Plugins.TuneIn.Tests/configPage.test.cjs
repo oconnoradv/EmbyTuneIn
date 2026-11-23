@@ -418,7 +418,7 @@ test('selector retry is bounded and does not send requests after leaving setting
 test('native view lifecycle loads labeled upstream settings on each visit', async () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /data-controller="__plugin\/tuneinjs"/);
-    assert.match(html, /<fieldset class="globalFields"[\s\S]*<fieldset class="loginFields"[\s\S]*<legend>Your TuneIn Login<\/legend>[\s\S]*class="txtUsername"[^>]*label="TuneIn User:"[\s\S]*class="localSource"[\s\S]*class="txtLatLon"[\s\S]*class="configurationCompleted"[\s\S]*class="settingsLocked"/);
+    assert.match(html, /<fieldset class="globalFields"[\s\S]*<fieldset class="loginFields"[\s\S]*<legend>TuneIn Favorites and Location<\/legend>[\s\S]*class="txtUsername"[^>]*label="TuneIn User:"[\s\S]*class="localSource"[\s\S]*class="txtLatLon"[\s\S]*class="configurationCompleted"[\s\S]*class="settingsLocked"/);
     assert.doesNotMatch(html, /<h2>Favorites<\/h2>/);
     assert.match(html, /class="txtLatLon"[^>]*label="Your LatLon:"/);
     const app = harness();
@@ -2143,8 +2143,13 @@ test('scoped artwork packs show detected names, counts and paths safely', async 
     assert.equal(app.elements['.artworkLanguagesChanges'].textContent, '(change counts unavailable)');
     app.instance.onPause();
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    assert.match(html, /<details class="tuneInAdvancedSettings">[\s\S]*?id="tuneInDirectHlsHint"[^>]*>[^<]*<\/p>\s*<aside class="tuneInArtworkPacks">[\s\S]*?<\/aside>\s*<\/details>/);
+    assert.match(html, /class="hideRegionalGenres"[\s\S]*?<aside class="tuneInArtworkPacks">[\s\S]*?<\/aside>\s*<details class="tuneInAdvancedSettings">/);
     assert.equal((html.match(/<aside class="tuneInArtworkPacks">/g) || []).length, 1);
+    assert.match(html, /<fieldset class="loginFields" disabled>\s*<legend>TuneIn Favorites and Location<\/legend>/);
+    assert.match(html, /\.loginFields\s*\{[^}]*border:\s*1px solid var\(--tunein-neutral-border\)/);
+    const artworkStyle = html.match(/\.tuneInArtworkPacks\s*\{([^}]*)\}/)[1];
+    assert.match(artworkStyle, /border-inline-start:\s*\.25em solid #39b9aa/);
+    assert.doesNotMatch(artworkStyle, /\bbackground(?:-color)?\s*:/);
     assert.match(html, /<th scope="col">Artwork<\/th><th scope="col">Installed pack<\/th><th scope="col">Images<\/th>/);
     for (const scope of ['Genres', 'Languages', 'Locations'])
         assert.match(html, new RegExp(`<strong class="artwork${scope}Name">Loading\\.\\.\\.<\\/strong>`));

@@ -280,17 +280,25 @@ namespace MediaBrowser.Plugins.TuneIn
                     + (artwork.Id == null ? "" : ":" + (artwork.Scope == "genres" ? "" : artwork.Scope + ":")
                         + artwork.Id + ":" + TuneInCategoryArtwork.PackRevision(artwork.Scope, artwork.Id));
                 var previousVersion = folder.GetProviderId("TuneInCategoryArtwork");
-                if (previousVersion == version && folder.HasImage(ImageType.Primary, 0)) return;
+                const string packProvider = "TuneInPackArtworkRevision";
+                const string packRevision = "1";
+                var packVersion = artwork.Id == null ? null : version + ":" + packRevision;
+                var previousPackVersion = packVersion == null ? null : folder.GetProviderId(packProvider);
+                if (previousVersion == version && folder.HasImage(ImageType.Primary, 0)
+                    && (packVersion == null || previousPackVersion == packVersion)) return;
+                var image = FolderImage(entry) ?? CategoryArtworkUrl(entry.Category);
                 folder.SetImage(new ItemImageInfo
                 {
-                    Path = FolderImage(entry) ?? CategoryArtworkUrl(entry.Category), Type = ImageType.Primary,
+                    Path = packVersion == null ? image : image + "&packRevision=" + packRevision, Type = ImageType.Primary,
                     DateModified = DateTimeOffset.UtcNow
                 }, 0);
                 folder.SetProviderId("TuneInCategoryArtwork", version);
+                if (packVersion != null) folder.SetProviderId(packProvider, packVersion);
                 try { library.UpdateItem(folder, library.GetItemById(folder.ParentId), ItemUpdateType.ImageUpdate); }
                 catch
                 {
                     folder.SetProviderId("TuneInCategoryArtwork", previousVersion ?? "");
+                    if (packVersion != null) folder.SetProviderId(packProvider, previousPackVersion ?? "");
                     throw;
                 }
             }
