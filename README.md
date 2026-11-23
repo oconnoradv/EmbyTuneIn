@@ -72,6 +72,13 @@ restore the previous DLL, configuration and refresh state together.
 This republished RC2 keeps an unset Max Station Count blank and saves it as
 `null`. Catalog browsing also recovers NUL-encoded `#` filters and ignores
 TuneIn playback links instead of reporting them as malformed catalog links.
+Staged imports are now bound to the Emby refresh token, so concurrent scheduled
+channel refreshes and browsing cannot read from or interfere with a
+category-scoped import. The fix was confirmed on a clean Emby server.
+
+After upgrading, run a full TuneIn refresh to replace any channel items saved
+with stale configuration-bound IDs. If a category refresh runs while Emby's
+**Refresh Internet Channels** task is active, retry it after that task finishes.
 
 ## Configure browsing
 
