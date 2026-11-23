@@ -55,8 +55,8 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.allowDirectHlsPlayback', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
-        '.optionalChecksPrompt', '.optionalChecksSkip', '.optionalChecksKeep', '.optionalChecksRun',
-        '.optionalChecksStatus', '.optionalChecksMessage', '.optionalChecksUnlockHint', '.skipOptionalChecks',
+        '.optionalChecksRun', '.optionalChecksStatus', '.optionalChecksMessage',
+        '.optionalChecksUnlockHint', '.skipOptionalChecks',
         '.tuneInReadiness', '.readinessFiltering', '.readinessCategory', '.readinessRequirements',
         '.readinessSaved', '.readinessChannel', '.favoritesValidation', '.localValidation',
         '.channelScheduleConfirm', '.channelScheduleAdjust', '.tuneInPluginVersion',
@@ -769,6 +769,22 @@ test('advanced settings start collapsed and group the controls in order', () => 
     assert.match(advanced[1], /Off by default/);
 });
 
+test('automatic artwork check preference and status are grouped in the artwork section', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const artwork = html.match(/<aside class="tuneInArtworkPacks">([\s\S]*?)<\/aside>/);
+    const advanced = html.match(/<details class="tuneInAdvancedSettings">([\s\S]*?)<\/details>/);
+    const checks = artwork && artwork[1].match(/<section class="tuneInArtworkChecks"[\s\S]*?<\/section>/);
+    assert.ok(artwork);
+    assert.ok(checks);
+    assert.doesNotMatch(html, /optionalChecksPrompt|optionalChecksSkip|optionalChecksKeep/);
+    assert.match(checks[0], /<h3 id="tuneInArtworkChecksTitle">Automatic Artwork Checks<\/h3>/);
+    for (const selector of ['skipOptionalChecks', 'optionalChecksUnlockHint', 'optionalChecksMessage', 'optionalChecksStatus', 'optionalChecksRun'])
+        assert.match(checks[0], new RegExp(`class="[^"]*\\b${selector}\\b`));
+    assert.doesNotMatch(advanced[1], /skipOptionalChecks|optionalChecksMessage|optionalChecksStatus|optionalChecksRun/);
+    for (const selector of ['optionalChecksRun', 'optionalChecksStatus'])
+        assert.equal((html.match(new RegExp(`class="[^"]*\\b${selector}\\b[^"]*"`, 'g')) || []).length, 1);
+});
+
 test('navigation discards stale loads without hiding the next visit loader', async () => {
     const app = harness();
     const first = app.instance.onResume();
@@ -1001,7 +1017,7 @@ test('first-run checklist follows setup and saving without starting a refresh', 
     assert.equal(app.elements['.readinessSaved'].attributes['data-ready'], 'false');
 });
 
-test('optional checks prompt saves a choice and permits re-enabling', async () => {
+test('eligible artwork preference saves a choice and permits re-enabling', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();
     app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
@@ -1009,17 +1025,18 @@ test('optional checks prompt saves a choice and permits re-enabling', async () =
         SkipOptionalStartupChecks: null });
     await visit;
     await settle();
-    assert.equal(app.elements['.optionalChecksPrompt'].hidden, false);
-    const save = app.elements['.optionalChecksSkip'].click();
+    const toggle = app.elements['.skipOptionalChecks'];
+    assert.equal(toggle.disabled, false);
+    toggle.checked = true;
+    const save = toggle.handlers.change.call(toggle, { stopPropagation() {} });
     assert.equal(JSON.parse(app.optionalChecks[0].options.data).Skip, true);
     app.optionalChecks[0].resolve({ SkipOptionalStartupChecks: true });
     await save;
-    assert.equal(app.elements['.optionalChecksPrompt'].hidden, true);
-    assert.equal(app.elements['.skipOptionalChecks'].checked, true);
+    assert.equal(toggle.checked, true);
+    assert.match(app.elements['.optionalChecksMessage'].textContent, /Automatic artwork checks will be skipped/);
     app.refresh[1].resolve({ State: 'Completed', SettingsLocked: false, OptionalChecksEligible: true,
         SkipOptionalStartupChecks: true });
     await settle();
-    const toggle = app.elements['.skipOptionalChecks'];
     let inputStopped = false;
     toggle.handlers.input({ stopPropagation() { inputStopped = true; } });
     assert.equal(inputStopped, true);
@@ -1033,7 +1050,6 @@ test('optional checks prompt saves a choice and permits re-enabling', async () =
         SkipOptionalStartupChecks: false });
     await settle();
     assert.equal(toggle.checked, false);
-    assert.equal(app.elements['.optionalChecksPrompt'].hidden, true);
 });
 
 test('a failed optional preference write is not reported as saved', async () => {
@@ -1044,14 +1060,16 @@ test('a failed optional preference write is not reported as saved', async () => 
         SkipOptionalStartupChecks: null });
     await visit;
     await settle();
-    const save = app.elements['.optionalChecksKeep'].click();
+    const toggle = app.elements['.skipOptionalChecks'];
+    toggle.checked = false;
+    const save = toggle.handlers.change.call(toggle, { stopPropagation() {} });
     app.optionalChecks[0].reject(new Error('offline'));
     await save;
     assert.match(app.elements['.optionalChecksMessage'].textContent, /Could not confirm/);
     app.refresh[1].resolve({ State: 'Completed', SettingsLocked: false, OptionalChecksEligible: true,
         SkipOptionalStartupChecks: null });
     await settle();
-    assert.equal(app.elements['.optionalChecksPrompt'].hidden, false);
+    assert.equal(toggle.disabled, false);
 });
 
 test('skip-enabled reopening requires manual unlock for settings and optional preferences', async () => {
@@ -1096,23 +1114,23 @@ test('skip-enabled reopening requires manual unlock for settings and optional pr
     assert.equal(app.elements['.globalFields'].disabled, true);
 });
 
-test('the optional checks prompt respects the settings lock and unknown lock status', async () => {
+test('artwork preference respects the settings lock and unknown lock status', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();
     app.reads[0].resolve({ SettingsSaved: true, SchemaVersion: 1, ConfigurationCompleted: true });
     app.refresh[0].resolve({ SettingsLocked: true, OptionalChecksEligible: true, SkipOptionalStartupChecks: null });
     await visit;
-    assert.equal(app.elements['.optionalChecksPrompt'].hidden, false);
     assert.equal(app.elements['.optionalChecksUnlockHint'].hidden, false);
-    assert.equal(app.elements['.optionalChecksSkip'].disabled, true);
-    app.elements['.optionalChecksSkip'].click();
+    assert.equal(app.elements['.skipOptionalChecks'].disabled, true);
+    app.elements['.skipOptionalChecks'].checked = true;
+    app.elements['.skipOptionalChecks'].handlers.change.call(app.elements['.skipOptionalChecks'], { stopPropagation() {} });
     assert.equal(app.optionalChecks.length, 0);
     [...app.timers.values()][0].handler();
     app.refresh[1].resolve({ SettingsLocked: null, OptionalChecksEligible: true });
     await settle();
     assert.equal(app.elements['.settingsLockState'].textContent, 'Checking');
     assert.equal(app.elements['.settingsLocked'].disabled, true);
-    assert.equal(app.elements['.optionalChecksKeep'].disabled, true);
+    assert.equal(app.elements['.skipOptionalChecks'].disabled, true);
 });
 
 test('manual artwork checks cannot replace newer live lock or maintenance state', async () => {
@@ -1174,7 +1192,7 @@ test('optional checks are deferred until explicitly requested, and errors are re
         SkipOptionalStartupChecks: true, ArtworkChecksDeferred: true, ArtworkPacks: [] });
     await visit;
     await settle();
-    assert.equal(app.elements['.optionalChecksPrompt'].hidden, true);
+    assert.equal(app.elements['.skipOptionalChecks'].checked, true);
     assert.match(app.elements['.optionalChecksStatus'].textContent, /deferred/);
     const checking = app.elements['.optionalChecksRun'].click();
     assert.equal(app.refresh[1].options.url.params.CheckOptional, true);

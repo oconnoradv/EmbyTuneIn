@@ -695,14 +695,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var view = instance.view;
         var selected = status && status.SkipOptionalStartupChecks;
         var eligible = !!status && status.OptionalChecksEligible === true;
-        view.querySelector('.optionalChecksPrompt').hidden = !eligible || selected != null || !!instance.optionalSaving;
         var toggle = view.querySelector('.skipOptionalChecks');
         toggle.checked = selected === true;
         var blocked = !!editingBlocked(instance);
         toggle.disabled = blocked || (!eligible && selected !== true);
-        view.querySelector('.optionalChecksSkip').disabled = blocked;
-        view.querySelector('.optionalChecksKeep').disabled = blocked;
-        view.querySelector('.optionalChecksUnlockHint').hidden = !eligible || selected != null || !blocked;
+        view.querySelector('.optionalChecksUnlockHint').hidden = !eligible || !blocked;
     }
 
     function saveOptionalChecks(instance, skip) {
@@ -711,7 +708,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.optionalSaving = true;
         instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
         editing(instance);
-        instance.view.querySelector('.optionalChecksMessage').textContent = 'Saving optional checks preference...';
+        instance.view.querySelector('.optionalChecksMessage').textContent = 'Saving artwork check preference...';
         return ApiClient.ajax({
             type: 'POST', dataType: 'json', contentType: 'application/json',
             url: ApiClient.getUrl('TuneIn/OptionalChecks/Preference'), data: JSON.stringify({ Skip: skip })
@@ -719,11 +716,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             if (epoch !== instance.viewEpoch) return;
             instance.refreshStatus.SkipOptionalStartupChecks = result.SkipOptionalStartupChecks;
             instance.view.querySelector('.optionalChecksMessage').textContent = skip
-                ? 'Optional startup checks will be skipped.' : 'Optional startup checks are enabled.';
+                ? 'Automatic artwork checks will be skipped.' : 'Automatic artwork checks are enabled.';
         }, function () {
             if (epoch === instance.viewEpoch)
                 instance.view.querySelector('.optionalChecksMessage').textContent =
-                    'Could not confirm the optional checks preference. Checking the server again.';
+                    'Could not confirm the artwork check preference. Checking the server again.';
         }).then(function () {
             instance.optionalSaving = false;
             if (epoch !== instance.viewEpoch) return;
@@ -1844,8 +1841,6 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         bindDisclosure(view.querySelector('.refreshSummary'), function () { instance.refreshDefaultPending = false; });
         view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });
         view.querySelector('.configurationCompleted').addEventListener('change', function () { editing(instance); setupChanged(instance); });
-        view.querySelector('.optionalChecksSkip').addEventListener('click', function () { return saveOptionalChecks(instance, true); });
-        view.querySelector('.optionalChecksKeep').addEventListener('click', function () { return saveOptionalChecks(instance, false); });
         view.querySelector('.optionalChecksRun').addEventListener('click', function () { return runOptionalChecks(instance); });
         view.querySelector('.skipOptionalChecks').addEventListener('input', function (event) { event.stopPropagation(); });
         view.querySelector('.skipOptionalChecks').addEventListener('change', function (event) {
