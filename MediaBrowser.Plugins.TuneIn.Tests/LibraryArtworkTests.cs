@@ -216,6 +216,49 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             }
         }
 
+        [Fact]
+        public void LocationPackAcceptsLargeManifestButStillValidatesEntriesAndSize()
+        {
+            var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tunein-large-manifest-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            var previous = TuneInCategoryArtwork.LocationFolder;
+            try
+            {
+                TuneInCategoryArtwork.LocationFolder = folder;
+                var path = System.IO.Path.Combine(folder, "tunein-artwork.json");
+                var image = new byte[] { 1, 2, 3 };
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, "r100000.jpg"), image);
+                using var sha = System.Security.Cryptography.SHA256.Create();
+                var hash = Convert.ToHexString(sha.ComputeHash(image)).ToLowerInvariant();
+                var entries = Enumerable.Range(100000, 10000).Select(id =>
+                    "{\"id\":\"r" + id + "\",\"file\":\"r" + id + ".jpg\",\"sha256\":\"" + hash + "\"}");
+                var json = "{\"schemaVersion\":1,\"scope\":\"locations\",\"packName\":\"Futuristic\","
+                    + "\"imageCount\":10000,\"images\":[" + string.Join(",", entries) + "]}";
+                System.IO.File.WriteAllText(path, json);
+                Assert.True(new System.IO.FileInfo(path).Length > 1024 * 1024);
+                var status = TuneInCategoryArtwork.ReadPackStatus("locations");
+                Assert.Equal("identified", status.Status);
+                Assert.Equal("Futuristic", status.Name);
+                Assert.Equal(10000, status.ImageCount);
+                Assert.Equal(1, status.MatchedCount);
+
+                System.IO.File.WriteAllText(path, json.Replace("\"file\":\"r100001.jpg\"", "\"file\":\"../r100001.jpg\""));
+                Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackStatus("locations").Status);
+
+                var padded = json.PadRight(TuneInCategoryArtwork.MaxPackManifestBytes, ' ');
+                System.IO.File.WriteAllText(path, padded);
+                Assert.Equal(TuneInCategoryArtwork.MaxPackManifestBytes, new System.IO.FileInfo(path).Length);
+                Assert.Equal("identified", TuneInCategoryArtwork.ReadPackStatus("locations").Status);
+                System.IO.File.AppendAllText(path, " ");
+                Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackStatus("locations").Status);
+            }
+            finally
+            {
+                TuneInCategoryArtwork.LocationFolder = previous;
+                System.IO.Directory.Delete(folder, true);
+            }
+        }
+
         [Theory]
         [InlineData("language", "languages", "l122")]
         [InlineData("location", "locations", "r101227")]

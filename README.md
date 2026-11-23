@@ -75,6 +75,8 @@ TuneIn playback links instead of reporting them as malformed catalog links.
 Staged imports are now bound to the Emby refresh token, so concurrent scheduled
 channel refreshes and browsing cannot read from or interfere with a
 category-scoped import. The fix was confirmed on a clean Emby server.
+Artwork pack manifests now accept up to 4 MiB, allowing the published
+Futuristic location pack to be identified without changing the pack.
 
 After upgrading, run a full TuneIn refresh to replace any channel items saved
 with stale configuration-bound IDs. If a category refresh runs while Emby's
@@ -243,7 +245,7 @@ Cards use TuneIn IDs as filenames, for example `c57943.jpg`, `g79.png`,
 `l122.jpg`, or `r101227.png`. Advanced Settings reports the server paths,
 installed counts and manifest identity; when hashes are available it also
 distinguishes unchanged, replaced and added cards. The optional Cartoon example
-loads from GitHub.
+loads from GitHub. Artwork manifests are limited to 4 MiB.
 
 Refreshing a category reapplies its installed pack artwork when the artwork
 revision changes, even if an existing primary image is present. Reload the

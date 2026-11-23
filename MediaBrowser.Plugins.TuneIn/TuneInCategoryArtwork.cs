@@ -104,6 +104,7 @@ namespace MediaBrowser.Plugins.TuneIn
         internal const string Revision = "1";
         internal const string LibraryRevision = "2";
         internal const string ChannelArtwork = "channel";
+        internal const int MaxPackManifestBytes = 4 * 1024 * 1024;
         private static readonly string[] Categories = { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
         internal static readonly string[] Scopes = { "genres", "languages", "locations" };
         private static readonly string[] Extensions = { ".jpg", ".png" };
@@ -231,7 +232,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     using (var stream = File.OpenRead(Path.Combine(folder, "tunein-artwork.json")))
                     {
-                        if (stream.Length > 1024 * 1024) { result.Status = "invalid"; return result; }
+                        if (stream.Length > MaxPackManifestBytes) { result.Status = "invalid"; return result; }
                         manifest = (PackManifest)new DataContractJsonSerializer(typeof(PackManifest)).ReadObject(stream);
                     }
                 }
