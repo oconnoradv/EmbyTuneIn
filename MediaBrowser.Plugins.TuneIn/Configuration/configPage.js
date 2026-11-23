@@ -768,8 +768,20 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.artworkUpload').disabled = true;
         instance.view.querySelector('.artworkUploadMessage').textContent = 'Uploading artwork pack...';
         pollArtwork(instance, epoch);
-        return ApiClient.ajax({ type: 'POST', dataType: 'json', url: ApiClient.getUrl('TuneIn/Artwork/Upload'),
-            data: file, contentType: 'application/zip', processData: false }).then(function (result) {
+        // Emby's ajax helper form-encodes non-string data, including File objects.
+        var request = { url: ApiClient.getUrl('TuneIn/Artwork/Upload'), headers: { 'Content-Type': 'application/zip', accept: 'application/json' } };
+        ApiClient.setAuthorizationInfoIntoRequest(request);
+        return fetch(request.url, { method: 'POST', headers: request.headers, body: file, credentials: 'same-origin' })
+            .then(function (response) {
+                return response.json().then(function (result) {
+                    if (!response.ok) {
+                        var error = new Error('Artwork upload returned HTTP ' + response.status);
+                        error.responseJSON = result;
+                        throw error;
+                    }
+                    return result;
+                });
+            }).then(function (result) {
             if (epoch !== instance.viewEpoch) {
                 return ApiClient.ajax({ type: 'POST', dataType: 'json', contentType: 'application/json',
                     url: ApiClient.getUrl('TuneIn/Artwork/Discard'), data: JSON.stringify({ Token: result.Token }) })

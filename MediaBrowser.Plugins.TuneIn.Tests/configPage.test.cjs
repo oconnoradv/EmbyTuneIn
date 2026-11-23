@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { File } = require('node:buffer');
 
 const configDir = path.join(__dirname, '..', 'MediaBrowser.Plugins.TuneIn', 'Configuration');
 const pluginId = '10b82431-f939-4507-a8e2-9509dd3fd6ae';
@@ -143,6 +144,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
             return Promise.resolve('saved');
         },
         getUrl(route, params) { return { route, params }; },
+        setAuthorizationInfoIntoRequest(request) { request.headers.Authorization = 'test-session'; },
         ajax(options) {
             const request = deferred();
             if (options.url.route === 'TuneIn/SettingsLock') {
@@ -185,6 +187,13 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
             PluginView = factory(BaseView, loader, element => ({ trigger(event) { enhanced.push({ element, event }); } }));
         },
         ApiClient, Dashboard, console: { error(...args) { errors.push(args); } },
+        fetch(url, options) {
+            const request = deferred();
+            artwork.push({ options: { url, type: options.method, ...options }, ...request });
+            return request.promise.then(result => ({
+                ok: true, status: 200, json: () => Promise.resolve(result)
+            }));
+        },
         document: { createElement(tag) { return new Element(tag); } },
         setTimeout(handler, delay) { timers.set(++timerId, { handler, delay }); return timerId; },
         clearTimeout(id) { timers.delete(id); }
@@ -2301,8 +2310,13 @@ async function prepareArtworkUpload(app, scanStatus = 'Not scanned') {
     app.refresh[0].resolve(status);
     await visit;
     const file = app.elements['.artworkFile'];
-    file.files = [{ name: 'pack.zip', size: 12 }];
+    file.files = [new File([new Uint8Array([80, 75, 3, 4])], 'pack.zip', { type: 'application/zip' })];
     const upload = file.handlers.change.call(file, { stopPropagation() {} });
+    const sent = app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').options;
+    assert.equal(sent.body, file.files[0]);
+    assert.equal(sent.headers.Authorization, 'test-session');
+    assert.equal(sent.headers['Content-Type'], 'application/zip');
+    assert.equal(sent.credentials, 'same-origin');
     app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'validating' });
     app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').resolve({
         Token: 'abc', Scope: 'genres', Name: 'Sample', ImageCount: 2, Destination: 'C:\\art\\genres', ScanStatus: scanStatus
