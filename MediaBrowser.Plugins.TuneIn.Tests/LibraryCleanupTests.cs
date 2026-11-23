@@ -351,6 +351,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             using var release = new ManualResetEventSlim();
             var path = Path.Combine(Path.GetTempPath(), "tunein-cleanup-" + Guid.NewGuid().ToString("N"));
             var store = new TuneInRefreshStore(path);
+            var settings = new TuneInSettingsLockStore(path + ".settings");
             var snapshot = fixture.Directory.Snapshot();
             var now = DateTime.UtcNow;
             store.Write(new TuneInRefreshCheckpoint { ConfigurationKey = snapshot.Key, SavedUtc = now, StartedUtc = now });
@@ -364,7 +365,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             using var refresh = new TuneInRefresh(fixture.Directory, store,
                 () => throw new InvalidOperationException("Refresh must not start"),
                 (_, _, _, _, _) => throw new InvalidOperationException(), (_, _, _, _) => throw new InvalidOperationException(),
-                null, clock: () => now, libraryCleanup: fixture.Cleanup);
+                null, clock: () => now, libraryCleanup: fixture.Cleanup, lockSettings: settings.EnsureLocked);
             try
             {
                 var service = new TuneInRefreshService(refresh);
@@ -380,6 +381,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var preview = refresh.PreviewCleanup();
                 Assert.Throws<InvalidOperationException>(() => refresh.StartCleanup("wrong"));
                 Assert.Equal("Running", refresh.StartCleanup(preview.Token).Cleanup.State);
+                Assert.True(settings.IsLocked);
                 Assert.True(await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(5))));
                 Assert.Null(store.Read());
                 Assert.Null(store.ReadRecovery());
@@ -391,6 +393,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 release.Set();
                 Assert.True(SpinWait.SpinUntil(() => refresh.Status().Cleanup.State != "Running", TimeSpan.FromSeconds(5)));
                 Assert.Equal("Completed", refresh.Status().Cleanup.State);
+                Assert.True(new TuneInSettingsLockStore(path + ".settings").IsLocked);
+                refresh.SetSettingsLock(() => settings.Set(false));
+                Assert.False(settings.IsLocked);
                 Assert.Throws<InvalidOperationException>(() => refresh.StartCleanup(preview.Token));
             }
             finally
@@ -399,6 +404,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 store.Clear();
                 store.ClearDiscovery();
                 store.ClearRecovery();
+                File.Delete(path + ".settings");
             }
         }
 

@@ -31,7 +31,8 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public TuneInBackupService(ITaskManager tasks, ILogManager logs)
         {
-            backup = Jobs.GetValue(tasks, manager => new TuneInBackup(manager, logs.GetLogger(nameof(TuneInBackup))));
+            backup = Jobs.GetValue(tasks, manager => new TuneInBackup(manager, logs.GetLogger(nameof(TuneInBackup)),
+                TuneInRefreshService.RunMaintenance));
         }
 
         public TuneInBackupStatus Get(GetTuneInBackupStatus request)
@@ -58,15 +59,17 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly object gate = new object();
         private readonly ITaskManager manager;
         private readonly ILogger logger;
+        private readonly Func<Func<Task>, Task> runMaintenance;
         private Task dispatch;
         private bool startFailed;
         private DateTimeOffset? previousEnd;
         private bool requested;
 
-        internal TuneInBackup(ITaskManager manager, ILogger logger)
+        internal TuneInBackup(ITaskManager manager, ILogger logger, Func<Func<Task>, Task> runMaintenance = null)
         {
             this.manager = manager;
             this.logger = logger;
+            this.runMaintenance = runMaintenance ?? (run => Task.Run(run));
         }
 
         internal TuneInBackupStatus Status()
@@ -83,10 +86,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (current.State == "Unavailable" || current.State == "Busy" || current.State == "Running")
                     return current;
 
-                previousEnd = worker.LastExecutionResult?.EndTimeUtc;
-                requested = true;
-                startFailed = false;
-                dispatch = Task.Run(async () =>
+                var previous = worker.LastExecutionResult?.EndTimeUtc;
+                dispatch = runMaintenance(async () =>
                 {
                     try
                     {
@@ -99,11 +100,22 @@ namespace MediaBrowser.Plugins.TuneIn
                         logger?.ErrorException("TuneIn could not run the Emby Server Backup task.", error);
                     }
                 });
+                previousEnd = previous;
+                requested = true;
+                startFailed = false;
                 return new TuneInBackupStatus { State = "Running" };
             }
         }
 
-        private IScheduledTaskWorker FindTask()
+        private IScheduledTaskWorker FindTask() => FindTask(manager);
+
+        internal static bool IsActive(ITaskManager manager)
+        {
+            var worker = FindTask(manager);
+            return worker != null && worker.State != TaskState.Idle;
+        }
+
+        private static IScheduledTaskWorker FindTask(ITaskManager manager)
         {
             // Backup & Restore ships separately; the SDK exposes task keys but does not publish this task's key.
             var matches = manager.ScheduledTasks.Where(task => task.ScheduledTask != null &&

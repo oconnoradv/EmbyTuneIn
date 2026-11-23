@@ -611,6 +611,7 @@
             <p class="status catalogRefreshPrompt" role="status" hidden></p>
             <section class="optionalChecksPrompt" aria-label="Optional startup checks" hidden>
                 <p>Setup is complete and a category refresh succeeded. Skip optional artwork pack checks on future visits? Refresh status and safety checks remain live.</p>
+                <p class="optionalChecksUnlockHint" role="status" hidden>Manually unlock Settings before choosing. Changes are unavailable while refresh or maintenance work is active.</p>
                 <button is="emby-button" type="button" class="raised button-submit optionalChecksSkip">Skip optional checks</button>
                 <button is="emby-button" type="button" class="raised button-submit optionalChecksKeep">Keep checks</button>
             </section>
@@ -778,6 +779,7 @@
                     <span class="settingsLockState" aria-hidden="true">Checking</span>
                 </label>
                 <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
+                <p class="fieldDescription">Manually unlock to edit saved settings, including optional checks. Saving, catalog refreshes, cleanup, Backup Emby and artwork installation lock settings on the server. Settings stay locked afterward; unlocking and edits are blocked while work is active.</p>
             </div>
             <details class="tuneInSection tuneInNeutralPanel" open>
             <summary class="browsingSummary" id="tuneInBrowsingTitle">TuneIn Station Filtering</summary>

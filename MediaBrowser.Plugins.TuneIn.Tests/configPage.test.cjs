@@ -56,7 +56,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
         '.optionalChecksPrompt', '.optionalChecksSkip', '.optionalChecksKeep', '.optionalChecksRun',
-        '.optionalChecksStatus', '.optionalChecksMessage', '.skipOptionalChecks',
+        '.optionalChecksStatus', '.optionalChecksMessage', '.optionalChecksUnlockHint', '.skipOptionalChecks',
         '.tuneInReadiness', '.readinessFiltering', '.readinessCategory', '.readinessRequirements',
         '.readinessSaved', '.readinessChannel', '.favoritesValidation', '.localValidation',
         '.channelScheduleConfirm', '.channelScheduleAdjust', '.tuneInPluginVersion',
@@ -141,9 +141,10 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
             if (manualSave) {
                 const request = deferred();
                 writes.push({ id, config, ...request });
-                return request.promise;
+                return request.promise.then(result => { serverLocked = true; return result; });
             }
             writes.push({ id, config });
+            serverLocked = true;
             return Promise.resolve('saved');
         },
         getUrl(route, params) { return { route, params }; },
@@ -1028,6 +1029,9 @@ test('optional checks prompt saves a choice and permits re-enabling', async () =
     assert.equal(JSON.parse(app.optionalChecks[1].options.data).Skip, false);
     app.optionalChecks[1].resolve({ SkipOptionalStartupChecks: false });
     await reenable;
+    app.refresh[2].resolve({ State: 'Completed', SettingsLocked: false, OptionalChecksEligible: true,
+        SkipOptionalStartupChecks: false });
+    await settle();
     assert.equal(toggle.checked, false);
     assert.equal(app.elements['.optionalChecksPrompt'].hidden, true);
 });
@@ -1048,6 +1052,118 @@ test('a failed optional preference write is not reported as saved', async () => 
         SkipOptionalStartupChecks: null });
     await settle();
     assert.equal(app.elements['.optionalChecksPrompt'].hidden, false);
+});
+
+test('skip-enabled reopening requires manual unlock for settings and optional preferences', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SettingsSaved: true, SchemaVersion: 1, ConfigurationCompleted: true });
+    const locked = { State: 'Completed', SettingsLocked: true, OptionalChecksEligible: true,
+        SkipOptionalStartupChecks: true, ArtworkChecksDeferred: true };
+    app.refresh[0].resolve(locked);
+    await visit;
+    const toggle = app.elements['.skipOptionalChecks'];
+    assert.equal(app.elements['.settingsLocked'].checked, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    assert.equal(toggle.disabled, true);
+    toggle.checked = false;
+    toggle.handlers.change.call(toggle, { stopPropagation() {} });
+    assert.equal(app.optionalChecks.length, 0);
+    const lock = app.elements['.settingsLocked'];
+    lock.checked = false;
+    const unlock = lock.handlers.change();
+    app.locks[0].resolve({ Locked: false });
+    await unlock;
+    app.refresh[1].resolve({ ...locked, SettingsLocked: false });
+    await settle();
+    assert.equal(toggle.disabled, false);
+    toggle.checked = false;
+    const save = toggle.handlers.change.call(toggle, { stopPropagation() {} });
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    assert.equal(lock.disabled, true);
+    app.optionalChecks[0].resolve({ SkipOptionalStartupChecks: false });
+    await save;
+    app.refresh[2].resolve({ ...locked, SettingsLocked: true, SkipOptionalStartupChecks: false });
+    await settle();
+    assert.equal(lock.checked, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    app.instance.onPause();
+    const reopen = app.instance.onResume();
+    app.reads[1].resolve({ SettingsSaved: true, SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[3].resolve({ ...locked, SkipOptionalStartupChecks: false });
+    await reopen;
+    assert.equal(lock.checked, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+});
+
+test('the optional checks prompt respects the settings lock and unknown lock status', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SettingsSaved: true, SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve({ SettingsLocked: true, OptionalChecksEligible: true, SkipOptionalStartupChecks: null });
+    await visit;
+    assert.equal(app.elements['.optionalChecksPrompt'].hidden, false);
+    assert.equal(app.elements['.optionalChecksUnlockHint'].hidden, false);
+    assert.equal(app.elements['.optionalChecksSkip'].disabled, true);
+    app.elements['.optionalChecksSkip'].click();
+    assert.equal(app.optionalChecks.length, 0);
+    [...app.timers.values()][0].handler();
+    app.refresh[1].resolve({ SettingsLocked: null, OptionalChecksEligible: true });
+    await settle();
+    assert.equal(app.elements['.settingsLockState'].textContent, 'Checking');
+    assert.equal(app.elements['.settingsLocked'].disabled, true);
+    assert.equal(app.elements['.optionalChecksKeep'].disabled, true);
+});
+
+test('manual artwork checks cannot replace newer live lock or maintenance state', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
+    app.refresh[0].resolve({ State: 'Completed', SettingsLocked: false, SkipOptionalStartupChecks: true });
+    await visit;
+    const checking = app.elements['.optionalChecksRun'].click();
+    [...app.timers.values()][0].handler();
+    app.refresh[2].resolve({ State: 'Completed', SettingsLocked: true, MaintenanceBusy: true,
+        SkipOptionalStartupChecks: true });
+    await settle();
+    app.refresh[1].resolve({ State: 'Completed', SettingsLocked: false, MaintenanceBusy: false,
+        ArtworkPacks: [{ Scope: 'genres', Status: 'missing', InstalledCount: 0 }] });
+    await checking;
+    assert.equal(app.elements['.settingsLocked'].checked, true);
+    assert.equal(app.elements['.settingsLocked'].disabled, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    assert.equal(app.elements['.skipOptionalChecks'].disabled, true);
+    [...app.timers.values()][0].handler();
+    app.refresh[3].resolve({ State: 'Completed', SettingsLocked: true, MaintenanceBusy: false,
+        SkipOptionalStartupChecks: true });
+    await settle();
+    assert.equal(app.elements['.settingsLocked'].disabled, false);
+    assert.equal(app.elements['.settingsLocked'].checked, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+});
+
+test('null and failed status reads discard a previously unlocked state until reconfirmed', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ SettingsLocked: false });
+    await visit;
+    assert.equal(app.elements['.globalFields'].disabled, false);
+    [...app.timers.values()][0].handler();
+    app.refresh[1].resolve({ SettingsLocked: null });
+    await settle();
+    assert.equal(app.elements['.settingsLockState'].textContent, 'Checking');
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    [...app.timers.values()][0].handler();
+    app.refresh[2].reject(new Error('offline'));
+    await settle();
+    assert.equal(app.elements['.settingsLocked'].disabled, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    [...app.timers.values()][0].handler();
+    app.refresh[3].resolve({ SettingsLocked: true });
+    await settle();
+    assert.equal(app.elements['.settingsLocked'].checked, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
 });
 
 test('optional checks are deferred until explicitly requested, and errors are reported', async () => {
@@ -1767,6 +1883,9 @@ test('backup uses the dedicated action and cleanup stays disabled while Emby has
     app.backup[0].resolve({ State: 'Ready' });
     await opened;
     const start = app.elements['.backupStart'].handlers.click();
+    assert.equal(app.elements['.settingsLocked'].disabled, true);
+    assert.equal(app.elements['.settingsLocked'].checked, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
     assert.deepEqual(app.backup[1].options.url, { route: 'TuneIn/Backup/Start', params: undefined });
     app.backup[1].resolve({ State: 'Running' });
     await start;
@@ -2679,8 +2798,8 @@ test('a failed lock write leaves edits blocked until the server confirms the sta
     assert.equal(state.textContent, 'Locked');
 });
 
-for (const outcome of ['locked', 'save failed', 'lock unconfirmed']) {
-    test(`save turns on the lock only after configuration is persisted (${outcome})`, async () => {
+for (const outcome of ['locked', 'save failed']) {
+    test(`saving uses the server-persisted lock without a second write (${outcome})`, async () => {
         const app = harness(true, true);
         const visit = app.instance.onResume();
         app.reads[0].resolve({});
@@ -2701,15 +2820,10 @@ for (const outcome of ['locked', 'save failed', 'lock unconfirmed']) {
         } else {
             app.writes[0].resolve('saved');
             await settle();
-            assert.deepEqual(JSON.parse(app.locks[0].options.data), { Locked: true });
+            assert.equal(app.locks.length, 0);
             assert.equal(toggle.disabled, true);
-            assert.equal(toggle.checked, false);
-            if (outcome === 'locked') app.locks[0].resolve({ Locked: true });
-            else app.locks[0].reject(new Error('response lost'));
-            await settle();
-            assert.equal(toggle.checked, outcome === 'locked');
-            assert.match(app.elements['.status'].textContent, outcome === 'locked' ?
-                /saved and locked/ : /saved, but the settings lock could not be confirmed/);
+            assert.equal(app.elements['.settingsLockState'].textContent, 'Checking');
+            assert.match(app.elements['.status'].textContent, /saved and locked/);
         }
         app.refresh[1].resolve({ SettingsLocked: outcome === 'locked' });
         await settle();

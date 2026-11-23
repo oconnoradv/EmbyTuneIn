@@ -18,6 +18,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public TuneInCleanupStatus Cleanup { get; set; }
         public string State { get; set; } = "NeverRun";
         public bool Busy { get; set; }
+        public bool MaintenanceBusy { get; set; }
         public string Category { get; set; }
         public string Phase { get; set; }
         public int CategoriesTotal { get; set; }
@@ -192,6 +193,9 @@ namespace MediaBrowser.Plugins.TuneIn
         private CancellationTokenSource cleanupCancellation;
         private Task cleanupWork;
         private bool Cleaning => cleanup.State == "Running";
+        private bool maintenanceActive;
+        private readonly Action lockSettings;
+        private readonly Func<bool> backupBusy;
 
         private sealed class PendingImport
         {
@@ -226,7 +230,8 @@ namespace MediaBrowser.Plugins.TuneIn
             Action<TuneInChannel, string, CancellationToken> updateArtwork = null,
             Func<TuneInChannel, string, CancellationToken, int?> countStations = null,
             TuneInLibraryCleanup libraryCleanup = null, bool allowScopedImport = false,
-            Func<TuneInChannel, string, CancellationToken, HashSet<string>> stationIds = null)
+            Func<TuneInChannel, string, CancellationToken, HashSet<string>> stationIds = null,
+            Action lockSettings = null, Func<bool> backupBusy = null)
         {
             this.directory = directory ?? throw new ArgumentNullException(nameof(directory));
             this.store = store ?? throw new ArgumentNullException(nameof(store));
@@ -239,6 +244,8 @@ namespace MediaBrowser.Plugins.TuneIn
             this.updateArtwork = updateArtwork;
             this.libraryCleanup = libraryCleanup;
             this.allowScopedImport = allowScopedImport;
+            this.lockSettings = lockSettings;
+            this.backupBusy = backupBusy ?? (() => false);
             this.countStations = countStations ?? ((channel, folder, token) => channel.CountCategoryStations(folder, token));
             this.stationIds = stationIds ?? (countStations == null
                 ? (Func<TuneInChannel, string, CancellationToken, HashSet<string>>)((channel, folder, token) => channel.CategoryStationIds(folder, token))
@@ -260,6 +267,8 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 var snapshot = statusConfiguration;
                 var copy = status.Copy();
+                copy.MaintenanceBusy = maintenanceActive || backupBusy();
+                if (copy.MaintenanceBusy) lockSettings?.Invoke();
                 copy.HasRefreshBeenStarted = categoryStates.Count > 0;
                 copy.HasCompleteBaseline = hasCompleteBaseline;
                 copy.HasSuccessfulCategoryRefresh = hasSuccessfulCategoryRefresh;
@@ -358,6 +367,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private void Begin(ConfigurationSnapshot snapshot, string category, TuneInRefreshRecovery recovery = null)
         {
+            lockSettings?.Invoke();
             cleanupPlan = null;
             Prepare(snapshot, category, recovery);
             work = Task.Run(async () =>
@@ -532,6 +542,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (cleanupPlan == null || token != cleanupToken || clock() >= cleanupExpires)
                     throw new InvalidOperationException("The TuneIn cleanup preview is no longer current. Preview again.");
                 var plan = cleanupPlan;
+                lockSettings?.Invoke();
                 cleanupPlan = null;
                 cleanup = new TuneInCleanupStatus { State = "Running", Total = plan.Targets.Length };
                 cleanupCancellation?.Dispose();
@@ -676,12 +687,41 @@ namespace MediaBrowser.Plugins.TuneIn
         internal void EnsureNoCleanup()
         {
             lock (gate)
+            {
                 if (Cleaning) throw new InvalidOperationException("TuneIn library cleanup is active.");
+                if (maintenanceActive || backupBusy())
+                {
+                    lockSettings?.Invoke();
+                    throw new InvalidOperationException("TuneIn maintenance or Emby backup is active.");
+                }
+            }
+        }
+
+        internal Task RunMaintenance(Func<Task> run)
+        {
+            if (run == null) throw new ArgumentNullException(nameof(run));
+            lock (gate)
+            {
+                if (disposed) throw new ObjectDisposedException(nameof(TuneInRefresh));
+                EnsureNoCleanup();
+                if (work != null && !work.IsCompleted)
+                    throw new InvalidOperationException("Maintenance cannot run while TuneIn refresh work is active or draining.");
+                lockSettings?.Invoke();
+                cleanupPlan = null;
+                maintenanceActive = true;
+                return Task.Run(async () =>
+                {
+                    try { await run().ConfigureAwait(false); }
+                    finally { lock (gate) maintenanceActive = false; }
+                });
+            }
         }
 
         internal T SetSettingsLock<T>(Func<T> update)
         {
-            lock (gate)
+            if (!Monitor.TryEnter(gate))
+                throw new InvalidOperationException("TuneIn settings are busy. Check status before changing the lock.");
+            try
             {
                 EnsureNoCleanup();
                 if (work != null && !work.IsCompleted)
@@ -689,6 +729,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 cleanupPlan = null;
                 return update();
             }
+            finally { Monitor.Exit(gate); }
         }
 
         internal T InstallArtwork<T>(Func<T> install)
@@ -699,6 +740,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 EnsureNoCleanup();
                 if (disposed || work != null && !work.IsCompleted)
                     throw new InvalidOperationException("Artwork installation cannot run while TuneIn refresh work is active or draining.");
+                lockSettings?.Invoke();
                 cleanupPlan = null;
                 return install();
             }
@@ -707,7 +749,9 @@ namespace MediaBrowser.Plugins.TuneIn
         internal void UpdateConfiguration(Action update)
         {
             if (update == null) throw new ArgumentNullException(nameof(update));
-            lock (gate)
+            if (!Monitor.TryEnter(gate))
+                throw new InvalidOperationException("TuneIn settings are busy. Check status before saving.");
+            try
             {
                 EnsureNoCleanup();
                 if (work != null && !work.IsCompleted)
@@ -767,13 +811,14 @@ namespace MediaBrowser.Plugins.TuneIn
                 failureLog = null;
                 committed = new CommittedCatalogue(null, new Dictionary<string, ChannelItemResult>(StringComparer.Ordinal));
             }
+            finally { Monitor.Exit(gate); }
         }
 
         internal void CheckSchedules()
         {
             lock (gate)
             {
-                if (disposed || Cleaning) return;
+                if (disposed || Cleaning || maintenanceActive || backupBusy()) return;
                 var snapshot = directory.Snapshot();
                 statusConfiguration = snapshot;
                 var now = clock();

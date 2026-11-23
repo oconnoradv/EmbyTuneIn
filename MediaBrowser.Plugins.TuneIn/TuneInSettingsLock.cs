@@ -16,9 +16,14 @@ namespace MediaBrowser.Plugins.TuneIn
         private static readonly XmlSerializer Serializer = new XmlSerializer(typeof(TuneInSettingsLock));
         private readonly object gate = new object();
         private readonly string path;
+        private readonly Func<bool> initiallyLocked;
         private bool? locked;
 
-        internal TuneInSettingsLockStore(string path) { this.path = path; }
+        internal TuneInSettingsLockStore(string path, Func<bool> initiallyLocked = null)
+        {
+            this.path = path;
+            this.initiallyLocked = initiallyLocked ?? (() => false);
+        }
 
         internal bool? TryReadStatus()
         {
@@ -41,11 +46,27 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal void SaveConfiguration(Action save)
         {
+            WithUnlockedSettings(() =>
+            {
+                // Lock before persisting settings so a lost response cannot leave saved settings editable.
+                Set(true);
+                save();
+            });
+        }
+
+        internal void WithUnlockedSettings(Action save)
+        {
             lock (gate)
             {
                 if (IsLocked) throw new InvalidOperationException("TuneIn settings are locked. Unlock them before saving.");
                 save();
             }
+        }
+
+        internal void EnsureLocked()
+        {
+            lock (gate)
+                if (!IsLocked) Set(true);
         }
 
         internal TuneInSettingsLock Set(bool value)
@@ -81,8 +102,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 4096 }))
                     return ((TuneInSettingsLock)Serializer.Deserialize(reader)).Locked;
             }
-            catch (FileNotFoundException) { return false; }
-            catch (DirectoryNotFoundException) { return false; }
+            catch (FileNotFoundException) { return initiallyLocked(); }
+            catch (DirectoryNotFoundException) { return initiallyLocked(); }
         }
     }
 }

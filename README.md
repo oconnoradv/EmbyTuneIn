@@ -72,7 +72,8 @@ still loading an older DLL.
 
 After settings are saved and a category refresh completes successfully without
 partial or limited results, the Control Panel offers **Skip optional checks**
-or **Keep checks**. Existing installations must complete one new successful
+or **Keep checks**. Manually unlock Settings before selecting either choice.
+Existing installations must complete one new successful
 refresh because older checkpoints cannot prove that a saved category snapshot
 came from a completed refresh. The preference is saved on the server and is
 shared across browsers. Unlock settings to change it later under **Advanced
@@ -107,6 +108,11 @@ the artwork manifest and image-hash scan on Control Panel startup. The
 preference becomes available only after a newly recorded successful refresh;
 existing checkpoints do not count as evidence. Artwork upload checks and all
 catalog refresh safety gates remain unchanged.
+
+This build also restores authoritative settings locking. Preference changes
+respect the manual lock, saved settings are locked without a second browser
+request, and refresh/maintenance work keeps settings locked after completion.
+Artwork-check results cannot overwrite live lock or activity status.
 
 After upgrading, run a full TuneIn refresh to replace any channel items saved
 with stale configuration-bound IDs. If a category refresh runs while Emby's
@@ -154,8 +160,14 @@ not required.
   **Select Items for Delete**, check them, and select **Delete Selected Items**.
 - **Settings lock:** the switch beside Global TuneIn Settings shows
   **Locked** (green) or **Unlocked** (red). Saving locks settings again;
-  unlocking opens TuneIn Station Filtering. Settings can't change while a
-  refresh or cleanup is running.
+  unlocking opens TuneIn Station Filtering. Saved installations without a
+  recorded lock default to locked. Optional-check preferences also require
+  manual unlocking and cannot change the lock themselves. Catalog refreshes
+  (including scheduled refreshes), cleanup, **Backup Emby**, and artwork
+  installation lock settings on the server before starting; settings remain
+  locked afterward. Edits and unlocking are blocked while those operations
+  run, including an active Emby Server Backup detected through Scheduled Tasks.
+  A failed save can leave settings locked; check status and unlock before retrying.
 - Saving a changed filtering setting opens **Catalog Refresh**.
 - By Language follows TuneIn's Music, Talk and Sports groups for each
   language, narrowed to your selected Music genres when set.

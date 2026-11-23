@@ -7,6 +7,7 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Services;
+using MediaBrowser.Model.Tasks;
 using System;
 using System.IO;
 using System.Linq;
@@ -94,8 +95,8 @@ namespace MediaBrowser.Plugins.TuneIn
         public IRequest Request { get; set; }
 
         public TuneInRefreshService(IHttpClient client, IApplicationHost host, IApplicationPaths paths,
-            IChannelManager manager, ILogManager logManager, ILibraryManager library)
-            : this(GetShared(client, host, paths, manager, logManager, library)) { }
+            IChannelManager manager, ILogManager logManager, ILibraryManager library, ITaskManager tasks)
+            : this(GetShared(client, host, paths, manager, logManager, library, tasks)) { }
 
         internal TuneInRefreshService(TuneInRefresh refresh)
         {
@@ -137,7 +138,7 @@ namespace MediaBrowser.Plugins.TuneIn
             status.SkipOptionalStartupChecks = configuration.SkipOptionalStartupChecks;
             status.OptionalChecksEligible = configuration.SchemaVersion == 1 && configuration.ConfigurationCompleted
                 && configuration.SettingsSaved && status.HasSuccessfulCategoryRefresh && !status.Busy
-                && status.Cleanup?.State != "Running";
+                && !status.MaintenanceBusy && status.Cleanup?.State != "Running";
             return status;
         }
 
@@ -218,10 +219,18 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal static T InstallArtwork<T>(Func<T> install)
         {
+            TuneInRefresh coordinator;
+            lock (SharedGate) coordinator = shared;
+            if (coordinator == null) throw new InvalidOperationException("TuneIn refresh status is unavailable; reload settings and try again.");
+            return coordinator.InstallArtwork(install);
+        }
+
+        internal static Task RunMaintenance(Func<Task> run)
+        {
             lock (SharedGate)
             {
                 if (shared == null) throw new InvalidOperationException("TuneIn refresh status is unavailable; reload settings and try again.");
-                return shared.InstallArtwork(install);
+                return shared.RunMaintenance(run);
             }
         }
 
@@ -261,7 +270,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 manager.RefreshChannelContent(channel, staged.ImportRefreshLevel, restrictTopLevelFolderId, token));
 
         internal static TuneInRefresh GetShared(IHttpClient client, IApplicationHost host, IApplicationPaths paths,
-            IChannelManager manager, ILogManager logManager, ILibraryManager library)
+            IChannelManager manager, ILogManager logManager, ILibraryManager library, ITaskManager tasks)
         {
             lock (SharedGate)
             {
@@ -284,7 +293,9 @@ namespace MediaBrowser.Plugins.TuneIn
                     (channel, staged, folder, token) => ImportChannel(manager, channel, staged, folder, token),
                     logger,
                     updateArtwork: (channel, folder, token) => channel.UpdateCategoryArtwork(folder, token),
-                    libraryCleanup: cleanup, allowScopedImport: true);
+                    libraryCleanup: cleanup, allowScopedImport: true,
+                    lockSettings: () => Plugin.Instance.SettingsLock.EnsureLocked(),
+                    backupBusy: () => TuneInBackup.IsActive(tasks));
                 return shared;
             }
         }

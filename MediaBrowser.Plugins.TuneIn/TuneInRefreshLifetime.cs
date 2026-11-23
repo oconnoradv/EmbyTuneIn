@@ -7,6 +7,7 @@ using MediaBrowser.Controller.Channels;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Plugins;
 using MediaBrowser.Model.Logging;
+using MediaBrowser.Model.Tasks;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -19,9 +20,9 @@ namespace MediaBrowser.Plugins.TuneIn
         private Timer timer;
 
         public TuneInRefreshLifetime(IHttpClient client, IApplicationHost host, IApplicationPaths paths,
-            IChannelManager manager, ILogManager logManager, ILibraryManager library)
+            IChannelManager manager, ILogManager logManager, ILibraryManager library, ITaskManager tasks)
         {
-            refresh = TuneInRefreshService.GetShared(client, host, paths, manager, logManager, library);
+            refresh = TuneInRefreshService.GetShared(client, host, paths, manager, logManager, library, tasks);
             logger = logManager.GetLogger(nameof(TuneInRefreshLifetime));
             this.manager = manager;
         }

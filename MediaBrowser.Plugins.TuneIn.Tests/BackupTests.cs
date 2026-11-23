@@ -57,6 +57,42 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public async Task BackupUsesTheRefreshMaintenanceGateAndPreservesTheLockAfterCompletion()
+        {
+            var worker = Worker("Emby Server Backup");
+            var manager = Manager(worker);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            manager.Run = async () =>
+            {
+                await release.Task;
+                worker.LastResult = new TaskResult { Status = TaskCompletionStatus.Completed, EndTimeUtc = DateTime.UtcNow };
+            };
+            var config = new PluginConfiguration();
+            var directory = new TuneInDirectory(() => config, (_, __) => throw new InvalidOperationException());
+            var locked = false;
+            using var refresh = new TuneInRefresh(directory, new TuneInRefreshStore(null), () => null,
+                (_, __, ___, ____, _____) => throw new InvalidOperationException(),
+                (_, __, ___, ____) => throw new InvalidOperationException(), null, lockSettings: () => locked = true,
+                backupBusy: () => TuneInBackup.IsActive((ITaskManager)(object)manager));
+            var job = new TuneInBackup((ITaskManager)(object)manager, null, refresh.RunMaintenance);
+            try
+            {
+                Assert.Equal("Running", job.Start().State);
+                Assert.True(locked);
+                Assert.True(refresh.Status().MaintenanceBusy);
+                Assert.Throws<InvalidOperationException>(() => refresh.SetSettingsLock(() => locked = false));
+                Assert.Throws<InvalidOperationException>(() => refresh.UpdateConfiguration(() => { }));
+            }
+            finally { release.TrySetResult(true); }
+            Assert.True(await Task.Run(() => SpinWait.SpinUntil(() => job.Status().State != "Running", TimeSpan.FromSeconds(5))));
+            Assert.Equal("Completed", job.Status().State);
+            Assert.False(refresh.Status().MaintenanceBusy);
+            Assert.True(locked);
+            refresh.SetSettingsLock(() => locked = false);
+            Assert.False(locked);
+        }
+
+        [Fact]
         public void ThirtyDayScheduleIsAcceptedButNearbyUnsupportedIntervalsAreNot()
         {
             var config = new PluginConfiguration();

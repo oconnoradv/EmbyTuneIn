@@ -705,6 +705,128 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.False(refresh.SetSettingsLock(() => false));
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task RefreshPersistsSettingsLockThroughCompletionAndCancellation(bool cancel)
+        {
+            using var fixture = new ExperimentalImportFixture();
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-refresh-lock-{Guid.NewGuid():N}.xml");
+            var settings = new TuneInSettingsLockStore(path);
+            var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            fixture.BeforeSports = async token =>
+            {
+                entered.TrySetResult(true);
+                await release.Task.WaitAsync(token);
+            };
+            using var refresh = fixture.Create(lockSettings: settings.EnsureLocked);
+            try
+            {
+                refresh.Start();
+                Assert.True(settings.IsLocked);
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Throws<InvalidOperationException>(() => refresh.SetSettingsLock(() => settings.Set(false)));
+                Assert.Throws<InvalidOperationException>(() => refresh.UpdateConfiguration(() => settings.SaveConfiguration(() => { })));
+                if (cancel) refresh.Cancel();
+            }
+            finally { release.TrySetResult(true); }
+            try
+            {
+                await WaitUntilIdle(refresh);
+                Assert.True(new TuneInSettingsLockStore(path).IsLocked);
+                Assert.Throws<InvalidOperationException>(() => settings.WithUnlockedSettings(() => fixture.Config.SkipOptionalStartupChecks = true));
+                refresh.SetSettingsLock(() => settings.Set(false));
+                settings.WithUnlockedSettings(() => fixture.Config.SkipOptionalStartupChecks = false);
+                Assert.False(settings.IsLocked);
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task MaintenanceRejectsSettingsAndRefreshAndStaysLockedAfterSuccessOrFailure(bool fail)
+        {
+            using var fixture = new ExperimentalImportFixture();
+            var path = Path.Combine(Path.GetTempPath(), $"tunein-maintenance-lock-{Guid.NewGuid():N}.xml");
+            var settings = new TuneInSettingsLockStore(path);
+            using var refresh = fixture.Create(lockSettings: settings.EnsureLocked);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var task = refresh.RunMaintenance(async () =>
+            {
+                await release.Task;
+                if (fail) throw new IOException("Maintenance fixture failure");
+            });
+            try
+            {
+                Assert.True(refresh.Status().MaintenanceBusy);
+                Assert.True(settings.IsLocked);
+                Assert.Throws<InvalidOperationException>(() => refresh.SetSettingsLock(() => settings.Set(false)));
+                Assert.Throws<InvalidOperationException>(() => refresh.UpdateConfiguration(() => { }));
+                Assert.Throws<InvalidOperationException>(() => refresh.Start());
+                Assert.Throws<InvalidOperationException>(() => refresh.InstallArtwork(() => true));
+            }
+            finally { release.TrySetResult(true); }
+            try
+            {
+                if (fail) await Assert.ThrowsAsync<IOException>(() => task);
+                else await task;
+                Assert.False(refresh.Status().MaintenanceBusy);
+                Assert.True(new TuneInSettingsLockStore(path).IsLocked);
+                refresh.SetSettingsLock(() => settings.Set(false));
+                Assert.False(settings.IsLocked);
+            }
+            finally { File.Delete(path); }
+        }
+
+        [Fact]
+        public async Task ArtworkInstallationRejectsConcurrentUnlockAndSettingsWritesRatherThanQueuingThem()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            var locked = false;
+            using var refresh = fixture.Create(lockSettings: () => locked = true);
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            var install = Task.Run(() => refresh.InstallArtwork(() =>
+            {
+                entered.Set();
+                if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException();
+                return true;
+            }));
+            try
+            {
+                Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+                Assert.True(locked);
+                Assert.Throws<InvalidOperationException>(() => refresh.SetSettingsLock(() => locked = false));
+                Assert.Throws<InvalidOperationException>(() => refresh.UpdateConfiguration(() => locked = false));
+            }
+            finally { release.Set(); }
+            Assert.True(await install);
+            Assert.True(locked);
+            refresh.SetSettingsLock(() => locked = false);
+            Assert.False(locked);
+        }
+
+        [Fact]
+        public void ObservedExternalBackupLocksSettingsAndBlocksChanges()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            var locked = false;
+            var backupBusy = true;
+            using var refresh = fixture.Create(lockSettings: () => locked = true, backupBusy: () => backupBusy);
+            Assert.True(refresh.Status().MaintenanceBusy);
+            Assert.True(locked);
+            Assert.Throws<InvalidOperationException>(() => refresh.SetSettingsLock(() => locked = false));
+            Assert.Throws<InvalidOperationException>(() => refresh.UpdateConfiguration(() => { }));
+            Assert.Throws<InvalidOperationException>(() => refresh.Start());
+            backupBusy = false;
+            Assert.False(refresh.Status().MaintenanceBusy);
+            Assert.True(locked);
+            refresh.SetSettingsLock(() => locked = false);
+            Assert.False(locked);
+        }
+
         [Fact]
         public async Task ScopedCleanupRetainsSiblingBaselineAcrossRestartAndRebuildsOnlyTheRemovedCategory()
         {
@@ -1128,10 +1250,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             }
 
             internal TuneInRefresh Create(bool allowScoped = false, TimeSpan? timeout = null,
-                TuneInLibraryCleanup cleanup = null, ILogger logger = null) => new TuneInRefresh(directory, Store, () => channel,
+                TuneInLibraryCleanup cleanup = null, ILogger logger = null, Action lockSettings = null,
+                Func<bool> backupBusy = null) => new TuneInRefresh(directory, Store, () => channel,
                 (source, folder, session, strict, token) => source.GetRefreshChannelItems(folder, session, strict, token),
                 (source, staged, restriction, token) => TuneInRefreshService.ImportChannel(manager, source, staged, restriction, token),
                 logger, timeoutOverride: timeout ?? TimeSpan.FromSeconds(10), allowScopedImport: allowScoped, libraryCleanup: cleanup,
+                lockSettings: lockSettings, backupBusy: backupBusy,
                 updateArtwork: (_, folder, token) => Artwork.Add(directory.Resolve(directory.Snapshot(), folder).Category),
                 countStations: (_, folder, token) =>
                 {
@@ -3804,13 +3928,50 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     var store = new TuneInSettingsLockStore(path);
                     var saves = 0;
                     store.SaveConfiguration(() => saves++);
-                    store.Set(true);
+                    Assert.True(store.IsLocked);
                     var reloaded = new TuneInSettingsLockStore(path);
                     Assert.Throws<InvalidOperationException>(() => reloaded.SaveConfiguration(() => saves++));
                     Assert.Equal(1, saves);
                     reloaded.Set(false);
                     new TuneInSettingsLockStore(path).SaveConfiguration(() => saves++);
                     Assert.Equal(2, saves);
+                }
+                finally { File.Delete(path); }
+            }
+
+            [Fact]
+            public void SavedInstallationsDefaultToLockedAndPreferenceWritesPreserveExplicitLock()
+            {
+                var path = Path.Combine(Path.GetTempPath(), $"tunein-saved-lock-{Guid.NewGuid():N}.xml");
+                try
+                {
+                    var settings = new TuneInSettingsLockStore(path, () => true);
+                    Assert.True(settings.IsLocked);
+                    Assert.Throws<InvalidOperationException>(() => settings.WithUnlockedSettings(() => { }));
+                    settings.Set(false);
+                    var restarted = new TuneInSettingsLockStore(path, () => true);
+                    Assert.False(restarted.IsLocked);
+                    var saved = false;
+                    restarted.WithUnlockedSettings(() => saved = true);
+                    Assert.True(saved);
+                    Assert.False(restarted.IsLocked);
+                    restarted.SaveConfiguration(() => saved = true);
+                    Assert.True(new TuneInSettingsLockStore(path).IsLocked);
+                    Assert.Throws<InvalidOperationException>(() => restarted.WithUnlockedSettings(() => saved = false));
+                    Assert.True(saved);
+                }
+                finally { File.Delete(path); }
+            }
+
+            [Fact]
+            public void FailedConfigurationSaveRemainsLockedForSafety()
+            {
+                var path = Path.Combine(Path.GetTempPath(), $"tunein-failed-save-{Guid.NewGuid():N}.xml");
+                try
+                {
+                    var settings = new TuneInSettingsLockStore(path);
+                    Assert.Throws<IOException>(() => settings.SaveConfiguration(() => throw new IOException("Fixture")));
+                    Assert.True(new TuneInSettingsLockStore(path).IsLocked);
                 }
                 finally { File.Delete(path); }
             }

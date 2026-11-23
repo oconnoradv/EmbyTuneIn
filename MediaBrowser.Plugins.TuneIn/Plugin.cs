@@ -21,7 +21,8 @@ namespace MediaBrowser.Plugins.TuneIn
             : base(applicationPaths, xmlSerializer)
         {
             SettingsLock = new TuneInSettingsLockStore(string.IsNullOrEmpty(applicationPaths.DataPath)
-                ? null : Path.Combine(applicationPaths.DataPath, "tunein-fork-settings-lock.xml"));
+                ? null : Path.Combine(applicationPaths.DataPath, "tunein-fork-settings-lock.xml"),
+                () => Configuration.SettingsSaved);
             var artworkRoot = string.IsNullOrEmpty(applicationPaths.PluginConfigurationsPath)
                 ? null : Path.Combine(applicationPaths.PluginConfigurationsPath, "TuneInArtwork");
             TuneInCategoryArtwork.GenreFolder = artworkRoot == null ? null : Path.Combine(artworkRoot, "genres");
@@ -108,14 +109,17 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (skip && !(value.SchemaVersion == 1 && value.ConfigurationCompleted && value.SettingsSaved
                         && refresh.Status().HasSuccessfulCategoryRefresh))
                         throw new InvalidOperationException("Save complete settings and finish a successful category refresh before skipping optional checks.");
-                    var previous = value.SkipOptionalStartupChecks;
-                    value.SkipOptionalStartupChecks = skip;
-                    try { base.UpdateConfiguration(value); }
-                    catch
+                    SettingsLock.WithUnlockedSettings(() =>
                     {
-                        value.SkipOptionalStartupChecks = previous;
-                        throw;
-                    }
+                        var previous = value.SkipOptionalStartupChecks;
+                        value.SkipOptionalStartupChecks = skip;
+                        try { base.UpdateConfiguration(value); }
+                        catch
+                        {
+                            value.SkipOptionalStartupChecks = previous;
+                            throw;
+                        }
+                    });
                     return true;
                 });
             }
