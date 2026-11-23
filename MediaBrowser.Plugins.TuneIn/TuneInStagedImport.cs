@@ -42,9 +42,11 @@ namespace MediaBrowser.Plugins.TuneIn
         internal int ImportRefreshLevel { get; private set; }
         internal bool DiscoveryIncomplete => incompleteFolders.Count != 0;
         internal string DiscoveryLimitReason { get; private set; }
-        internal int CountStations(Func<string, string> stationId) => folders.Values
+        internal HashSet<string> StationIds(Func<string, string> stationId) => new HashSet<string>(folders.Values
             .SelectMany(folder => folder.Items).Where(item => item.Type == ChannelItemType.Media)
-            .Select(item => stationId(item.Id)).Where(id => id != null).Distinct(StringComparer.Ordinal).Count();
+            .Select(item => stationId(item.Id)).Where(id => id != null), StringComparer.Ordinal);
+
+        internal int CountStations(Func<string, string> stationId) => StationIds(stationId).Count;
 
         private TuneInStagedImport(CancellationToken token, Action<int, int> report, Action validate,
             ChannelItemResult scopedChannelRoot = null)

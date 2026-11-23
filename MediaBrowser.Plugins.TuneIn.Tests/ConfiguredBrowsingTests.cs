@@ -119,7 +119,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 + "<outline type='audio' text='Radio' guide_id='s1'/>")));
             var before = directory.Snapshot();
             var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
-            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "DiscoveryDeadlineHours", "ImportDeadlineHours", "MaxStationCount", "TraversalDepthLimit", "EnableCatalogIdentityDiagnostics", "AllowDirectHlsPlayback", "HideRegionalGenres",
+            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "MaximumRateLimitWaitMinutes", "DiscoveryDeadlineHours", "ImportDeadlineHours", "MaxStationCount", "TraversalDepthLimit", "EnableCatalogIdentityDiagnostics", "AllowDirectHlsPlayback", "HideRegionalGenres",
                 "AllowPartialCatalogImport", "HasStartedCatalogRefresh",
                 "SettingsSaved", "TalkMode", "TalkIds", "SportsMode", "SportsIds", "PodcastsMode", "PodcastIds" })
                 legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });
@@ -183,6 +183,31 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             using var reader = new StringReader("<PluginConfiguration>" + setting + "</PluginConfiguration>");
             var config = (PluginConfiguration)new XmlSerializer(typeof(PluginConfiguration)).Deserialize(reader);
             Assert.Equal(expected, config.ApiRequestIntervalSeconds);
+        }
+
+        [Theory]
+        [InlineData("", 15)]
+        [InlineData("<MaximumRateLimitWaitMinutes>5</MaximumRateLimitWaitMinutes>", 5)]
+        [InlineData("<MaximumRateLimitWaitMinutes>60</MaximumRateLimitWaitMinutes>", 60)]
+        public void RateLimitWaitDefaultsForLegacyConfigurations(string setting, int expected)
+        {
+            using var reader = new StringReader("<PluginConfiguration>" + setting + "</PluginConfiguration>");
+            var config = (PluginConfiguration)new XmlSerializer(typeof(PluginConfiguration)).Deserialize(reader);
+            ConfigurationSnapshot.Validate(config);
+            var snapshot = new ConfigurationSnapshot(config);
+            Assert.Equal(expected, snapshot.Value.MaximumRateLimitWaitMinutes);
+            config.MaximumRateLimitWaitMinutes = expected == 5 ? 60 : 5;
+            Assert.Equal(snapshot.DiscoveryKey, new ConfigurationSnapshot(config).DiscoveryKey);
+        }
+
+        [Theory]
+        [InlineData(4)]
+        [InlineData(61)]
+        public void InvalidRateLimitWaitIsRejected(int minutes)
+        {
+            var config = Ready();
+            config.MaximumRateLimitWaitMinutes = minutes;
+            Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
         }
 
         [Theory]

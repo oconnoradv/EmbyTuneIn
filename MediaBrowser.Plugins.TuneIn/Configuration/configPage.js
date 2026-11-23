@@ -163,6 +163,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             instance.selectionDeletionPending = true;
             deleteDialog.close();
             renderSaved();
+            setupChanged(instance);
         });
         confirmDeletion.className += ' tuneInSelectorConfirmDeletion';
         var cancelDeletion = button('Cancel', function () {
@@ -211,6 +212,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 instance.config[spec[3]] = modeControl.value;
                 picker.hidden = modeControl.value !== 'selected';
                 columns.setAttribute('data-mode', modeControl.value);
+                setupChanged(instance);
                 if (!picker.hidden) return showChoices();
                 root.open = false;
             });
@@ -284,6 +286,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     instance.config[spec[1]] = list.concat(item.Id);
                 }
                 renderSaved();
+                setupChanged(instance);
                 feedback.textContent = 'Selected: ' + (item.Path || item.Name || item.Id);
                 return;
             }
@@ -298,6 +301,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 instance.config[spec[1]] = list;
             }
             renderSaved();
+            setupChanged(instance);
             feedback.textContent = 'Selected: ' + item.Path;
         }
 
@@ -407,6 +411,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         columns.appendChild(picker);
         columns.appendChild(savedColumn);
         section.appendChild(columns);
+        var validation = document.createElement('span');
+        validation.className = 'fieldDescription';
+        validation.setAttribute('role', 'status');
+        validation.hidden = true;
+        heading.appendChild(validation);
+        instance.selectorErrors.set(spec[0], validation);
         renderSaved();
         return section;
     }
@@ -418,6 +428,85 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function browsingSelected(instance) {
         return instance.view.querySelector('.configurationCompleted').checked;
+    }
+
+    function setupErrors(instance) {
+        var errors = {};
+        if (!instance.config || !browsingSelected(instance)) return errors;
+        var enabled = function (key) {
+            var control = instance.view.querySelector('[data-category="' + key + '"]');
+            return !!control && control.checked;
+        };
+        selectors.forEach(function (spec) {
+            var key = { language: 'EnableLanguage', location: 'EnableLocation', music: 'EnableMusic',
+                talk: 'EnableTalk', sports: 'EnableSports', podcast: 'EnablePodcasts', local: 'EnableLocalRadio' }[spec[0]];
+            if (!enabled(key) || selectorMode(instance, spec) !== 'selected') return;
+            if (spec[0] === 'local' && instance.view.querySelector('.localSource').value !== 'regions') return;
+            var pattern = spec[0] === 'language' ? /^l[1-9][0-9]{0,9}$/
+                : spec[0] === 'local' || spec[0] === 'location' ? /^r[1-9][0-9]{0,9}$/
+                : /^[cg][1-9][0-9]{0,9}$/;
+            var valid = (instance.config[spec[1]] || []).some(function (choice) {
+                return spec[4] ? choice && choice.Enabled !== false && pattern.test(choice.Id)
+                    : pattern.test(choice);
+            });
+            if (!valid) errors[spec[0]] = 'Add a valid ' + spec[2] + ' choice or choose All.';
+        });
+        if (enabled('EnableLocalRadio')) {
+            var source = instance.view.querySelector('.localSource').value;
+            var parts = instance.view.querySelector('.txtLatLon').value.trim().split(',');
+            var validCoordinates = parts.length === 2 && parts.every(function (part) {
+                return /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(part.trim()) && isFinite(Number(part));
+            }) && Math.abs(Number(parts[0])) <= 90 && Math.abs(Number(parts[1])) <= 180;
+            if (source !== 'regions' && source !== 'coordinates')
+                errors.local = 'Choose coordinates or regions for Local Radio.';
+            else if (source === 'coordinates' && !validCoordinates)
+                errors.local = 'Enter finite latitude (-90..90), longitude (-180..180), separated by a comma.';
+        }
+        if (enabled('EnableFavorites') && !instance.view.querySelector('.txtUsername').value.trim())
+            errors.presets = 'Enter a TuneIn username for My Favorites.';
+        return errors;
+    }
+
+    function renderReadiness(instance) {
+        if (!instance.config || !instance.setupControlsReady) return;
+        var view = instance.view;
+        var status = instance.refreshStatus;
+        var errors = setupErrors(instance);
+        var enabledCount = categories.filter(function (spec) {
+            return view.querySelector('[data-category="' + spec[0] + '"]').checked;
+        }).length;
+        var filtering = browsingSelected(instance);
+        var eligible = filtering && enabledCount > Object.keys(errors).length;
+        var requirements = filtering && enabledCount > 0 && !Object.keys(errors).length;
+        var saved = instance.setupSaved && !instance.setupDirty;
+        function item(selector, ready, text) {
+            var element = view.querySelector(selector);
+            element.textContent = (ready ? 'Ready: ' : 'Needed: ') + text;
+            element.setAttribute('data-ready', String(!!ready));
+        }
+        item('.readinessFiltering', filtering, filtering ? 'Station filtering enabled' : 'Enable TuneIn Station Filtering');
+        item('.readinessCategory', eligible, eligible ? 'An eligible category is enabled' : 'Enable an eligible audio category');
+        item('.readinessRequirements', requirements, requirements ? 'Category requirements configured' : 'Complete the category requirements below');
+        item('.readinessSaved', saved, saved ? 'Settings saved' : 'Save your settings');
+        var channel = status && status.ChannelRegistered;
+        item('.readinessChannel', channel === true, channel === true ? 'TuneIn channel registered'
+            : channel === false ? 'TuneIn channel not registered yet; restart Emby and check plugin registration'
+            : 'Waiting to check TuneIn channel registration');
+        view.querySelector('.tuneInReadiness').hidden = !!(status && status.HasCompleteBaseline);
+        instance.selectorErrors.forEach(function (element, key) {
+            element.textContent = errors[key] ? ': ' + errors[key] : '';
+            element.hidden = !errors[key];
+        });
+        [['.localValidation', 'local'], ['.favoritesValidation', 'presets']].forEach(function (entry) {
+            var element = view.querySelector(entry[0]);
+            element.textContent = errors[entry[1]] || '';
+            element.hidden = !errors[entry[1]];
+        });
+    }
+
+    function setupChanged(instance) {
+        instance.setupDirty = true;
+        renderReadiness(instance);
     }
 
     function showSaveHistory(instance, saved, filteringConfigured) {
@@ -443,6 +532,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.hideRegionalGenres').disabled = catalogDisabled;
         instance.view.querySelector('.allowPartialCatalogImport').disabled = catalogDisabled;
         instance.view.querySelector('.apiRequestIntervalSeconds').disabled = catalogDisabled;
+        instance.view.querySelector('.maximumRateLimitWaitMinutes').disabled = catalogDisabled;
         instance.view.querySelector('.importDeadlineHours').disabled = catalogDisabled;
         instance.view.querySelector('.discoveryDeadlineHours').disabled = catalogDisabled;
         instance.view.querySelector('.maxStationCount').disabled = catalogDisabled;
@@ -678,6 +768,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var previousStatus = instance.refreshStatus;
         instance.refreshStatus = status;
         renderCatalogRefreshPrompt(instance);
+        renderReadiness(instance);
         var category = ({ local: 'Local Radio', music: 'Music', language: 'By Language', location: 'By Location',
             talk: 'Talk', sports: 'Sports', podcast: 'Podcasts', presets: 'My Favorites' })[status.Category];
         var elapsed = formatDuration(elapsedSeconds(status));
@@ -813,6 +904,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var categories = status.Categories || [];
         var note = '';
         if (!categories.length) note = 'No categories are enabled in the saved browsing settings.';
+        else if (status.ChannelRegistered === false)
+            note = 'TuneIn channel not registered yet. Restart Emby and check that the plugin is installed.';
+        else if (categories.length > 1 && status.HasCompleteBaseline === false)
+            note = 'Run Refresh all enabled categories to complete the initial baseline before refreshing a single category.';
         else if (status.DirtyCategory && !status.Busy) {
             var dirty = categories.find(function (category) { return category.Category === status.DirtyCategory; });
             if (dirty) note = dirty.Name + ' was interrupted. You can retry it or prioritize another category.';
@@ -833,7 +928,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 counts.className = 'tuneInStationCounts';
                 counts.setAttribute('aria-label', item.Name + ' station counts');
                 var countValues = {};
-                [['available', 'Available (filtered)'], ['emby', 'In Emby']]
+                [['available', 'Available (filtered)'], ['emby', 'In Emby'], ['missing', 'Not in latest discovery']]
                     .forEach(function (metric) {
                         var group = document.createElement('div');
                         var label = document.createElement('dt');
@@ -896,6 +991,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             values.emby.textContent = metrics.EmbyCountError
                 ? (knownInventory ? count(metrics.EmbyStations) + ' (last known)' : 'Unavailable')
                 : count(metrics.EmbyStations);
+            values.missing.textContent = metrics.AvailablePartial || metrics.EmbyCountError
+                ? 'Unavailable' : count(metrics.NotInLatestDiscovery);
+            values.missing.setAttribute('title', 'Emby stations absent from the latest complete comparable discovery. Unavailable for partial discoveries or failed inventory checks.');
             values.available.setAttribute('title', metrics.AvailableCheckedUtc
                 ? 'Discovery checked at ' + new Date(metrics.AvailableCheckedUtc).toLocaleString()
                     + (metrics.AvailablePartial ? '; skipped branches make this a lower bound.' : '')
@@ -1138,6 +1236,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var cannotStart = !available || !instance.config || !!instance.refreshAction || instance.saving ||
             instance.cleanupBusy || instance.cleanupAction;
         var status = instance.refreshStatus;
+        cannotStart = cannotStart || !!(status && status.ChannelRegistered === false);
         instance.refreshAvailable = available;
         var queued = status && status.QueuedRequests || [];
         function blocked(key) {
@@ -1149,7 +1248,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.refreshLogButton').disabled = !available || !hasRefreshReport(status)
             || status.Busy || !status.FinishedUtc || !!instance.refreshAction || !!instance.refreshLogAction;
         instance.refreshCategoryRows.forEach(function (row, category) {
-            row.control.disabled = blocked(category);
+            row.control.disabled = blocked(category) || !!(status && status.HasCompleteBaseline === false
+                && (status.Categories || []).length > 1);
         });
         var cannotClean = !available || !!instance.refreshBusy || !!instance.refreshAction || !!instance.saving ||
             !!instance.lockChanging || !!instance.cleanupBusy || !!instance.cleanupAction;
@@ -1236,6 +1336,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             if (epoch === instance.viewEpoch && generation === (instance.refreshGeneration || 0)) renderRefresh(instance, status);
         }).catch(function () {
             if (epoch === instance.viewEpoch && generation === (instance.refreshGeneration || 0)) {
+                instance.refreshStatus = null;
+                renderReadiness(instance);
                 setRefreshOutcome(instance, '', 'status unavailable');
                 instance.view.querySelector('.refreshStatus').textContent = 'Could not read refresh status. Retrying automatically.';
                 instance.view.querySelector('.refreshCategoryNote').textContent = '';
@@ -1322,6 +1424,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             return false;
         }
         var discoveryDeadline = String(instance.view.querySelector('.discoveryDeadlineHours').value || '').trim();
+        var maximumRateLimitWait = String(instance.view.querySelector('.maximumRateLimitWaitMinutes').value || '').trim();
+        if (!/^[0-9]+$/.test(maximumRateLimitWait) || Number(maximumRateLimitWait) < 5 || Number(maximumRateLimitWait) > 60) {
+            message(instance, 'Use a whole number from 5 to 60 for the maximum rate-limit wait per refresh.');
+            return false;
+        }
         if (!/^[0-9]+$/.test(discoveryDeadline) || Number(discoveryDeadline) < 1 || Number(discoveryDeadline) > 10) {
             message(instance, 'Use a whole number from 1 to 10 for the discovery deadline.');
             return false;
@@ -1343,6 +1450,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         }
         var localEnabled = instance.view.querySelector('[data-category="EnableLocalRadio"]').checked;
         var browsing = browsingSelected(instance);
+        var setupProblems = setupErrors(instance);
+        renderReadiness(instance);
+        if (browsing && Object.keys(setupProblems).length) {
+            message(instance, Object.keys(setupProblems).map(function (key) { return setupProblems[key]; }).join(' '));
+            return false;
+        }
         var source = instance.view.querySelector('.localSource').value;
         var useCoordinates = localEnabled && source === 'coordinates';
         var localSelectionMode = selectorMode(instance, selectors[6]);
@@ -1366,6 +1479,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         config.Username = instance.view.querySelector('.txtUsername').value.trim() || null;
         config.LatLon = coordinates || null;
         config.ApiRequestIntervalSeconds = Number(requestInterval);
+        config.MaximumRateLimitWaitMinutes = Number(maximumRateLimitWait);
         config.ImportDeadlineHours = Number(importDeadline);
         config.DiscoveryDeadlineHours = Number(discoveryDeadline);
         config.MaxStationCount = maxStationCount === '' ? null : Number(maxStationCount);
@@ -1390,6 +1504,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         loading.show();
         ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
             if (epoch === instance.viewEpoch) {
+                instance.setupSaved = true;
+                instance.setupDirty = false;
                 showSaveHistory(instance, true, !configurationRequired(config));
                 instance.savedFilteringConfig = JSON.parse(JSON.stringify(config));
                 if (filteringChanged) {
@@ -1402,6 +1518,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     deletionNotice.hidden = false;
                 }
                 instance.selectionDeletionPending = false;
+                renderReadiness(instance);
             }
             return writeSettingsLock(true).then(function () {
                 instance.settingsLocked = true;
@@ -1439,12 +1556,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.maintenanceSection = view.querySelector('.maintenanceSummary').parentNode;
         instance.refreshCategoryRows = new Map();
         instance.refreshSchedules = new Map();
+        instance.selectorErrors = new Map();
+        instance.setupControlsReady = false;
         ['.globalSummary', '.browsingSummary', '.categoriesSummary', '.stationSelectionsSummary', '.maintenanceSummary'].forEach(function (selector) {
             bindDisclosure(view.querySelector(selector));
         });
         bindDisclosure(view.querySelector('.refreshSummary'), function () { instance.refreshDefaultPending = false; });
         view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });
-        view.querySelector('.configurationCompleted').addEventListener('change', function () { editing(instance); });
+        view.querySelector('.configurationCompleted').addEventListener('change', function () { editing(instance); setupChanged(instance); });
         var dialog = view.querySelector('.tuneInRefreshRecoveryDialog');
         instance.refreshSection.addEventListener('toggle', function () {
             if (!instance.refreshSection.open && dialog.open) dialog.close();
@@ -1456,6 +1575,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             pollStatus(instance, instance.viewEpoch);
         });
         view.querySelector('form').addEventListener('submit', onSubmit.bind(this));
+        view.querySelector('form').addEventListener('input', function () { setupChanged(instance); });
+        view.querySelector('form').addEventListener('change', function () { setupChanged(instance); });
         view.querySelector('.refreshStart').addEventListener('click', function () { return doRefresh(instance, 'Start'); });
         view.querySelector('.refreshCancel').addEventListener('click', function () { return doRefresh(instance, 'Cancel'); });
         view.querySelector('.refreshLogButton').addEventListener('click', function () { return retrieveRefreshLog(instance); });
@@ -1553,6 +1674,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.refreshLogMessage').textContent = '';
         instance.refreshLogAction = null;
         instance.config = null;
+        instance.refreshStatus = null;
+        instance.view.querySelector('.tuneInReadiness').hidden = true;
+        instance.setupControlsReady = false;
+        instance.selectorErrors.clear();
         instance.settingsLocked = undefined;
         instance.lockError = '';
         instance.loadingConfig = true;
@@ -1576,6 +1701,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.txtLatLon').value = config.LatLon || '';
             view.querySelector('.apiRequestIntervalSeconds').value =
                 config.ApiRequestIntervalSeconds == null ? 3 : Math.min(config.ApiRequestIntervalSeconds, 30);
+            view.querySelector('.maximumRateLimitWaitMinutes').value =
+                config.MaximumRateLimitWaitMinutes == null ? 15 : config.MaximumRateLimitWaitMinutes;
             view.querySelector('.importDeadlineHours').value =
                 config.ImportDeadlineHours == null ? 8 : config.ImportDeadlineHours;
             view.querySelector('.discoveryDeadlineHours').value =
@@ -1597,12 +1724,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.configurationCompleted').checked = config.SchemaVersion === 1 ?
                 !!config.ConfigurationCompleted : config.SchemaVersion === 0 || config.SchemaVersion == null;
             var saved = config.SettingsSaved === true || (config.SettingsSaved == null && config.SchemaVersion === 1);
+            instance.setupSaved = saved;
+            instance.setupDirty = false;
             showSaveHistory(instance, saved, saved && !configurationRequired(config));
             var list = view.querySelector('.categories');
             list.textContent = '';
             categories.forEach(function (spec) {
                 var row = document.createElement('div');
-                var control = checkbox(spec[1], !!config[spec[0]]);
+                var control = checkbox(spec[1], !!config[spec[0]], function () { setupChanged(instance); });
                 control.input.setAttribute('data-category', spec[0]);
                 row.appendChild(control.label);
                 list.appendChild(row);
@@ -1612,6 +1741,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             selectors.forEach(function (spec) {
                 pickerList.appendChild(createSelector(instance, spec, !saved));
             });
+            instance.setupControlsReady = true;
+            renderReadiness(instance);
             $(view).trigger('create');
             message(instance, browsingStatus(config) + (ambiguous && config.EnableLocalRadio ?
                 ' Local Radio is disabled until you choose one source and save.' : ''), configurationRequired(config));

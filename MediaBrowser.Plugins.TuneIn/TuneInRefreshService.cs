@@ -90,6 +90,7 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             EnsureAdmin();
             var status = refresh.Status();
+            status.ChannelRegistered = refresh.ChannelRegistered();
             status.SettingsLocked = Plugin.Instance.SettingsLock.TryReadStatus();
             status.ArtworkPacks = TuneInCategoryArtwork.Scopes.Select(TuneInCategoryArtwork.ReadPackStatus).ToArray();
             var artworkPack = status.ArtworkPacks[0];

@@ -125,7 +125,7 @@ namespace MediaBrowser.Plugins.TuneIn
             internal CancellationToken Token { get; }
         }
 
-        internal int? CountCategoryStations(string folderId, CancellationToken token)
+        internal HashSet<string> CategoryStationIds(string folderId, CancellationToken token)
         {
             if (library == null) return null;
             var snapshot = directory.Snapshot();
@@ -138,7 +138,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 ExternalId = folderId, IsFolder = true, Limit = 2
             }, token);
             if (roots.Length > 1) throw new InvalidOperationException("TuneIn category folder is ambiguous.");
-            if (roots.Length == 0) return 0;
+            if (roots.Length == 0) return new HashSet<string>(StringComparer.Ordinal);
             var items = library.GetItemList(new InternalItemsQuery
             {
                 ParentIds = new[] { roots[0].InternalId }, Recursive = true, IsFolder = false,
@@ -155,8 +155,11 @@ namespace MediaBrowser.Plugins.TuneIn
                     stations.Add(entry.StationId);
             }
             directory.CheckCurrent(snapshot, token);
-            return stations.Count;
+            return stations;
         }
+
+        internal int? CountCategoryStations(string folderId, CancellationToken token) =>
+            CategoryStationIds(folderId, token)?.Count;
 
         internal TuneInCategorySnapshot ReadCategorySnapshot(ConfigurationSnapshot snapshot, string category, CancellationToken token,
             TuneInCategorySnapshot previous = null)

@@ -63,6 +63,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public bool AvailablePartial { get; set; }
         public DateTime? AvailableCheckedUtc { get; set; }
         public int? EmbyStations { get; set; }
+        public int? NotInLatestDiscovery { get; set; }
         public DateTime? EmbyCheckedUtc { get; set; }
         public string EmbyCountError { get; set; }
         internal TuneInStationCounts Copy() => (TuneInStationCounts)MemberwiseClone();
@@ -91,6 +92,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public List<string> PendingCategories { get; set; } = new List<string>();
         public List<string> CleanedCategories { get; set; } = new List<string>();
         public bool NeedsImport { get; set; }
+        public bool? CompleteBaseline { get; set; }
     }
 
     internal sealed class TuneInRefreshStore
@@ -240,6 +242,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     || category.StationCounts?.AvailableStations > TuneInStagedImport.MaxItems
                     || category.StationCounts?.EmbyStations < 0
                     || category.StationCounts?.EmbyStations > TuneInStagedImport.MaxItems
+                    || category.StationCounts?.NotInLatestDiscovery < 0
+                    || category.StationCounts?.NotInLatestDiscovery > TuneInStagedImport.MaxItems
                     || (category.StationCounts?.EmbyCountError?.Length ?? 0) > 100
                     || category.Fingerprint?.Length != 64)
                 || checkpoint.Categories.Select(category => category.Category).Distinct().Count() != checkpoint.Categories.Count
@@ -286,6 +290,8 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly HashSet<string> liveOnlyPages = new HashSet<string>(StringComparer.Ordinal);
         private readonly Dictionary<string, TaskCompletionSource<bool>> pending = new Dictionary<string, TaskCompletionSource<bool>>();
         private readonly AsyncLocal<FolderRead> currentFolder = new AsyncLocal<FolderRead>();
+        // The pacer reports actual dispatch and response order, not when a fetch first queued.
+        private static readonly AsyncLocal<RequestAttempt> currentRequest = new AsyncLocal<RequestAttempt>();
         private readonly Func<DateTime> clock;
         private readonly TimeSpan lifetime;
         private readonly Action<bool> requested;
@@ -297,11 +303,21 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly int maxPages;
         private readonly int maxBytes;
         private long cachedBytes;
-        private int rateLimitRetriesRemaining;
+        private readonly bool retryRateLimit;
+        private int consecutiveRateLimits;
+        private long rateLimitGeneration;
         internal int SkippedBrowseLinks { get; private set; }
         internal int SkippedStationUrls { get; private set; }
         internal int PageCount { get { lock (gate) return pages.Count; } }
         internal TuneInRefreshTimings Timings { get; }
+        private sealed class RequestAttempt
+        {
+            internal Action Started;
+            internal Action<int> Received;
+        }
+
+        internal static void MarkRequestStarted() => currentRequest.Value?.Started();
+        internal static void MarkResponseReceived(int statusCode) => currentRequest.Value?.Received(statusCode);
 
         internal sealed class FolderRead
         {
@@ -336,7 +352,7 @@ namespace MediaBrowser.Plugins.TuneIn
             this.recentPages = (recentPages ?? Enumerable.Empty<TuneInCachedPage>())
                 .ToDictionary(page => page.Key, StringComparer.Ordinal);
             Timings = timings;
-            rateLimitRetriesRemaining = retryRateLimit ? 3 : 0;
+            this.retryRateLimit = retryRateLimit;
             foreach (var page in cached ?? Enumerable.Empty<TuneInCachedPage>())
                 if (Fresh(page)) CachePage(page);
         }
@@ -467,19 +483,51 @@ namespace MediaBrowser.Plugins.TuneIn
                 token.ThrowIfCancellationRequested();
                 requested?.Invoke(false);
                 var elapsed = Timings == null ? null : Stopwatch.StartNew();
+                long generation;
+                var rateLimitRecorded = false;
+                var rateLimitAllowed = false;
+                lock (gate) generation = rateLimitGeneration;
                 try
                 {
+                    currentRequest.Value = new RequestAttempt
+                    {
+                        Started = () => { lock (gate) generation = rateLimitGeneration; },
+                        Received = code =>
+                        {
+                            if (code != 429) return;
+                            lock (gate)
+                            {
+                                rateLimitRecorded = true;
+                                rateLimitGeneration++;
+                                rateLimitAllowed = ++consecutiveRateLimits <= 6;
+                            }
+                        }
+                    };
                     document = await fetch().ConfigureAwait(false);
+                    lock (gate)
+                        if (generation == rateLimitGeneration) consecutiveRateLimits = 0;
                     break;
                 }
                 catch (TuneInProviderResponseException failure)
                 {
                     received?.Invoke(failure.StatusCode);
-                    if (failure.StatusCode != 429 || Interlocked.Decrement(ref rateLimitRetriesRemaining) < 0)
-                        throw;
+                    if (failure.StatusCode != 429 || !retryRateLimit) throw;
+                    lock (gate)
+                    {
+                        if (!rateLimitRecorded)
+                        {
+                            rateLimitGeneration++;
+                            rateLimitAllowed = ++consecutiveRateLimits <= 6;
+                        }
+                        if (!rateLimitAllowed) throw;
+                    }
                     rateLimitRetry?.Invoke();
                 }
-                finally { if (Timings != null) lock (Timings.Gate) Timings.Fetch += elapsed.Elapsed; }
+                finally
+                {
+                    currentRequest.Value = null;
+                    if (Timings != null) lock (Timings.Gate) Timings.Fetch += elapsed.Elapsed;
+                }
             }
             token.ThrowIfCancellationRequested();
             var bytes = Encoding.UTF8.GetBytes(document.ToString(SaveOptions.DisableFormatting));

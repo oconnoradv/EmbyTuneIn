@@ -609,6 +609,17 @@
             <p class="status" role="status" aria-live="polite"></p>
             <p class="status stationDeletionNotice" role="status" aria-live="polite" hidden></p>
             <p class="status catalogRefreshPrompt" role="status" hidden></p>
+            <section class="tuneInReadiness" aria-label="First catalog refresh readiness" hidden>
+                <strong>First catalog refresh</strong>
+                <ul>
+                    <li class="readinessFiltering"></li>
+                    <li class="readinessCategory"></li>
+                    <li class="readinessRequirements"></li>
+                    <li class="readinessSaved"></li>
+                    <li class="readinessChannel"></li>
+                </ul>
+                <p class="fieldDescription">Saving locks settings but does not start a refresh. Start the first refresh manually. Emby's Refresh Internet Channels task does not need to run first.</p>
+            </section>
             <div class="tuneInSection tuneInSectionBox tuneInGlobalPanel">
             <details class="tuneInSection tuneInGlobal" open>
                 <summary class="globalSummary">Global TuneIn Settings</summary>
@@ -619,6 +630,7 @@
                             <div class="inputContainer">
                                 <input type="text" is="emby-input" class="txtUsername" label="TuneIn User:" maxlength="128" aria-describedby="tuneInUsernameHint" />
                                 <div class="fieldDescription" id="tuneInUsernameHint">Your TuneIn username is only used for My Favorites.</div>
+                                <p class="favoritesValidation fieldDescription" role="status" hidden></p>
                             </div>
                             <div class="selectContainer">
                                 <select is="emby-select" class="localSource" label="Local Radio source:">
@@ -627,6 +639,7 @@
                                     <option value="coordinates">Coordinates</option>
                                 </select>
                                 <div class="fieldDescription">When Local Radio is enabled, choose one source. Switching sources keeps your saved regions and coordinate text.</div>
+                                <p class="localValidation fieldDescription" role="status" hidden></p>
                             </div>
                             <div class="inputContainer">
                                 <input type="text" is="emby-input" class="txtLatLon" label="Your LatLon:" />
@@ -699,6 +712,12 @@
                                 <input id="tuneInApiInterval" type="number" class="apiRequestIntervalSeconds" min="1" max="30" step="1" aria-describedby="tuneInApiIntervalHint" required disabled />
                             </div>
                             <div class="fieldDescription" id="tuneInApiIntervalHint">Minimum delay between TuneIn API request starts: 1 to 30 seconds (default: 3). TuneIn retry delays are always honored.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label for="tuneInMaximumRateLimitWait">Maximum rate-limit wait per refresh (minutes):</label>
+                            <input id="tuneInMaximumRateLimitWait" type="number" class="maximumRateLimitWaitMinutes" min="5" max="60" step="1" required aria-describedby="tuneInMaximumRateLimitWaitHint" disabled />
+                            <div class="fieldDescription" id="tuneInMaximumRateLimitWaitHint">Total time this refresh may spend waiting after TuneIn rate limits, including Retry-After delays.</div>
+                            <div class="fieldDescription">5 to 60 minutes (default: 15).</div>
                         </div>
                         <div class="inputContainer">
                             <div class="tuneInApiIntervalRow">
@@ -784,7 +803,7 @@
                 <pre class="refreshFailureLog" aria-label="Latest refresh diagnostic report" aria-describedby="tuneInReportHint" tabindex="0" hidden></pre>
             <section class="tuneInSectionBox" aria-labelledby="tuneInLibraryRefreshTitle">
                 <h3 id="tuneInLibraryRefreshTitle">TuneIn Library Refresh</h3>
-                <p class="fieldDescription">Choose a refresh interval next to a category, then select Save above. Off keeps that category manual only.</p>
+                <p class="fieldDescription">Choose a refresh interval next to a category, then select Save above. Off keeps that category manual only. Schedules start after the first complete manual baseline.</p>
                 <p class="fieldDescription">Distinct stations at the last category refresh. Available uses saved filters; Partial is a lower bound. In Emby checks the library.</p>
                 <p class="refreshCategoryNote" role="status"></p>
                 <ul class="tuneInRefreshCategories" aria-label="Category refresh status"></ul>

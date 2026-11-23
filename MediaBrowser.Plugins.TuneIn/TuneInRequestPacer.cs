@@ -12,6 +12,38 @@ namespace MediaBrowser.Plugins.TuneIn
 {
     internal sealed class TuneInRefreshTimings
     {
+        internal TuneInRefreshTimings(TimeSpan? rateLimitBudget = null)
+        {
+            RateLimitBudget = rateLimitBudget ?? TimeSpan.MaxValue;
+        }
+
+        internal readonly TimeSpan RateLimitBudget;
+        internal TimeSpan RateLimitWait;
+        internal DateTime? RateLimitWaitStarted;
+        internal DateTime RateLimitWaitUntil;
+        internal int RateLimitQueued;
+
+        internal void UpdateRateLimitWait(DateTime now, DateTime until)
+        {
+            if (RateLimitWaitStarted.HasValue)
+            {
+                var end = now < RateLimitWaitUntil ? now : RateLimitWaitUntil;
+                if (end > RateLimitWaitStarted.Value)
+                    RateLimitWait += end - RateLimitWaitStarted.Value;
+                RateLimitWaitStarted = null;
+            }
+            if (RateLimitQueued > 0 && until > now)
+            {
+                RateLimitWaitStarted = now;
+                RateLimitWaitUntil = until;
+            }
+        }
+
+        internal bool RateLimitWaitExceedsBudget(DateTime now) =>
+            RateLimitWait > RateLimitBudget
+            || RateLimitWaitStarted.HasValue
+                && RateLimitWaitUntil - now > RateLimitBudget - RateLimitWait;
+
         internal readonly object Gate = new object();
         internal TimeSpan PacerQueue;
         internal TimeSpan Pacing;
@@ -55,10 +87,13 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Func<TimeSpan, CancellationToken, Task> delay;
         private DateTime nextRequestUtc;
         private DateTime retryNotBeforeUtc;
+        private DateTime rateLimitNotBeforeUtc;
+        private readonly HashSet<TuneInRefreshTimings> queuedRefreshes = new HashSet<TuneInRefreshTimings>();
         private DateTime lastRequestUtc;
         private int catalogueIntervalSeconds;
         private int consecutiveCatalogueRateLimits;
         private int consecutiveCatalogueSuccesses;
+        private long catalogueRateLimitGeneration;
 
         internal TuneInRequestPacer(Func<DateTime> clock = null,
             Func<TimeSpan, CancellationToken, Task> delay = null)
@@ -74,10 +109,17 @@ namespace MediaBrowser.Plugins.TuneIn
             var parallel = catalogueRequest && timings != null;
             Task<HttpResponseInfo> request;
             TimeSpan interval;
+            long requestGeneration = 0;
             LinkedListNode<bool> turn;
             lock (gate)
             {
                 turn = (catalogueRequest ? catalogue : playback).AddLast(parallel);
+                if (catalogueRequest && timings != null)
+                {
+                    timings.RateLimitQueued++;
+                    queuedRefreshes.Add(timings);
+                    timings.UpdateRateLimitWait(clock(), rateLimitNotBeforeUtc);
+                }
                 SignalWaiters();
             }
             try
@@ -90,6 +132,13 @@ namespace MediaBrowser.Plugins.TuneIn
                     lock (gate)
                     {
                         token.ThrowIfCancellationRequested();
+                        if (catalogueRequest && timings != null)
+                        {
+                            var current = clock();
+                            timings.UpdateRateLimitWait(current, rateLimitNotBeforeUtc);
+                            if (timings.RateLimitWaitExceedsBudget(current))
+                                throw new TuneInRateLimitWaitExceededException();
+                        }
                         interval = TimeSpan.FromSeconds(Math.Min(PluginConfiguration.MaxApiRequestIntervalSeconds,
                             Math.Max(PluginConfiguration.MinApiRequestIntervalSeconds,
                                 Math.Max(intervalSeconds, catalogueRequest ? catalogueIntervalSeconds : 0))));
@@ -115,6 +164,8 @@ namespace MediaBrowser.Plugins.TuneIn
                                 nextRequestUtc = now + interval;
                                 if (catalogueRequest)
                                 {
+                                    TuneInCatalogueSession.MarkRequestStarted();
+                                    requestGeneration = catalogueRateLimitGeneration;
                                     activeCatalogue++;
                                     parallelCatalogueActive = parallel;
                                     playbackBurst = 0;
@@ -125,6 +176,7 @@ namespace MediaBrowser.Plugins.TuneIn
                                     playbackBurst = catalogue.Count == 0 ? 0 : Math.Min(PlaybackBurst, playbackBurst + 1);
                                 }
                                 turn.List.Remove(turn);
+                                RemoveQueuedRefresh(timings, catalogueRequest);
                                 SignalWaiters();
                                 try { request = send(); }
                                 catch (Exception error) { request = Task.FromException<HttpResponseInfo>(error); }
@@ -180,6 +232,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (turn.List != null)
                     {
                         turn.List.Remove(turn);
+                        RemoveQueuedRefresh(timings, catalogueRequest);
                         if (catalogue.Count == 0) playbackBurst = 0;
                         SignalWaiters();
                     }
@@ -191,12 +244,22 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 lock (gate)
                 {
-                    ObserveResponse(response, catalogueRequest, intervalSeconds, (int)interval.TotalSeconds);
+                    ObserveResponse(response, catalogueRequest, intervalSeconds, (int)interval.TotalSeconds, requestGeneration);
+                    if (catalogueRequest && response != null)
+                        TuneInCatalogueSession.MarkResponseReceived((int)response.StatusCode);
                     if (catalogueRequest) activeCatalogue--;
                     else activePlayback = false;
                     SignalWaiters();
                 }
             }
+        }
+
+        private void RemoveQueuedRefresh(TuneInRefreshTimings timings, bool catalogueRequest)
+        {
+            if (!catalogueRequest || timings == null) return;
+            timings.RateLimitQueued--;
+            timings.UpdateRateLimitWait(clock(), rateLimitNotBeforeUtc);
+            if (timings.RateLimitQueued == 0) queuedRefreshes.Remove(timings);
         }
 
         private void SignalWaiters()
@@ -209,7 +272,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private static TaskCompletionSource<bool> NewSlotSignal() =>
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        private void ObserveResponse(HttpResponseInfo response, bool catalogueRequest, int configured, int interval)
+        private void ObserveResponse(HttpResponseInfo response, bool catalogueRequest, int configured, int interval, long requestGeneration)
         {
     var code = response == null ? 0 : (int)response.StatusCode;
     if (code == 429 || code == 503)
@@ -220,6 +283,7 @@ namespace MediaBrowser.Plugins.TuneIn
         var retryAt = RetryAt(retryAfter, now);
         if (catalogueRequest && code == 429)
         {
+            catalogueRateLimitGeneration++;
             catalogueIntervalSeconds = Math.Min(PluginConfiguration.MaxApiRequestIntervalSeconds,
                 Math.Max(catalogueIntervalSeconds, interval * 2));
             consecutiveCatalogueRateLimits = Math.Min(3, consecutiveCatalogueRateLimits + 1);
@@ -228,11 +292,18 @@ namespace MediaBrowser.Plugins.TuneIn
         }
         if (code == 429 || retryAt.HasValue) serialCatalogue = true;
         if (retryAt.HasValue && retryAt.Value > retryNotBeforeUtc) retryNotBeforeUtc = retryAt.Value;
+        if (code == 429 && retryAt.HasValue && retryAt.Value > rateLimitNotBeforeUtc)
+        {
+            rateLimitNotBeforeUtc = retryAt.Value;
+            foreach (var queued in queuedRefreshes)
+                queued.UpdateRateLimitWait(now, rateLimitNotBeforeUtc);
+        }
     }
     if (!catalogueRequest) return;
     if (code != 200) { consecutiveCatalogueSuccesses = 0; return; }
     // A response already in flight when throttled must not count as recovery.
-    if (clock() < retryNotBeforeUtc || (serialCatalogue && activeCatalogue > 1)) return;
+    if (requestGeneration != catalogueRateLimitGeneration
+        || clock() < retryNotBeforeUtc || (serialCatalogue && activeCatalogue > 1)) return;
     consecutiveCatalogueRateLimits = 0;
     if ((serialCatalogue || catalogueIntervalSeconds > configured) &&
         ++consecutiveCatalogueSuccesses >= SuccessesBeforeRecovery)
@@ -245,6 +316,7 @@ namespace MediaBrowser.Plugins.TuneIn
             nextRequestUtc = lastRequestUtc.AddSeconds(Math.Max(PluginConfiguration.MinApiRequestIntervalSeconds,
                 Math.Max(configured, catalogueIntervalSeconds)));
         }
+
     }
 }
 
@@ -262,5 +334,12 @@ private static DateTime? RetryAt(string value, DateTime now)
         return date.UtcDateTime;
     return null;
 }
+
+    }
+
+    internal sealed class TuneInRateLimitWaitExceededException : Exception
+    {
+        internal TuneInRateLimitWaitExceededException()
+            : base("TuneIn rate-limit delay exceeds the remaining refresh wait budget.") { }
     }
 }

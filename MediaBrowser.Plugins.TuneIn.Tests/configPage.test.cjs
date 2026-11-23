@@ -47,11 +47,14 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false)
     const form = { addEventListener: (event, handler) => { formHandlers[event] = handler; } };
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon,
         '.apiRequestIntervalSeconds': requestInterval, '.importDeadlineHours': new Element('input'),
+        '.maximumRateLimitWaitMinutes': new Element('input'),
         '.discoveryDeadlineHours': new Element('input'), '.maxStationCount': new Element('input'),
         '.traversalDepthLimit': new Element('input') };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.allowDirectHlsPlayback', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
+        '.tuneInReadiness', '.readinessFiltering', '.readinessCategory', '.readinessRequirements',
+        '.readinessSaved', '.readinessChannel', '.favoritesValidation', '.localValidation',
         '.channelScheduleConfirm', '.channelScheduleAdjust', '.tuneInPluginVersion',
         ...['Genres', 'Languages', 'Locations'].flatMap(scope =>
             ['Name', 'Images', 'Path', 'Changes'].map(field => `.artwork${scope}${field}`)),
@@ -460,10 +463,29 @@ test('save retains unrelated configuration and converts empty fields to null', a
     assert.equal(app.writes[0].config.SchemaVersion, 1);
     assert.equal(app.writes[0].config.ConfigurationCompleted, true);
     assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 3);
+    assert.equal(app.writes[0].config.MaximumRateLimitWaitMinutes, 15);
     assert.equal(app.writes[0].config.ImportDeadlineHours, 8);
     assert.equal(app.writes[0].config.DiscoveryDeadlineHours, 2);
     assert.equal(app.writes[0].config.EnableCatalogIdentityDiagnostics, false);
     assert.deepEqual(app.notices, ['saved']);
+});
+
+test('rate-limit wait validates and saves the configured budget', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    const field = app.elements['.maximumRateLimitWaitMinutes'];
+    assert.equal(field.value, 15);
+    for (const value of ['4', '61', '5.5']) {
+        field.value = value;
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes.length, 0);
+        assert.match(app.elements['.status'].textContent, /whole number from 5 to 60/);
+    }
+    field.value = '60';
+    app.formHandlers.submit({ preventDefault() {} });
+    assert.equal(app.writes[0].config.MaximumRateLimitWaitMinutes, 60);
 });
 
 test('API request interval validates and saves the shared catalog pacing setting', async () => {
@@ -936,6 +958,104 @@ test('Local Radio All mode accepts the Regions source without saved regions', as
     assert.deepEqual(Array.from(app.writes[0].config.LocalCities || []), []);
 });
 
+test('first-run checklist follows setup and saving without starting a refresh', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: false, SettingsSaved: false });
+    await visit;
+    assert.equal(app.elements['.tuneInReadiness'].hidden, false);
+    assert.equal(app.elements['.readinessFiltering'].attributes['data-ready'], 'false');
+    assert.equal(app.elements['.readinessCategory'].attributes['data-ready'], 'false');
+    assert.equal(app.elements['.readinessSaved'].attributes['data-ready'], 'false');
+    enableBrowsing(app);
+    const talk = app.instance.view.querySelector('[data-category="EnableTalk"]');
+    talk.checked = true;
+    talk.handlers.change();
+    assert.equal(app.elements['.readinessCategory'].attributes['data-ready'], 'true');
+    assert.equal(app.elements['.readinessRequirements'].attributes['data-ready'], 'true');
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.elements['.readinessSaved'].attributes['data-ready'], 'true');
+    assert.ok(app.refresh.every(request => request.options.type === 'GET'));
+    app.formHandlers.input();
+    assert.equal(app.elements['.readinessSaved'].attributes['data-ready'], 'false');
+});
+
+test('enabled Selected only categories require valid saved choices with inline guidance', async () => {
+    for (const [category, mode, list, selector, valid] of [
+        ['EnableLanguage', 'LanguageMode', 'Languages', 'language', { Id: 'l1', Enabled: true }],
+        ['EnableLocation', 'LocationMode', 'Locations', 'location', { Id: 'r1', Enabled: true }],
+        ['EnableMusic', 'MusicMode', 'Music', 'music', { Id: 'g1', Enabled: true }],
+        ['EnableTalk', 'TalkMode', 'TalkIds', 'talk', 'c1'],
+        ['EnableSports', 'SportsMode', 'SportsIds', 'sports', 'c1'],
+        ['EnablePodcasts', 'PodcastsMode', 'PodcastIds', 'podcast', 'c1'],
+        ['EnableLocalRadio', 'LocalMode', 'LocalCities', 'local', { Id: 'r1', Enabled: true }]
+    ]) {
+        const app = harness();
+        const visit = app.instance.onResume();
+        app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, [category]: true,
+            [mode]: 'selected', [list]: [], LocalRadioSource: 'regions' });
+        await visit;
+        const guidance = app.instance.selectorErrors.get(selector);
+        assert.equal(guidance.hidden, false, category);
+        assert.match(guidance.textContent, /Add a valid .* choice or choose All/, category);
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes.length, 0, category);
+        app.instance.config[list] = [valid];
+        app.formHandlers.change();
+        assert.equal(guidance.hidden, true, category);
+        app.formHandlers.submit({ preventDefault() {} });
+        await settle();
+        assert.equal(app.writes.length, 1, category);
+    }
+});
+
+test('Local Radio and Favorites show actionable source and username validation', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true,
+        EnableLocalRadio: true, EnableFavorites: true });
+    await visit;
+    assert.match(app.elements['.localValidation'].textContent, /Choose coordinates or regions/);
+    assert.match(app.elements['.favoritesValidation'].textContent, /username/);
+    app.elements['.localSource'].value = 'coordinates';
+    app.latLon.value = '91,0';
+    app.formHandlers.input();
+    assert.match(app.elements['.localValidation'].textContent, /latitude/);
+    app.latLon.value = '45,-70';
+    app.username.value = 'listener';
+    app.formHandlers.input();
+    assert.equal(app.elements['.localValidation'].hidden, true);
+    assert.equal(app.elements['.favoritesValidation'].hidden, true);
+});
+
+test('first baseline gates individual refresh and distinguishes an unregistered channel', async () => {
+    for (const [baseline, registered, multiple] of [[false, true, true], [true, true, true],
+        [false, false, true], [false, true, false]]) {
+        const app = harness(true);
+        const visit = app.instance.onResume();
+        app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
+        app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, SettingsSaved: true,
+            EnableTalk: true, EnableSports: true });
+        app.refresh[0].resolve({ State: 'NeverRun', Busy: false, SettingsLocked: false,
+            HasCompleteBaseline: baseline, ChannelRegistered: registered,
+            Categories: multiple ? [{ Category: 'talk', Name: 'Talk' }, { Category: 'sports', Name: 'Sports' }]
+                : [{ Category: 'talk', Name: 'Talk' }] });
+        await visit;
+        await settle();
+        assert.equal(app.elements['.tuneInReadiness'].hidden, baseline);
+        assert.equal(app.instance.refreshCategoryRows.get('talk').control.disabled, (!baseline && multiple) || !registered);
+        assert.equal(app.elements['.refreshStart'].disabled, !registered);
+        if (!registered) {
+            assert.match(app.elements['.readinessChannel'].textContent, /not registered yet/);
+            assert.match(app.elements['.refreshCategoryNote'].textContent, /not registered yet/);
+        } else if (!baseline && multiple) {
+            assert.match(app.elements['.refreshCategoryNote'].textContent, /Refresh all enabled categories/);
+        }
+        assert.ok(app.refresh.every(request => request.options.type === 'GET'));
+    }
+});
+
 test('browsing options default checked and preserve saved choices without starting a refresh', async () => {
     for (const enabled of [undefined, false, true]) {
         const app = harness();
@@ -1153,7 +1273,7 @@ test('partial reports survive same-run polls and stale retrievals cannot replace
     app.instance.onPause();
 });
 
-test('category counts show only filtered availability and Emby inventory left of Refresh', async () => {
+test('category counts show availability, inventory and missing discovery left of Refresh', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();
     app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
@@ -1164,7 +1284,7 @@ test('category counts show only filtered availability and Emby inventory left of
             AvailableCheckedUtc: '2026-11-19T10:00:00Z', EmbyCheckedUtc: '2026-11-19T10:05:00Z'
         } },
         { Category: 'sports', Name: 'Sports', State: 'Imported',
-            StationCounts: { AvailableStations: 0, EmbyStations: 0 } },
+            StationCounts: { AvailableStations: 0, EmbyStations: 0, NotInLatestDiscovery: 0 } },
         { Category: 'local', Name: 'Local Radio', State: 'No recorded refresh' },
         { Category: 'presets', Name: 'Favorites', State: 'Imported',
             StationCounts: { AvailableStations: 4, EmbyCountError: '<unsafe> inventory read failed' } },
@@ -1181,11 +1301,11 @@ test('category counts show only filtered availability and Emby inventory left of
     assert.equal(rows[0].childNodes[1].childNodes[1].attributes.is, 'emby-button');
     assert.match(rows[0].childNodes[1].childNodes[1].className, /\braised\b/);
     assert.match(rows[0].childNodes[1].childNodes[1].className, /\bbutton-submit\b/);
-    assert.deepEqual(values(rows[0]).map(value => value.textContent), ['123 (partial)', '145']);
+    assert.deepEqual(values(rows[0]).map(value => value.textContent), ['123 (partial)', '145', 'Unavailable']);
     assert.match(values(rows[0])[0].attributes.title, /lower bound/);
-    assert.deepEqual(values(rows[1]).map(value => value.textContent), ['0', '0']);
-    assert.deepEqual(values(rows[2]).map(value => value.textContent), ['Not checked', 'Not checked']);
-    assert.deepEqual(values(rows[3]).map(value => value.textContent), ['4', 'Unavailable']);
+    assert.deepEqual(values(rows[1]).map(value => value.textContent), ['0', '0', '0']);
+    assert.deepEqual(values(rows[2]).map(value => value.textContent), ['Not checked', 'Not checked', 'Not checked']);
+    assert.deepEqual(values(rows[3]).map(value => value.textContent), ['4', 'Unavailable', 'Unavailable']);
     assert.doesNotMatch(app.elements['.tuneInRefreshCategories'].textContent, /unfiltered|Not measured|Not applicable/i);
     assert.equal(values(rows[3])[1].childNodes.length, 0);
     assert.equal(app.selectors.length, 0);

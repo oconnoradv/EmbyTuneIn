@@ -43,6 +43,11 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 
 Planned: Control Panel localization that follows the user's Emby language.
 
+### Future enhancement possibilities
+
+- Add an interactive GUI in Global Settings to facilitate loading location,
+  language and genre image packs.
+
 ## Install
 
 Download the
@@ -54,8 +59,8 @@ commit and `SHA256SUMS.txt` verifies the files.
    `TuneIn.refresh.xml` (with its `.discovery` and `.recovery` sidecars) and
    `tunein-fork-settings-lock.xml` if present. A full server backup also
    preserves library metadata for rollback.
-2. Replace `MediaBrowser.Plugins.TuneIn.dll` in the plugins folder. Keep one
-   copy only.
+2. Copy `MediaBrowser.Plugins.TuneIn.dll` into the plugins folder, replacing
+   the existing DLL on upgrades. Keep one copy only.
 3. Start Emby and reload the dashboard. If settings look stale, clear the
    client's cached page data.
 
@@ -84,8 +89,28 @@ with stale configuration-bound IDs. If a category refresh runs while Emby's
 
 ## Configure browsing
 
-Open **Advanced → TuneIn** (or **Plugins → TuneIn → Settings**) as an
-administrator, unlock settings, choose categories, and **Save**.
+For a first installation:
+
+1. Open **Advanced → TuneIn** (or **Plugins → TuneIn → Settings**) as an
+   administrator. Wait for refresh status to load and unlock settings if
+   they are locked.
+2. Leave **Enable TuneIn Station Filtering** checked and enable at least one
+   category. Configure its required source or selections as described below.
+3. Select **Save**. Saving locks the settings again but does not start a
+   catalog crawl.
+4. Follow the first-refresh readiness checklist in the Control Panel. Open
+   **Catalog Refresh** and select **Refresh all enabled categories** to build
+   the initial baseline. With multiple categories enabled, individual refresh
+   buttons remain disabled until a complete baseline is established; a partial
+   first discovery does not complete it.
+
+The refresh controls remain unavailable until the filtering settings are
+saved and at least one eligible category is enabled. A refresh also requires
+Emby to have registered the TuneIn channel; if the checklist says it is not
+registered yet, restart Emby and check that the plugin is installed. This is
+separate from configuration errors. The plugin starts the channel import
+itself; running Emby's **Refresh Internet Channels** scheduled task first is
+not required.
 
 | Category | Configuration |
 | --- | --- |
@@ -94,6 +119,10 @@ administrator, unlock settings, choose categories, and **Save**.
 | Talk, Sports, Podcasts | **All**, or **Selected only** topics |
 | My Favorites | A TuneIn username |
 
+- Every enabled **Selected only** category needs at least one valid saved
+  choice. Local Radio needs a valid source; **Selected only** regions also
+  need a saved choice. My Favorites needs a username. Inline messages identify
+  missing requirements before settings can be saved.
 - **Station Selections** groups every selector. In **Selected only**, browse
   in the left column and **Add** choices (up to 100 per selector); saved
   choices appear in the right column. To remove choices, select
@@ -124,6 +153,7 @@ administrator, unlock settings, choose categories, and **Save**.
 | Max Station Count (unique stations per top-level category) | blank (Not set) or 1–4000 | 200 for new configurations |
 | Traversal depth limit (category root is level 0) | 3–50 | 10 |
 | API request interval | 1–30 seconds | 3 |
+| Maximum rate-limit wait per refresh | 5–60 minutes | 15 |
 | Discovery deadline | 1–10 hours | 2 |
 | Import deadline | 1–100 hours | 8 |
 | Enable catalog identity diagnostics | on/off | off |
@@ -158,7 +188,8 @@ In **Catalog Refresh**, select **Refresh** beside a category or
 Choose **Off**, **Every 6 hours**, **Every 12 hours**, **Daily**, **Weekly** or
 **Every 30 days** beside a category and **Save**. Schedules are off by default,
 share the manual queue, and do not replay missed runs. The plugin does not
-create or change Emby Scheduled Tasks. If Emby's **Refresh Internet Channels**
+run schedules until the first baseline is complete, and does not create or
+change Emby Scheduled Tasks. If Emby's **Refresh Internet Channels**
 task also has triggers, a dialog warns that both will run.
 
 ### Partial results
@@ -184,8 +215,12 @@ time, progress, pages fetched and, during import, folders served.
 | --- | --- |
 | Available (filtered) | Distinct stations found by the latest discovery |
 | In Emby | Distinct stations present in the category's Emby folder |
+| Not in latest discovery | Distinct Emby stations absent from the latest complete comparable discovery |
 
-Hover a count for its check time. Failed checks show **last known**.
+Hover a count for its check time. Failed inventory checks show **last known**.
+The comparison is unavailable when discovery is partial or limited, the inventory
+cannot be checked, or no comparable discovery is available. It does not imply
+that a station should be deleted.
 
 **Diagnostics** lists provider requests, cache replays, rate-limit retries,
 checkpoint resumes and skipped links by reason.
@@ -291,24 +326,23 @@ directly.
 
 ## Limits and recovery
 
-A series-based 429 retry budget that resets after successful pages is deferred
-as a future enhancement. This RC2 retains the current three retries per refresh
-and existing cooldowns.
-
 | Limit | Value |
 | --- | --- |
 | Catalog cache per refresh | 60,000 pages, 640 MiB |
 | Discovered category | 1,000,000 items, 1 GiB estimated |
 | Catalog HTTP response | 90 seconds |
 | Concurrent discovery requests | Up to 4, sharing request spacing |
-| HTTP 429 retries per run | 3 (cooldowns of 30, 60 and 120 seconds) |
+| Consecutive HTTP 429 retries | 6; resets after a successful catalog page (cooldowns of 30, 60 and then 120 seconds) |
+| Rate-limit wait per refresh | 5–60 minutes, default 15 |
 | Automatic interruption retries | 3 per refresh |
 | Checkpoint resume window | 48 hours |
 | Playlist | 256 KiB, 8 entries, 4 nested levels |
 | Playback resolution | 30 seconds each for queueing, opening and playlist reads |
 
 - **Rate limits:** TuneIn's `Retry-After` is honored. Rate limiting doubles
-  the request interval (up to 30 seconds) until requests succeed again.
+  the request interval (up to 30 seconds) until requests succeed again. If a
+  required delay exceeds the remaining refresh wait budget, the refresh fails
+  rather than retrying early.
 - **Timeouts** drain active work and stop without retrying. A manual refresh
   can reuse saved discovery pages for 48 hours.
 - **Interruptions** (I/O failures, HTTP 5xx other than 504) are retried up to

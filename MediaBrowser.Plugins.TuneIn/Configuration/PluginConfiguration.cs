@@ -26,6 +26,7 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public String LatLon { get; set; }
         public string NavigationSecret { get; set; } = CreateSecret();
         public int ApiRequestIntervalSeconds { get; set; } = 3;
+        public int MaximumRateLimitWaitMinutes { get; set; } = 15;
         public int DiscoveryDeadlineHours { get; set; } = 2;
         public int ImportDeadlineHours { get; set; } = 8;
         public int? MaxStationCount { get; set; } = 200;
