@@ -232,7 +232,7 @@ namespace MediaBrowser.Plugins.TuneIn
             TuneInRefresh coordinator;
             lock (SharedGate) coordinator = shared;
             if (coordinator == null) throw new InvalidOperationException("TuneIn refresh status is unavailable; reload settings and try again.");
-            return coordinator.InstallArtwork(install);
+            return coordinator.InstallArtwork(install, Plugin.Instance.SettingsLock.LockForArtworkInstallation);
         }
 
         internal static Task RunMaintenance(Func<Task> run)

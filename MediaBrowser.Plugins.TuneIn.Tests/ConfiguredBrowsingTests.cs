@@ -30,10 +30,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 
         [Theory]
         [InlineData(null, 3, true)]
-        [InlineData(1, 50, true)]
-        [InlineData(4000, 5, true)]
-        [InlineData(0, 5, false)]
-        [InlineData(4001, 5, false)]
+        [InlineData(5, 50, true)]
+        [InlineData(10000, 5, true)]
+        [InlineData(4, 5, false)]
+        [InlineData(10001, 5, false)]
         [InlineData(250, 2, false)]
         [InlineData(250, 51, false)]
         public void DiscoveryLimitsValidateWithoutChangingStationIdentity(int? maximum, int depth, bool valid)
@@ -119,8 +119,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 + "<outline type='audio' text='Radio' guide_id='s1'/>")));
             var before = directory.Snapshot();
             var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
-            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "MaximumRateLimitWaitMinutes", "DiscoveryDeadlineHours", "ImportDeadlineHours", "MaxStationCount", "TraversalDepthLimit", "EnableCatalogIdentityDiagnostics", "AllowDirectHlsPlayback", "HideRegionalGenres",
-                "AllowPartialCatalogImport", "HasStartedCatalogRefresh", "SkipOptionalStartupChecks",
+            foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "MaximumRateLimitWaitMinutes", "MaximumConsecutiveRateLimitRetries", "DiscoveryDeadlineHours", "ImportDeadlineHours", "MaxStationCount", "TraversalDepthLimit", "EnableCatalogIdentityDiagnostics", "AllowDirectHlsPlayback", "HideRegionalGenres",
+                "AllowPartialCatalogImport", "EnableDiscoveryProgressiveImport", "ProgressiveFirstEntries",
+                "ProgressiveMinimumNewEntries", "ProgressiveMinimumGrowthPercent", "ProgressiveMinimumIntervalSeconds",
+                "ProgressiveMaximumPasses", "HasStartedCatalogRefresh", "SkipOptionalStartupChecks",
                 "SettingsSaved", "TalkMode", "TalkIds", "SportsMode", "SportsIds", "PodcastsMode", "PodcastIds" })
                 legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });
             using (var xml = new StringWriter(System.Globalization.CultureInfo.InvariantCulture))
@@ -211,7 +213,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData("", 8)]
+        [InlineData("", 24)]
         [InlineData("<ImportDeadlineHours>1</ImportDeadlineHours>", 1)]
         [InlineData("<ImportDeadlineHours>6</ImportDeadlineHours>", 6)]
         [InlineData("<ImportDeadlineHours>10</ImportDeadlineHours>", 10)]
@@ -246,9 +248,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Theory]
-        [InlineData("", 2)]
-        [InlineData("<DiscoveryDeadlineHours>1</DiscoveryDeadlineHours>", 1)]
-        [InlineData("<DiscoveryDeadlineHours>10</DiscoveryDeadlineHours>", 10)]
+        [InlineData("", 12)]
+        [InlineData("<DiscoveryDeadlineHours>2</DiscoveryDeadlineHours>", 2)]
+        [InlineData("<DiscoveryDeadlineHours>48</DiscoveryDeadlineHours>", 48)]
         public void DiscoveryDeadlineSurvivesLegacyLoadingWithoutInvalidatingCatalog(string setting, int expected)
         {
             using var reader = new StringReader("<PluginConfiguration>" + setting + "</PluginConfiguration>");
@@ -256,15 +258,15 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             ConfigurationSnapshot.Validate(config);
             var snapshot = new ConfigurationSnapshot(config);
             Assert.Equal(expected, snapshot.Value.DiscoveryDeadlineHours);
-            config.DiscoveryDeadlineHours = expected == 10 ? 1 : 10;
+            config.DiscoveryDeadlineHours = expected == 48 ? 2 : 48;
             var changed = new ConfigurationSnapshot(config);
             Assert.Equal(snapshot.Key, changed.Key);
             Assert.Equal(snapshot.DiscoveryKey, changed.DiscoveryKey);
         }
 
         [Theory]
-        [InlineData(0)]
-        [InlineData(11)]
+        [InlineData(1)]
+        [InlineData(49)]
         public void InvalidDiscoveryDeadlinesAreRejectedServerSide(int hours)
         {
             var config = Ready();
@@ -451,9 +453,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public async Task AllSelectionCategoriesBrowseTheirFullProviderCategoryWithoutSavedChoices()
         {
             var config = Ready();
-            config.EnableLanguage = config.EnableLocation = config.EnableMusic = config.EnableLocalRadio = true;
-            config.LanguageMode = config.LocationMode = config.MusicMode = config.LocalMode = "all";
-            config.LocalRadioSource = "regions";
+            config.EnableLanguage = config.EnableLocation = config.EnableMusic = true;
+            config.LanguageMode = config.LocationMode = config.MusicMode = "all";
             var requests = new List<DirectoryRequest>();
             var directory = new TuneInDirectory(() => config, (request, _) =>
             {
@@ -465,7 +466,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             });
             var snapshot = directory.Snapshot();
             var browser = new TuneInBrowsing(directory, _ => null);
-            foreach (var category in new[] { "language", "location", "music", "local" })
+            foreach (var category in new[] { "language", "location", "music" })
             {
                 Assert.True(snapshot.Enabled(category));
                 var root = browser.CategoryRoot(snapshot, category);
@@ -509,6 +510,121 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             config.LatLon = "10,20";
             ConfigurationSnapshot.Validate(config);
             Assert.Equal("coordinates", new ConfigurationSnapshot(config).LocalSource);
+        }
+
+        [Theory]
+        [InlineData("cities")]
+        [InlineData(" Cities ")]
+        [InlineData("\tCITIES\r\n")]
+        [InlineData("REGIONS")]
+        [InlineData(" regions ")]
+        public void SavedLocalSourceAcceptsCaseAndWhitespaceWithoutRewritingConfiguration(string source)
+        {
+            var config = Ready();
+            config.EnableLocalRadio = true;
+            config.LocalRadioSource = source;
+            config.LocalMode = "selected";
+            config.LocalCities.Add(new CatalogSelection { Id = "r1", Name = "City" });
+            ConfigurationSnapshot.Validate(config);
+            var snapshot = new ConfigurationSnapshot(config);
+            Assert.Equal("regions", snapshot.LocalSource);
+            Assert.True(snapshot.Enabled("local"));
+            Assert.Single(snapshot.Selections("local"));
+            Assert.Equal(source, config.LocalRadioSource);
+            Assert.Equal(source, snapshot.Value.LocalRadioSource);
+            Assert.Equal("r1", Assert.Single(TuneInBrowsing.StartingEntries(snapshot, "local")).Request.Parameters["id"]);
+        }
+
+        [Theory]
+        [InlineData("coordinates")]
+        [InlineData(" COORDINATES ")]
+        [InlineData("\tCoordinates\r\n")]
+        public void CoordinateSourceAcceptsCaseAndWhitespaceWithoutRewritingConfiguration(string source)
+        {
+            var config = Ready();
+            config.EnableLocalRadio = true;
+            config.LocalRadioSource = source;
+            config.UseCoordinates = true;
+            config.LatLon = "10,20";
+            ConfigurationSnapshot.Validate(config);
+            var snapshot = new ConfigurationSnapshot(config);
+            Assert.True(snapshot.Enabled("local"));
+            Assert.Equal("coordinates", snapshot.LocalSource);
+            Assert.Equal("local", Assert.Single(TuneInBrowsing.StartingEntries(snapshot, "local")).Request.Parameters["c"]);
+            Assert.Equal(source, config.LocalRadioSource);
+            Assert.Equal(source, snapshot.Value.LocalRadioSource);
+            config.LatLon = "invalid";
+            Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+            Assert.False(new ConfigurationSnapshot(config).Enabled("local"));
+        }
+
+        [Theory]
+        [InlineData("   ", false)]
+        [InlineData("   ", true)]
+        [InlineData("unknown", false)]
+        [InlineData("unknown", true)]
+        public void UnrecognizedLocalSourceNeverFallsBackToSavedRegionsOrCoordinates(string source, bool useCoordinates)
+        {
+            var config = Ready();
+            config.EnableLocalRadio = true;
+            config.LocalRadioSource = source;
+            config.UseCoordinates = useCoordinates;
+            config.LatLon = "10,20";
+            config.LocalCities.Add(new CatalogSelection { Id = "r1" });
+            Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+            Assert.False(new ConfigurationSnapshot(config).Enabled("local"));
+        }
+
+        [Theory]
+        [InlineData("regions", null)]
+        [InlineData("regions", "all")]
+        [InlineData("regions", "selected")]
+        [InlineData("cities", "all")]
+        [InlineData(" Cities ", "all")]
+        [InlineData(" REGIONS ", "selected")]
+        public void SavedLocalSourceRequiresAnEnabledValidRegion(string source, string mode)
+        {
+            var config = Ready();
+            config.EnableLocalRadio = true;
+            config.LocalRadioSource = source;
+            config.LocalMode = mode;
+            Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+            Assert.False(new ConfigurationSnapshot(config).Enabled("local"));
+            config.LocalCities.Add(new CatalogSelection { Id = "r1", Enabled = false });
+            config.LocalCities.Add(new CatalogSelection { Id = "invalid", Enabled = true });
+            Assert.Throws<ArgumentException>(() => ConfigurationSnapshot.Validate(config));
+            var snapshot = new ConfigurationSnapshot(config);
+            Assert.False(snapshot.Enabled("local"));
+            Assert.Throws<InvalidOperationException>(() => TuneInBrowsing.StartingEntries(snapshot, "local"));
+            config.LocalCities.Clear();
+            config.EnableLocalRadio = false;
+            ConfigurationSnapshot.Validate(config);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("all")]
+        [InlineData("selected")]
+        public async Task SavedLocalSourceBrowsesOnlyEnabledSavedRegions(string mode)
+        {
+            var config = Ready();
+            config.EnableLocalRadio = true;
+            config.LocalRadioSource = "regions";
+            config.LocalMode = mode;
+            config.LocalCities.Add(new CatalogSelection { Id = "r10", Enabled = true });
+            config.LocalCities.Add(new CatalogSelection { Id = "r20", Enabled = false });
+            ConfigurationSnapshot.Validate(config);
+            var requests = new List<string>();
+            var directory = new TuneInDirectory(() => config, (request, _) =>
+            {
+                requests.Add(request.Parameters["id"]);
+                return Task.FromResult(Opml("<outline type='audio' text='Local station' guide_id='s1'/>"));
+            });
+            var snapshot = directory.Snapshot();
+            var browser = new TuneInBrowsing(directory, _ => null);
+            var root = browser.CategoryRoot(snapshot, "local");
+            Assert.Single((await browser.GetItemsAsync(root.Id, Token)).Items);
+            Assert.Equal(new[] { "r10" }, requests);
         }
 
         [Fact]

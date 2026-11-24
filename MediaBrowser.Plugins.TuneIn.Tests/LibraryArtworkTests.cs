@@ -19,6 +19,7 @@ using Xunit;
 
 namespace MediaBrowser.Plugins.TuneIn.Tests
 {
+    [Collection("Artwork globals")]
     public class LibraryArtworkTests
     {
         [Fact]
@@ -207,7 +208,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public void GenrePackManifestReportsIdentityAndHandlesMissingOrInvalidMetadata()
+        public void GenrePackManifestFlagsLegacyWithoutChangingFilesAndRequiresCanonicalIdentity()
         {
             var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tunein-manifest-" + Guid.NewGuid().ToString("N"));
             System.IO.Directory.CreateDirectory(folder);
@@ -219,20 +220,28 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var path = System.IO.Path.Combine(folder, "tunein-artwork.json");
                 System.IO.File.WriteAllText(path, "{\"schemaVersion\":1,\"packName\":\"Cartoon\",\"imageCount\":123}");
                 var pack = TuneInCategoryArtwork.ReadPackManifest();
-                Assert.Equal("identified", pack.Status);
-                Assert.Equal("Cartoon", pack.Name);
-                Assert.Equal(123, pack.ImageCount);
+                Assert.Equal("unsupported", pack.Status);
+                Assert.Null(pack.Name);
+                Assert.Null(pack.ImageCount);
                 var bytes = new byte[] { 1, 2, 3 };
                 System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, "g19.jpg"), bytes);
                 using var sha = System.Security.Cryptography.SHA256.Create();
                 var hash = Convert.ToHexString(sha.ComputeHash(bytes));
                 System.IO.File.WriteAllText(path, "{\"schemaVersion\":1,\"packName\":\"Cartoon\",\"imageCount\":1,\"images\":[{\"id\":\"g19\",\"file\":\"g19.jpg\",\"sha256\":\"" + hash + "\"}]}");
                 pack = TuneInCategoryArtwork.ReadPackManifest();
+                Assert.Equal("unsupported", pack.Status);
+                Assert.Equal(bytes, System.IO.File.ReadAllBytes(TuneInCategoryArtwork.GenreFile("g19")));
+                Assert.Contains("\"schemaVersion\":1", System.IO.File.ReadAllText(path));
+                System.IO.File.WriteAllText(path, "{\"schemaVersion\":2,\"scope\":\"genres\",\"packId\":\"custom-cartoon\",\"packName\":\"Cartoon\",\"theme\":\"Cartoon\",\"version\":\"2\",\"imageCount\":1,\"images\":[{\"id\":\"g19\",\"file\":\"g19.jpg\",\"sha256\":\"" + hash + "\"}]}");
+                pack = TuneInCategoryArtwork.ReadPackManifest();
                 Assert.Equal("identified", pack.Status);
+                Assert.Equal("custom-cartoon", pack.PackId);
+                Assert.Equal("Cartoon", pack.Theme);
+                Assert.Equal("2", pack.Version);
                 Assert.Equal(1, pack.MatchedCount);
                 Assert.Equal(0, pack.AddedCount);
-                System.IO.File.WriteAllText(path, "{\"schemaVersion\":2,\"packName\":\"Cartoon\",\"imageCount\":123}");
-                Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackManifest().Status);
+                System.IO.File.WriteAllText(path, "{\"schemaVersion\":3,\"packName\":\"Cartoon\",\"imageCount\":123}");
+                Assert.Equal("unsupported", TuneInCategoryArtwork.ReadPackManifest().Status);
                 System.IO.File.WriteAllText(path, "{invalid");
                 Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackManifest().Status);
             }
@@ -260,7 +269,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 using var sha = System.Security.Cryptography.SHA256.Create();
                 var hash = Convert.ToHexString(sha.ComputeHash(matching)).ToLowerInvariant();
                 var manifest = System.IO.Path.Combine(folder, "tunein-artwork.json");
-                System.IO.File.WriteAllText(manifest, "{\"schemaVersion\":1,\"scope\":\"languages\",\"packName\":\"Test\",\"imageCount\":2,\"images\":["
+                System.IO.File.WriteAllText(manifest, "{\"schemaVersion\":2,\"scope\":\"languages\",\"packId\":\"test\",\"packName\":\"Test\",\"theme\":\"Test\",\"version\":\"1\",\"imageCount\":2,\"images\":["
                     + "{\"id\":\"l122\",\"file\":\"l122.jpg\",\"sha256\":\"" + hash + "\"},"
                     + "{\"id\":\"l123\",\"file\":\"l123.png\",\"sha256\":\"" + hash + "\"}]}");
                 var status = TuneInCategoryArtwork.ReadPackStatus("languages");
@@ -275,15 +284,15 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 Assert.Equal(0, status.MatchedCount);
                 Assert.Equal(2, status.ModifiedCount);
                 Assert.Equal(1, status.AddedCount);
-                System.IO.File.WriteAllText(manifest, "{\"schemaVersion\":1,\"scope\":\"locations\",\"packName\":\"Wrong\",\"imageCount\":0,\"images\":[]}");
+                System.IO.File.WriteAllText(manifest, "{\"schemaVersion\":2,\"scope\":\"locations\",\"packId\":\"test\",\"packName\":\"Wrong\",\"theme\":\"Test\",\"version\":\"1\",\"imageCount\":1,\"images\":[{\"id\":\"r123\",\"file\":\"r123.jpg\",\"sha256\":\"" + hash + "\"}]}");
                 Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackStatus("languages").Status);
-                System.IO.File.WriteAllText(manifest, "{\"schemaVersion\":1,\"scope\":\"languages\",\"packName\":\"Bad\",\"imageCount\":1,\"images\":[{\"id\":\"l122\",\"file\":\"../l122.jpg\",\"sha256\":\"" + hash + "\"}]}");
+                System.IO.File.WriteAllText(manifest, "{\"schemaVersion\":2,\"scope\":\"languages\",\"packId\":\"test\",\"packName\":\"Bad\",\"theme\":\"Test\",\"version\":\"1\",\"imageCount\":1,\"images\":[{\"id\":\"l122\",\"file\":\"../l122.jpg\",\"sha256\":\"" + hash + "\"}]}");
                 Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackStatus("languages").Status);
                 System.IO.File.WriteAllText(manifest, "{\"schemaVersion\":1,\"packName\":\"Legacy\"}");
-                Assert.Equal("invalid", TuneInCategoryArtwork.ReadPackStatus("languages").Status);
+                Assert.Equal("unsupported", TuneInCategoryArtwork.ReadPackStatus("languages").Status);
                 System.IO.File.Delete(manifest);
                 status = TuneInCategoryArtwork.ReadPackStatus("languages");
-                Assert.Equal("missing", status.Status);
+                Assert.Equal("unsupported", status.Status);
                 Assert.Equal(3, status.InstalledCount);
                 Assert.Null(status.AddedCount);
                 TuneInCategoryArtwork.LanguageFolder = null;
@@ -312,7 +321,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var hash = Convert.ToHexString(sha.ComputeHash(image)).ToLowerInvariant();
                 var entries = Enumerable.Range(100000, 10000).Select(id =>
                     "{\"id\":\"r" + id + "\",\"file\":\"r" + id + ".jpg\",\"sha256\":\"" + hash + "\"}");
-                var json = "{\"schemaVersion\":1,\"scope\":\"locations\",\"packName\":\"Futuristic\","
+                var json = "{\"schemaVersion\":2,\"scope\":\"locations\",\"packId\":\"futuristic-locations\",\"packName\":\"Futuristic\",\"theme\":\"Futuristic\",\"version\":\"3\","
                     + "\"imageCount\":10000,\"images\":[" + string.Join(",", entries) + "]}";
                 System.IO.File.WriteAllText(path, json);
                 Assert.True(new System.IO.FileInfo(path).Length > 1024 * 1024);

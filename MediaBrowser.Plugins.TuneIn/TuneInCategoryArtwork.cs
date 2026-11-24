@@ -5,11 +5,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Runtime.Serialization;
-using System.Runtime.Serialization.Json;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
-using System.Xml;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -219,24 +216,6 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal static int CountGenreFiles() => ReadPackStatus("genres").InstalledCount ?? 0;
 
-        [DataContract]
-        private sealed class PackManifest
-        {
-            [DataMember(Name = "schemaVersion")] public int SchemaVersion { get; set; }
-            [DataMember(Name = "scope")] public string Scope { get; set; }
-            [DataMember(Name = "packName")] public string PackName { get; set; }
-            [DataMember(Name = "imageCount")] public int? ImageCount { get; set; }
-            [DataMember(Name = "images")] public List<PackImage> Images { get; set; }
-        }
-
-        [DataContract]
-        private sealed class PackImage
-        {
-            [DataMember(Name = "id")] public string Id { get; set; }
-            [DataMember(Name = "file")] public string File { get; set; }
-            [DataMember(Name = "sha256")] public string Sha256 { get; set; }
-        }
-
         internal static TuneInArtworkPackStatus ReadPackManifest() => ReadPackStatus("genres");
 
         internal static TuneInArtworkPackStatus ReadPackStatus(string scope)
@@ -260,65 +239,49 @@ namespace MediaBrowser.Plugins.TuneIn
                         && ValidId(scope, Path.GetFileNameWithoutExtension(name));
                 }).ToList();
                 result.InstalledCount = files.Count;
-                PackManifest manifest;
+                TuneInUploadManifest manifest;
                 try
                 {
                     using (var stream = File.OpenRead(Path.Combine(folder, "tunein-artwork.json")))
                     {
                         if (stream.Length > MaxPackManifestBytes) { result.Status = "invalid"; return result; }
-                        manifest = (PackManifest)new DataContractJsonSerializer(typeof(PackManifest)).ReadObject(stream);
+                        manifest = TuneInUploadManifest.Read(stream);
                     }
                 }
-                catch (FileNotFoundException) { result.Status = "missing"; return result; }
-                if (manifest == null || manifest.SchemaVersion != 1
-                    || (manifest.Scope == null ? scope != "genres" : manifest.Scope != scope)
-                    || string.IsNullOrWhiteSpace(manifest.PackName) || manifest.PackName.Length > 128
-                    || manifest.ImageCount < 0 || manifest.ImageCount > 100000
-                    || manifest.Scope != null && (manifest.Images == null || !manifest.ImageCount.HasValue))
-                { result.Status = "invalid"; return result; }
-                if (manifest.Images != null)
+                catch (FileNotFoundException) { result.Status = files.Count == 0 ? "missing" : "unsupported"; return result; }
+                if (manifest.Scope != scope) { result.Status = "invalid"; return result; }
+                var entries = manifest.Images.ToDictionary(image => image.Id, StringComparer.OrdinalIgnoreCase);
+                var matched = 0;
+                var modified = 0;
+                var added = 0;
+                using (var sha = SHA256.Create())
                 {
-                    var entries = new Dictionary<string, PackImage>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var image in manifest.Images)
+                    foreach (var file in files)
                     {
-                        if (image == null || !ValidId(scope, image.Id) || image.File == null
-                            || !Extensions.Any(extension => string.Equals(image.File, image.Id + extension, StringComparison.Ordinal))
-                            || image.Sha256 == null || !Regex.IsMatch(image.Sha256, @"\A[0-9a-fA-F]{64}\z")
-                            || entries.ContainsKey(image.Id))
-                        { result.Status = "invalid"; return result; }
-                        entries.Add(image.Id, image);
-                    }
-                    if (manifest.ImageCount.HasValue && manifest.ImageCount.Value != entries.Count)
-                    { result.Status = "invalid"; return result; }
-                    var matched = 0;
-                    var modified = 0;
-                    var added = 0;
-                    using (var sha = SHA256.Create())
-                    {
-                        foreach (var file in files)
+                        if (!entries.TryGetValue(Path.GetFileNameWithoutExtension(file), out var image)) { added++; continue; }
+                        using (var stream = File.OpenRead(file))
                         {
-                            if (!entries.TryGetValue(Path.GetFileNameWithoutExtension(file), out var image)) { added++; continue; }
-                            using (var stream = File.OpenRead(file))
-                            {
-                                var hash = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
-                                if (string.Equals(Path.GetFileName(file), image.File, StringComparison.OrdinalIgnoreCase)
-                                    && string.Equals(hash, image.Sha256, StringComparison.OrdinalIgnoreCase)) matched++;
-                                else modified++;
-                            }
+                            var hash = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
+                            if (string.Equals(Path.GetFileName(file), image.File, StringComparison.OrdinalIgnoreCase)
+                                && string.Equals(hash, image.Sha256, StringComparison.OrdinalIgnoreCase)) matched++;
+                            else modified++;
                         }
                     }
-                    result.MatchedCount = matched;
-                    result.ModifiedCount = modified;
-                    result.AddedCount = added;
                 }
+                result.MatchedCount = matched;
+                result.ModifiedCount = modified;
+                result.AddedCount = added;
                 result.Status = "identified";
-                result.Name = manifest.PackName.Trim();
-                result.ImageCount = manifest.ImageCount;
+                result.Name = manifest.Name;
+                result.PackId = manifest.PackId;
+                result.Theme = manifest.Theme;
+                result.Version = manifest.Version;
+                result.ImageCount = manifest.Images.Count;
                 return result;
             }
             catch (DirectoryNotFoundException) { result.Status = "missing"; result.InstalledCount = 0; return result; }
-            catch (SerializationException) { result.Status = "invalid"; return result; }
-            catch (XmlException) { result.Status = "invalid"; return result; }
+            catch (NotSupportedException) { result.Status = "unsupported"; return result; }
+            catch (InvalidDataException) { result.Status = "invalid"; return result; }
             catch (IOException) { result.Status = "unavailable"; return result; }
             catch (UnauthorizedAccessException) { result.Status = "unavailable"; return result; }
         }

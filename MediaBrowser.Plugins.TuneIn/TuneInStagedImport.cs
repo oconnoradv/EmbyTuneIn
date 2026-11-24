@@ -62,7 +62,7 @@ namespace MediaBrowser.Plugins.TuneIn
             Func<string, TuneInCatalogueSession, bool, CancellationToken, Task<ChannelItemResult>> getItems,
             Action<int, int> report, Action validate, Func<string, string, bool> isForwardPage, Action<int> checkpoint = null,
             int? maxStationCount = null, int traversalDepthLimit = Configuration.PluginConfiguration.DefaultTraversalDepthLimit,
-            Func<string, string> stationId = null)
+            Func<string, string> stationId = null, Func<TuneInStagedImport, int, Task> duringDiscovery = null)
         {
             if (channel == null || root == null || session == null || getItems == null)
                 throw new ArgumentNullException("A complete TuneIn discovery context is required.");
@@ -158,6 +158,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     var results = await Task.WhenAll(entries.Select(entry => Read(entry.Key))).ConfigureAwait(false);
                     for (var i = 0; i < entries.Count; i++)
                         Accept(entries[i], results[i].Result, results[i].Skips);
+                    if (duringDiscovery != null && pending.Any(entry => !visited.Contains(entry.Key)))
+                        await duringDiscovery(staged, stationCount).ConfigureAwait(false);
                 }
             }
             foreach (var listing in staged.folders.Values)
@@ -227,6 +229,23 @@ namespace MediaBrowser.Plugins.TuneIn
             if (DiscoveryIncomplete)
                 throw new InvalidOperationException("Cannot create a snapshot from incomplete TuneIn discovery.");
             return CreateSnapshot(category, folders, false);
+        }
+
+        internal TuneInCategorySnapshot CreateDiscoveryPreview(string category, TuneInCategorySnapshot previous,
+            Func<string, string> membershipKey)
+        {
+            var preview = new TuneInStagedImport(token, report, validate) { Root = Root, isForwardPage = isForwardPage };
+            foreach (var folder in folders)
+            {
+                token.ThrowIfCancellationRequested();
+                preview.folders.Add(folder.Key, new ChannelItemResult
+                {
+                    Items = folder.Value.Items.Where(item => item.Type != ChannelItemType.Folder || folders.ContainsKey(item.Id))
+                        .Select(CopyItem).ToList()
+                });
+            }
+            preview.incompleteFolders.Add(Root.Id);
+            return preview.MergeRetainedCategory(category, previous, membershipKey, true);
         }
 
         internal TuneInCategorySnapshot MergePartialCategory(string category, TuneInCategorySnapshot previous,

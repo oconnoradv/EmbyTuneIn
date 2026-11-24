@@ -47,7 +47,10 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         public string Token { get; set; }
         public string Scope { get; set; }
+        public string PackId { get; set; }
         public string Name { get; set; }
+        public string Theme { get; set; }
+        public string Version { get; set; }
         public int ImageCount { get; set; }
         public string Destination { get; set; }
         public string ScanStatus { get; set; }
@@ -78,7 +81,12 @@ namespace MediaBrowser.Plugins.TuneIn
                                 configuration?.EnvironmentVariables?.ToDictionary(setting => setting.VariableName, setting => setting.Value), token);
                         },
                         TuneInArtworkScanner.Scan,
-                        install => TuneInRefreshService.InstallArtwork(install));
+                        install => TuneInRefreshService.InstallArtwork(install),
+                        () =>
+                        {
+                            if (Plugin.Instance.SettingsLock.IsLocked)
+                                throw new InvalidOperationException("TuneIn settings are locked. Unlock them before uploading artwork.");
+                        });
                 }
                 coordinator = shared;
             }
@@ -121,6 +129,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Action<string, CancellationToken> validateImage;
         private readonly Func<string, CancellationToken, TuneInArtworkScanner.Result> scan;
         private readonly Func<Func<bool>, bool> activate;
+        private readonly Action ensureUploadAllowed;
         private readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
         private readonly object statusGate = new object();
         private TuneInArtworkUploadStatus status = new TuneInArtworkUploadStatus { State = "idle" };
@@ -128,12 +137,14 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Timer expiryTimer;
 
         internal TuneInArtworkUploadCoordinator(string root, Action<string, CancellationToken> validateImage,
-            Func<string, CancellationToken, TuneInArtworkScanner.Result> scan, Func<Func<bool>, bool> activate)
+            Func<string, CancellationToken, TuneInArtworkScanner.Result> scan, Func<Func<bool>, bool> activate,
+            Action ensureUploadAllowed)
         {
             this.root = root ?? throw new ArgumentNullException(nameof(root));
             this.validateImage = validateImage ?? throw new ArgumentNullException(nameof(validateImage));
             this.scan = scan ?? throw new ArgumentNullException(nameof(scan));
             this.activate = activate ?? throw new ArgumentNullException(nameof(activate));
+            this.ensureUploadAllowed = ensureUploadAllowed ?? throw new ArgumentNullException(nameof(ensureUploadAllowed));
             if (Directory.Exists(root))
             {
                 foreach (var directory in Directory.GetDirectories(root, ".tunein-upload-*"))
@@ -155,10 +166,12 @@ namespace MediaBrowser.Plugins.TuneIn
         internal async Task<TuneInArtworkUploadResult> Prepare(Stream input, CancellationToken requestToken)
         {
             if (input == null) throw new ArgumentException("Select an artwork ZIP.");
+            ensureUploadAllowed();
             await gate.WaitAsync(requestToken).ConfigureAwait(false);
             string staging = null;
             try
             {
+                ensureUploadAllowed();
                 ClearCandidate();
                 Directory.CreateDirectory(root);
                 staging = Path.Combine(root, ".tunein-upload-" + Guid.NewGuid().ToString("N"));
@@ -274,7 +287,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 || (File.GetAttributes(content) & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidDataException("Staged artwork cannot contain symbolic links.");
             var files = Directory.GetFiles(content);
-            if (Directory.GetDirectories(content).Length != 0 || files.Length != selected.Manifest.Images.Count + 1)
+            if (Directory.GetDirectories(content).Length != 0
+                || files.Length != selected.Manifest.Images.Count + selected.Manifest.SupplementalFiles.Count + 1)
                 throw new InvalidDataException("Staged artwork changed after validation.");
             var manifestPath = Path.Combine(content, "tunein-artwork.json");
             if ((File.GetAttributes(manifestPath) & FileAttributes.ReparsePoint) != 0
@@ -304,6 +318,13 @@ namespace MediaBrowser.Plugins.TuneIn
                         throw new InvalidDataException("Staged artwork changed after validation.");
                 }
             }
+            foreach (var file in selected.Manifest.SupplementalFiles)
+            {
+                token.ThrowIfCancellationRequested();
+                var path = Path.Combine(content, file.Key);
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || HashFile(path) != file.Value)
+                    throw new InvalidDataException("Staged artwork changed after validation.");
+            }
         }
 
         private static string HashFile(string path)
@@ -315,7 +336,8 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private TuneInArtworkUploadResult Result(Candidate value) => new TuneInArtworkUploadResult
         {
-            Token = value.Token, Scope = value.Manifest.Scope, Name = value.Manifest.Name,
+            Token = value.Token, Scope = value.Manifest.Scope, PackId = value.Manifest.PackId, Name = value.Manifest.Name,
+            Theme = value.Manifest.Theme, Version = value.Manifest.Version,
             ImageCount = value.Manifest.Images.Count, Destination = Path.Combine(root, value.Manifest.Scope),
             ScanStatus = value.Scan == TuneInArtworkScanner.Result.Clean ? "Clean" : "Not scanned"
         };

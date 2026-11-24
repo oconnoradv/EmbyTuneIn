@@ -14,7 +14,9 @@ namespace MediaBrowser.Plugins.TuneIn
         internal const long MaxUploadBytes = 768L * 1024 * 1024;
         internal const long MaxExpandedBytes = 2L * 1024 * 1024 * 1024;
         internal const long MaxImageBytes = 16L * 1024 * 1024;
+        internal const long MaxSupplementalBytes = 1024 * 1024;
         private const string ManifestName = "tunein-artwork.json";
+        private static readonly string[] SupplementalNames = { "LICENSE.txt", "Noto-OFL.txt", "README.txt", "FLAGS-SOURCES.txt", "flag-sources.json" };
 
         internal static TuneInUploadManifest ValidateAndExtract(string archivePath, string destination,
             Action<string, CancellationToken> validateImage, CancellationToken token)
@@ -34,7 +36,8 @@ namespace MediaBrowser.Plugins.TuneIn
                         throw new InvalidDataException("Artwork manifest exceeds 4 MiB.");
                     TuneInUploadManifest manifest;
                     using (var manifestStream = manifestEntry.Open()) manifest = TuneInUploadManifest.Read(manifestStream);
-                    if (entries.Count != manifest.Images.Count + 1)
+                    var supplemental = entries.Values.Where(entry => SupplementalNames.Contains(entry.FullName, StringComparer.Ordinal)).ToList();
+                    if (entries.Count != manifest.Images.Count + 1 + supplemental.Count)
                         throw new InvalidDataException("Artwork archive inventory does not match the manifest.");
                     long expanded = manifestEntry.Length;
                     foreach (var image in manifest.Images)
@@ -69,6 +72,44 @@ namespace MediaBrowser.Plugins.TuneIn
                         }
                         validateImage(path, token);
                     }
+                    foreach (var entry in supplemental)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (entry.Length < 1 || entry.Length > MaxSupplementalBytes || expanded > MaxExpandedBytes - entry.Length)
+                            throw new InvalidDataException("Artwork supplemental file exceeds a size limit.");
+                        expanded += entry.Length;
+                        var path = Path.Combine(destination, entry.FullName);
+                        using (var input = entry.Open())
+                        using (var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                        using (var hash = SHA256.Create())
+                        {
+                            var buffer = new byte[81920];
+                            long actual = 0;
+                            int count;
+                            while ((count = input.Read(buffer, 0, buffer.Length)) != 0)
+                            {
+                                token.ThrowIfCancellationRequested();
+                                actual += count;
+                                if (actual > entry.Length || actual > MaxSupplementalBytes)
+                                    throw new InvalidDataException("Artwork supplemental file exceeds its declared size.");
+                                hash.TransformBlock(buffer, 0, count, buffer, 0);
+                                output.Write(buffer, 0, count);
+                            }
+                            hash.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+                            if (actual != entry.Length) throw new InvalidDataException("Artwork supplemental file size does not match.");
+                            manifest.SupplementalFiles.Add(entry.FullName, BitConverter.ToString(hash.Hash));
+                        }
+                        try
+                        {
+                            var text = new UTF8Encoding(false, true).GetString(File.ReadAllBytes(path));
+                            if (text.Any(c => char.IsControl(c) && c != '\r' && c != '\n' && c != '\t'))
+                                throw new InvalidDataException("Artwork supplemental files must be plain UTF-8 text.");
+                        }
+                        catch (DecoderFallbackException error)
+                        {
+                            throw new InvalidDataException("Artwork supplemental files must be plain UTF-8 text.", error);
+                        }
+                    }
                     var manifestPath = Path.Combine(destination, ManifestName);
                     using (var input = manifestEntry.Open())
                     using (var output = new FileStream(manifestPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
@@ -91,7 +132,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 var centralSize = reader.ReadUInt32();
                 var centralOffset = reader.ReadUInt32();
                 var comment = reader.ReadUInt16();
-                if (comment != 0 || diskCount != total || total == 0 || total > TuneInUploadManifest.MaxImages + 1
+                if (comment != 0 || diskCount != total || total == 0 || total > TuneInUploadManifest.MaxImages + 1 + SupplementalNames.Length
                     || (long)centralOffset + centralSize != stream.Length - 22) throw BadArchive();
                 stream.Position = centralOffset;
                 var records = new List<Record>(total);

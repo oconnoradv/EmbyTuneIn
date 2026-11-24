@@ -3,17 +3,24 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
     internal sealed class TuneInUploadManifest
     {
         internal const int MaxImages = 20000;
+        internal const string LegacySchemaNotice = "This artwork pack uses schema 1, which is no longer supported. Please regenerate or download a newer pack using schemaVersion 2. Existing installed artwork is unchanged.";
         internal string Scope { get; private set; }
+        internal string PackId { get; private set; }
         internal string Name { get; private set; }
+        internal string Theme { get; private set; }
+        internal string Version { get; private set; }
         internal IReadOnlyList<TuneInUploadImage> Images { get; private set; }
+        internal Dictionary<string, string> SupplementalFiles { get; } = new Dictionary<string, string>(StringComparer.Ordinal);
 
         internal static TuneInUploadManifest Read(Stream stream)
         {
@@ -28,12 +35,41 @@ namespace MediaBrowser.Plugins.TuneIn
                         throw new InvalidDataException("Artwork manifest exceeds 4 MiB.");
                     buffer.Write(bytes, 0, count);
                 }
+                var content = buffer.ToArray();
                 string json;
-                try { json = new UTF8Encoding(false, true).GetString(buffer.ToArray()); }
+                try { json = new UTF8Encoding(false, true).GetString(content); }
                 catch (DecoderFallbackException error) { throw new InvalidDataException("Artwork manifest is not UTF-8.", error); }
+                RejectLegacySchema(content);
                 var parser = new ManifestParser(json);
                 return parser.Parse();
             }
+        }
+
+        private static void RejectLegacySchema(byte[] content)
+        {
+            var legacy = false;
+            try
+            {
+                using (var reader = JsonReaderWriterFactory.CreateJsonReader(content, new XmlDictionaryReaderQuotas
+                {
+                    MaxDepth = 64, MaxStringContentLength = TuneInCategoryArtwork.MaxPackManifestBytes,
+                    MaxArrayLength = TuneInCategoryArtwork.MaxPackManifestBytes,
+                    MaxBytesPerRead = 8192, MaxNameTableCharCount = 16384
+                }))
+                {
+                    var rootIsObject = reader.MoveToContent() == XmlNodeType.Element && reader.GetAttribute("type") == "object";
+                    while (reader.Read())
+                    {
+                        // Escaped JSON property names are mapped to an item attribute.
+                        if (rootIsObject && reader.NodeType == XmlNodeType.Element && reader.Depth == 1
+                            && (reader.GetAttribute("item") ?? reader.LocalName) == "schemaVersion" && reader.GetAttribute("type") == "number"
+                            && reader.ReadString() == "1")
+                            legacy = true;
+                    }
+                }
+            }
+            catch (XmlException error) { throw new InvalidDataException("Malformed artwork manifest.", error); }
+            if (legacy) throw new NotSupportedException(LegacySchemaNotice);
         }
 
         private sealed class ManifestParser
@@ -45,19 +81,21 @@ namespace MediaBrowser.Plugins.TuneIn
 
             internal TuneInUploadManifest Parse()
             {
-                var root = Object(new[] { "schemaVersion", "scope", "packName", "imageCount", "images" }, true);
+                var root = Object(new[] { "schemaVersion", "scope", "packId", "packName", "theme", "version", "imageCount", "images" }, true);
                 Space();
                 if (position != text.Length) throw Invalid();
-                if ((int)root["schemaVersion"] != 1) throw new InvalidDataException("Unsupported artwork manifest schema.");
                 var scope = (string)root["scope"];
                 if (!TuneInCategoryArtwork.Scopes.Contains(scope, StringComparer.Ordinal))
                     throw new InvalidDataException("Unsupported artwork scope.");
                 var name = (string)root["packName"];
-                if (string.IsNullOrWhiteSpace(name) || name.Length > 128 || name != name.Trim()
-                    || name.Any(char.IsControl) || name.Contains(":") || name.Contains("\\")
-                    || name.Contains("/") || name.Contains("@")
-                    || name.IndexOf("www.", StringComparison.OrdinalIgnoreCase) >= 0)
-                    throw new InvalidDataException("Invalid artwork pack name.");
+                var theme = (string)root["theme"];
+                if (!ValidDisplayName(name) || !ValidDisplayName(theme))
+                    throw new InvalidDataException("Invalid artwork pack name or theme.");
+                var packId = (string)root["packId"];
+                var version = (string)root["version"];
+                if (!Regex.IsMatch(packId, @"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z")
+                    || !Regex.IsMatch(version, @"\A[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}\z"))
+                    throw new InvalidDataException("Invalid artwork pack ID or version.");
                 var images = (List<TuneInUploadImage>)root["images"];
                 var imageCount = (int)root["imageCount"];
                 if (imageCount < 1 || imageCount > MaxImages || imageCount != images.Count)
@@ -73,10 +111,16 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (!Regex.IsMatch(image.Sha256, @"\A[0-9a-fA-F]{64}\z"))
                         throw new InvalidDataException("Invalid artwork SHA256.");
                 }
-                return new TuneInUploadManifest { Scope = scope, Name = name, Images = images };
+                return new TuneInUploadManifest { Scope = scope, PackId = packId, Name = name, Theme = theme, Version = version, Images = images };
             }
 
-            private Dictionary<string, object> Object(string[] allowed, bool root)
+            private static bool ValidDisplayName(string value) =>
+                !string.IsNullOrWhiteSpace(value) && value.Length <= 128 && value == value.Trim()
+                && !value.Any(char.IsControl) && !value.Contains(":") && !value.Contains("\\")
+                && !value.Contains("/") && !value.Contains("@")
+                && value.IndexOf("www.", StringComparison.OrdinalIgnoreCase) < 0;
+
+            private Dictionary<string, object> Object(string[] required, bool root)
             {
                 Take('{');
                 var result = new Dictionary<string, object>(StringComparer.Ordinal);
@@ -86,13 +130,15 @@ namespace MediaBrowser.Plugins.TuneIn
                     while (true)
                     {
                         var key = String();
-                        if (!allowed.Contains(key, StringComparer.Ordinal) || result.ContainsKey(key))
-                            throw new InvalidDataException("Unexpected or duplicate artwork manifest field.");
+                        if (!required.Contains(key, StringComparer.Ordinal) || result.ContainsKey(key))
+                            throw new InvalidDataException("Unexpected or duplicate artwork manifest field. Use a canonical schemaVersion 2 pack; regenerate or download a new pack.");
                         Take(':');
                         object value;
                         if (root && (key == "schemaVersion" || key == "imageCount")) value = Number();
                         else if (root && key == "images") value = Images();
                         else value = String();
+                        if (root && key == "schemaVersion" && (int)value != 2)
+                            throw new NotSupportedException("Artwork packs require schemaVersion 2. Legacy packs are unsupported; regenerate or download a canonical schema 2 pack.");
                         result.Add(key, value);
                         Space();
                         if (Peek() != ',') break;
@@ -100,7 +146,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
                 }
                 Take('}');
-                if (result.Count != allowed.Length) throw new InvalidDataException("Artwork manifest is missing a required field.");
+                if (required.Any(key => !result.ContainsKey(key))) throw new InvalidDataException("Canonical schemaVersion 2 artwork manifest is missing a required field. Regenerate or download a complete pack.");
                 return result;
             }
 

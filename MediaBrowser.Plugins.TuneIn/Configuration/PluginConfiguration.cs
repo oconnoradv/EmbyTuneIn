@@ -12,12 +12,12 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
     {
         internal const int MinApiRequestIntervalSeconds = 1;
         internal const int MaxApiRequestIntervalSeconds = 30;
-        internal const int MinDiscoveryDeadlineHours = 1;
-        internal const int MaxDiscoveryDeadlineHours = 10;
+        internal const int MinDiscoveryDeadlineHours = 2;
+        internal const int MaxDiscoveryDeadlineHours = 48;
         internal const int MinImportDeadlineHours = 1;
         internal const int MaxImportDeadlineHours = 100;
-        internal const int MinMaxStationCount = 1;
-        internal const int MaxMaxStationCount = 4000;
+        internal const int MinMaxStationCount = 5;
+        internal const int MaxMaxStationCount = 10000;
         internal const int MinTraversalDepthLimit = 3;
         internal const int MaxTraversalDepthLimit = 50;
         internal const int DefaultTraversalDepthLimit = 10;
@@ -27,13 +27,21 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public string NavigationSecret { get; set; } = CreateSecret();
         public int ApiRequestIntervalSeconds { get; set; } = 3;
         public int MaximumRateLimitWaitMinutes { get; set; } = 15;
-        public int DiscoveryDeadlineHours { get; set; } = 2;
-        public int ImportDeadlineHours { get; set; } = 8;
-        public int? MaxStationCount { get; set; } = 200;
+        public int MaximumConsecutiveRateLimitRetries { get; set; } = 6;
+        public int DiscoveryDeadlineHours { get; set; } = 12;
+        public int ImportDeadlineHours { get; set; } = 24;
+        public int? MaxStationCount { get; set; } = 500;
         public int TraversalDepthLimit { get; set; } = DefaultTraversalDepthLimit;
         public bool EnableCatalogIdentityDiagnostics { get; set; }
+        public string DiagnosticsIssueRepository { get; set; }
         public bool HideRegionalGenres { get; set; } = true;
         public bool AllowPartialCatalogImport { get; set; } = true;
+        public bool EnableDiscoveryProgressiveImport { get; set; }
+        public int ProgressiveFirstEntries { get; set; } = 50;
+        public int ProgressiveMinimumNewEntries { get; set; } = 500;
+        public int ProgressiveMinimumGrowthPercent { get; set; } = 25;
+        public int ProgressiveMinimumIntervalSeconds { get; set; } = 45;
+        public int ProgressiveMaximumPasses { get; set; } = 100;
         public bool AllowDirectHlsPlayback { get; set; }
         public List<CategoryRefreshSchedule> RefreshSchedules { get; set; } = new List<CategoryRefreshSchedule>();
         public int SchemaVersion { get; set; }

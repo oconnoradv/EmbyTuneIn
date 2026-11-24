@@ -69,6 +69,15 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (!IsLocked) Set(true);
         }
 
+        internal void LockForArtworkInstallation()
+        {
+            lock (gate)
+            {
+                if (IsLocked) throw new InvalidOperationException("TuneIn settings are locked. Unlock them before installing artwork.");
+                Set(true);
+            }
+        }
+
         internal TuneInSettingsLock OnPanelOpen(bool settingsSaved)
         {
             lock (gate)

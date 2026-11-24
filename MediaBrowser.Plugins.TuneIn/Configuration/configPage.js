@@ -2,11 +2,13 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     'use strict';
     var pluginId = '10b82431-f939-4507-a8e2-9509dd3fd6ae';
     var categories = [
+        ['EnableFavorites', 'My Favorites'],
         ['EnableLocalRadio', 'Local Radio'], ['EnableMusic', 'Music'],
         ['EnableLanguage', 'By Language'], ['EnableLocation', 'By Location'],
         ['EnableTalk', 'Talk'], ['EnableSports', 'Sports'],
-        ['EnablePodcasts', 'Podcasts'], ['EnableFavorites', 'My Favorites']
+        ['EnablePodcasts', 'Podcasts']
     ];
+    var refreshCategoryOrder = ['presets', 'local', 'music', 'language', 'location', 'talk', 'sports', 'podcast'];
     var selectors = [
         ['language', 'Languages', 'By Language', 'LanguageMode', true],
         ['location', 'Locations', 'By Location', 'LocationMode', true],
@@ -22,21 +24,327 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         'LocalCities', 'LanguageMode', 'LocationMode', 'MusicMode', 'TalkMode', 'TalkIds',
         'SportsMode', 'SportsIds', 'PodcastsMode', 'PodcastIds', 'LocalMode'
     ];
+    var progressiveSettings = [
+        ['ProgressiveFirstEntries', '.progressiveFirstEntries', 10000, 50, 'first pass entries'],
+        ['ProgressiveMinimumNewEntries', '.progressiveMinimumNewEntries', 10000, 500, 'minimum new entries'],
+        ['ProgressiveMinimumGrowthPercent', '.progressiveMinimumGrowthPercent', 100, 25, 'minimum growth percentage'],
+        ['ProgressiveMinimumIntervalSeconds', '.progressiveMinimumIntervalSeconds', 3600, 45, 'minimum interval'],
+        ['ProgressiveMaximumPasses', '.progressiveMaximumPasses', 100, 100, 'maximum passes']
+    ];
+
+    function showProgressivePacing(instance) {
+        instance.view.querySelector('.progressivePacing').hidden =
+            !instance.view.querySelector('.enableDiscoveryProgressiveImport').checked;
+    }
 
     function filteringSnapshot(config) {
         return filteringSettings.map(function (key) { return config[key]; });
     }
 
+    function normalizeLocalSource(source) {
+        return typeof source === 'string' ? source.trim().toLowerCase() : '';
+    }
+
     function selectorMode(instance, spec) {
+        if (spec[0] === 'local') return 'selected';
         var mode = instance.config[spec[3]];
         if (typeof mode === 'string' && /^(all|selected)$/i.test(mode)) return mode.toLowerCase();
         if (spec[4] && mode) return 'selected';
         return spec[4] && (instance.config[spec[1]] || []).length ? 'selected' : 'all';
     }
 
-    function message(instance, text, configurationRequired) {
+    function feedbackMessage(element, text, error) {
+        if (element.textContent !== text) element.textContent = text;
+        element.setAttribute('data-error', String(!!error && !!text));
+    }
+
+    function diagnosticsRequest(route, data, params) {
+        var options = { type: data ? 'POST' : 'GET', dataType: 'json',
+            url: ApiClient.getUrl('TuneIn/Diagnostics' + route, params) };
+        if (data) {
+            options.contentType = 'application/json';
+            options.data = JSON.stringify(data);
+        }
+        return ApiClient.ajax(options);
+    }
+
+    function diagnosticsCurrent(instance, state) {
+        return instance.refreshVisible && instance.diagnostics === state && instance.viewEpoch === state.epoch;
+    }
+
+    function diagnosticsMessage(instance, text, error) {
+        feedbackMessage(instance.view.querySelector('.diagnosticsMessage'), text, error);
+    }
+
+    function diagnosticsClearDraftLink(instance) {
+        var link = instance.view.querySelector('.diagnosticsDraftLink');
+        link.hidden = true;
+        link.removeAttribute('href');
+    }
+
+    function diagnosticsResetReview(instance) {
+        instance.view.querySelector('.diagnosticsReviewed').checked = false;
+        diagnosticsClearDraftLink(instance);
+        instance.diagnostics.reviewVersion++;
+    }
+
+    function diagnosticsControls(instance) {
+        var state = instance.diagnostics, view = instance.view, pack = state.preview;
+        var reporting = !!pack && !!pack.Repository && !pack.ReportingError && !!pack.DraftUrl &&
+            pack.Repository === state.repository && !state.reportingError &&
+            diagnosticsValidUrl(pack.DraftUrl, pack.Repository, pack);
+        view.querySelector('.diagnosticsCapture').disabled = !!state.busy || !!state.storageError || !state.latest || !state.captureAvailable;
+        view.querySelector('.diagnosticsPacks').disabled = !!state.busy || !state.packs.length;
+        view.querySelector('.diagnosticsDownload').disabled = !!state.busy || !pack;
+        view.querySelector('.diagnosticsDelete').disabled = !!state.busy || !pack;
+        view.querySelector('.diagnosticsDeleteAll').disabled = !!state.busy || !state.hasStoredPacks;
+        view.querySelector('.diagnosticsReviewed').disabled = !!state.busy || !reporting;
+        view.querySelector('.diagnosticsOpen').disabled = !!state.busy || !reporting ||
+            !view.querySelector('.diagnosticsReviewed').checked;
+    }
+
+    function diagnosticsClearPreview(instance) {
+        var view = instance.view, state = instance.diagnostics;
+        state.preview = null;
+        state.previewVersion++;
+        diagnosticsResetReview(instance);
+        view.querySelector('.diagnosticsPreview').textContent = '';
+        view.querySelector('.diagnosticsDraftTitle').textContent = '';
+        view.querySelector('.diagnosticsDraftBody').textContent = '';
+        view.querySelector('.diagnosticsPreviewDetails').hidden = true;
+        view.querySelector('.diagnosticsDraftDetails').hidden = true;
+        diagnosticsControls(instance);
+    }
+
+    function diagnosticsShowPreview(instance, pack) {
+        var view = instance.view, state = instance.diagnostics;
+        diagnosticsResetReview(instance);
+        state.preview = pack;
+        view.querySelector('.diagnosticsPreview').textContent = pack.PreviewText;
+        view.querySelector('.diagnosticsDraftTitle').textContent = pack.DraftTitle || '';
+        view.querySelector('.diagnosticsDraftBody').textContent = pack.DraftBody || '';
+        view.querySelector('.diagnosticsPreviewDetails').hidden = false;
+        view.querySelector('.diagnosticsDraftDetails').hidden = false;
+        view.querySelector('.diagnosticsRepository').textContent = pack.Repository || state.repository || 'Unavailable';
+        view.querySelector('.diagnosticsPackHint').textContent = pack.PublicNavigationIncluded
+            ? 'This pack includes public navigation details.' : 'This pack excludes public navigation details.';
+        if (pack.ReportingError || state.reportingError)
+            diagnosticsMessage(instance, 'Reporting is unavailable for the configured repository. Capture and download remain available.', true);
+        diagnosticsControls(instance);
+    }
+
+    function diagnosticsApplyList(instance, result) {
+        var state = instance.diagnostics, view = instance.view, select = view.querySelector('.diagnosticsPacks');
+        var oldRepository = state.repository;
+        var oldStorageError = state.storageError;
+        state.repository = result.Repository || null;
+        state.reportingError = result.ReportingError || null;
+        state.storageError = result.StorageError || null;
+        state.latest = result.LatestRefresh || null;
+        state.captureAvailable = result.CaptureAvailable === true;
+        state.packs = Array.isArray(result.Packs) ? result.Packs : [];
+        state.hasStoredPacks = result.HasStoredPacks === true || !!state.packs.length;
+        if (oldRepository !== state.repository) diagnosticsResetReview(instance);
+        var latest = state.latest;
+        view.querySelector('.diagnosticsLatest').textContent = latest
+            ? 'Latest refresh: ' + [latest.Category, latest.State, latest.StartedUtc].filter(Boolean).join(' - ') +
+                (latest.Busy ? ' (active snapshot)' : '')
+            : 'No refresh is available to capture.';
+        var selected = state.preview ? state.preview.Id : select.value;
+        var matching = state.packs.find(function (item) { return item.Id === selected; });
+        if (state.preview && (!matching || matching.Revision !== state.preview.Revision ||
+            state.preview.Repository !== state.repository)) {
+            diagnosticsClearPreview(instance);
+            selected = null;
+        }
+        if (!matching) selected = null;
+        select.textContent = '';
+        var placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = state.packs.length ? 'Select a saved pack' : 'No saved diagnostic packs';
+        select.appendChild(placeholder);
+        state.packs.forEach(function (item) {
+            var option = document.createElement('option');
+            option.value = item.Id;
+            option.textContent = [item.CapturedUtc, item.Category, item.State, item.Bytes + ' bytes'].filter(Boolean).join(' - ');
+            select.appendChild(option);
+        });
+        select.value = selected || '';
+        view.querySelector('.diagnosticsRepository').textContent = state.repository || 'Unavailable';
+        if (state.storageError)
+            diagnosticsMessage(instance, state.storageError, true);
+        else if (state.reportingError)
+            diagnosticsMessage(instance, 'Reporting is unavailable for the configured repository. Capture and download remain available.', true);
+        else if (oldStorageError) diagnosticsMessage(instance, '');
+        diagnosticsControls(instance);
+    }
+
+    function diagnosticsLoad(instance) {
+        var state = instance.diagnostics;
+        if (!diagnosticsCurrent(instance, state)) return;
+        if (state.listPending || state.busy) { state.listAgain = true; return; }
+        state.listPending = true;
+        var version = state.listVersion;
+        return diagnosticsRequest('').then(function (result) {
+            if (!diagnosticsCurrent(instance, state) || version !== state.listVersion) return;
+            diagnosticsApplyList(instance, result);
+        }).catch(function () {
+            if (diagnosticsCurrent(instance, state) && version === state.listVersion)
+                diagnosticsMessage(instance, 'Shareable diagnostics are unavailable. Check administrator access and try reopening the page.', true);
+        }).finally(function () {
+            if (!diagnosticsCurrent(instance, state)) return;
+            state.listPending = false;
+            if (state.listAgain) { state.listAgain = false; diagnosticsLoad(instance); }
+        });
+    }
+
+    function diagnosticsSelect(instance) {
+        var state = instance.diagnostics, id = instance.view.querySelector('.diagnosticsPacks').value;
+        diagnosticsClearPreview(instance);
+        var version = state.previewVersion;
+        diagnosticsMessage(instance, '');
+        if (!id) return;
+        return diagnosticsRequest('/Pack', null, { Id: id }).then(function (pack) {
+            if (!diagnosticsCurrent(instance, state) || version !== state.previewVersion ||
+                instance.view.querySelector('.diagnosticsPacks').value !== id) return;
+            var item = state.packs.find(function (entry) { return entry.Id === id; });
+            if (!item || pack.Id !== id || pack.Revision !== item.Revision || pack.Repository !== state.repository) {
+                diagnosticsMessage(instance, 'The pack or reporting destination changed. Refresh the list and review again.', true);
+                diagnosticsLoad(instance);
+                return;
+            }
+            diagnosticsShowPreview(instance, pack);
+        }).catch(function () {
+            if (diagnosticsCurrent(instance, state) && version === state.previewVersion)
+                diagnosticsMessage(instance, 'Could not load the diagnostic pack. Select it again to retry.', true);
+        });
+    }
+
+    function diagnosticsCapture(instance) {
+        var state = instance.diagnostics;
+        if (!diagnosticsCurrent(instance, state) || state.busy || state.storageError || !state.captureAvailable || !state.latest) return;
+        state.busy = true;
+        state.listVersion++;
+        diagnosticsControls(instance);
+        diagnosticsMessage(instance, 'Capturing a redacted snapshot...');
+        var data = { RunId: state.latest.RunId, IncludePublicNavigation: instance.view.querySelector('.diagnosticsPublic').checked };
+        return diagnosticsRequest('/Capture', data).then(function (pack) {
+            if (!diagnosticsCurrent(instance, state)) return;
+            state.packs = state.packs.filter(function (item) { return item.Id !== pack.Id; });
+            state.packs.unshift(pack);
+            state.hasStoredPacks = true;
+            diagnosticsShowPreview(instance, pack);
+            diagnosticsMessage(instance, pack.ReportingError || state.reportingError
+                ? 'Redacted pack saved locally. Reporting is unavailable for the configured repository; download remains available.'
+                : 'Redacted pack saved locally. Review it before sharing.', !!(pack.ReportingError || state.reportingError));
+        }).catch(function () {
+            if (diagnosticsCurrent(instance, state))
+                diagnosticsMessage(instance, 'Could not capture the diagnostic pack. Check the latest refresh and server storage before trying again.', true);
+        }).finally(function () {
+            if (!diagnosticsCurrent(instance, state)) return;
+            state.busy = false;
+            diagnosticsControls(instance);
+            diagnosticsLoad(instance);
+        });
+    }
+
+    function diagnosticsValidUrl(url, repository, pack) {
+        try {
+            if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) return false;
+            var parsed = new URL(url);
+            return parsed.protocol === 'https:' && parsed.hostname === 'github.com' && !parsed.port &&
+                !parsed.username && !parsed.password && !parsed.hash &&
+                parsed.pathname === '/' + repository + '/issues/new' &&
+                Array.from(parsed.searchParams.keys()).length === 2 &&
+                parsed.searchParams.get('title') === pack.DraftTitle &&
+                parsed.searchParams.get('body') === pack.DraftBody;
+        } catch (error) { return false; }
+    }
+
+    function diagnosticsDraft(instance) {
+        var state = instance.diagnostics, view = instance.view, pack = state.preview;
+        if (!diagnosticsCurrent(instance, state) || view.querySelector('.diagnosticsOpen').disabled ||
+            !view.querySelector('.diagnosticsReviewed').checked || !pack) return;
+        var review = state.reviewVersion, version = state.previewVersion;
+        diagnosticsClearDraftLink(instance);
+        state.busy = true;
+        diagnosticsControls(instance);
+        diagnosticsMessage(instance, 'Validating the reviewed pack and GitHub destination...');
+        return diagnosticsRequest('/Draft', { Id: pack.Id, Revision: pack.Revision, Repository: pack.Repository })
+            .then(function (result) {
+                if (!diagnosticsCurrent(instance, state) || state.preview !== pack ||
+                    state.reviewVersion !== review || state.previewVersion !== version ||
+                    !view.querySelector('.diagnosticsReviewed').checked) return;
+                if (result.Id !== pack.Id || result.Revision !== pack.Revision ||
+                    result.Repository !== pack.Repository || result.Repository !== state.repository ||
+                    result.Url !== pack.DraftUrl || !diagnosticsValidUrl(result.Url, result.Repository, pack)) {
+                    diagnosticsResetReview(instance);
+                    diagnosticsMessage(instance, 'The pack or reporting destination changed. Select the pack and review the draft again.', true);
+                    diagnosticsLoad(instance);
+                    return;
+                }
+                var link = view.querySelector('.diagnosticsDraftLink');
+                link.href = result.Url;
+                link.hidden = false;
+                diagnosticsMessage(instance, 'Draft validated. If no tab opens, use the GitHub draft link below. Attach the downloaded JSON pack and submit it on GitHub; no issue has been created or pack uploaded by this page.');
+                try {
+                    // Opening a placeholder tab first can pause Emby and invalidate the pending validation.
+                    window.open(result.Url, '_blank', 'noopener,noreferrer');
+                } catch (error) {
+                    diagnosticsMessage(instance, 'The browser could not open a new tab. Use the reviewed GitHub draft link below, then attach the downloaded JSON pack and submit the issue yourself.', true);
+                }
+            }).catch(function () {
+                if (diagnosticsCurrent(instance, state)) {
+                    diagnosticsResetReview(instance);
+                    diagnosticsMessage(instance, 'Could not open the draft. The pack or repository may have changed; select and review it again.', true);
+                }
+            }).finally(function () {
+                if (!diagnosticsCurrent(instance, state)) return;
+                state.busy = false;
+                diagnosticsControls(instance);
+                if (state.listAgain) { state.listAgain = false; diagnosticsLoad(instance); }
+            });
+    }
+
+    function diagnosticsDelete(instance, all) {
+        var state = instance.diagnostics, view = instance.view, pack = state.preview;
+        if (state.busy || (!all && !pack) || (all && !state.hasStoredPacks)) return;
+        state.deleteTarget = all ? { All: true } : { Id: pack.Id, Revision: pack.Revision };
+        state.deleteFocus = view.querySelector(all ? '.diagnosticsDeleteAll' : '.diagnosticsDelete');
+        view.querySelector('.diagnosticsDeleteTitle').textContent = all ? 'Delete all saved diagnostic packs?' : 'Delete saved diagnostic pack?';
+        view.querySelector('.diagnosticsDeleteConfirm').textContent = all ? 'Delete all packs' : 'Delete pack';
+        view.querySelector('.diagnosticsDeleteDialog').showModal();
+        view.querySelector('.diagnosticsDeleteCancel').focus();
+    }
+
+    function diagnosticsConfirmDelete(instance) {
+        var state = instance.diagnostics, view = instance.view, target = state.deleteTarget;
+        if (!diagnosticsCurrent(instance, state) || state.busy || !target) return;
+        state.deleteTarget = null;
+        view.querySelector('.diagnosticsDeleteDialog').close();
+        state.busy = true;
+        state.listVersion++;
+        diagnosticsControls(instance);
+        return diagnosticsRequest('/Delete', target).then(function (result) {
+            if (!diagnosticsCurrent(instance, state)) return;
+            diagnosticsApplyList(instance, result);
+            if (!state.storageError && !state.reportingError)
+                diagnosticsMessage(instance, 'Local diagnostic pack deletion completed.');
+            view.querySelector('.diagnosticsCapture').focus();
+        }).catch(function () {
+            if (diagnosticsCurrent(instance, state))
+                diagnosticsMessage(instance, 'Could not delete the diagnostic pack. Check the saved packs before trying again.', true);
+        }).finally(function () {
+            if (!diagnosticsCurrent(instance, state)) return;
+            state.busy = false;
+            diagnosticsControls(instance);
+            if (state.listAgain) { state.listAgain = false; diagnosticsLoad(instance); }
+        });
+    }
+
+    function message(instance, text, configurationRequired, isError) {
         var status = instance.view.querySelector('.status');
-        status.textContent = text;
+        feedbackMessage(status, text, isError !== false);
         status.setAttribute('data-configuration-required', String(!!configurationRequired));
     }
 
@@ -192,7 +500,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             modeControl.setAttribute('is', 'emby-select');
             modeControl.setAttribute('aria-label', spec[2] + ' coverage');
             modeControl.className = 'tuneInSelectorMode';
-            [['all', 'All'], ['selected', 'Selected only']].forEach(function (choice) {
+            (spec[0] === 'local' ? [['selected', 'Selected only']]
+                : [['all', 'All'], ['selected', 'Selected only']]).forEach(function (choice) {
                 var option = document.createElement('option');
                 option.value = choice[0];
                 option.textContent = choice[1];
@@ -271,7 +580,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     if (existing) existing.Enabled = true;
                     else {
                         if (list.length >= 100) {
-                            feedback.textContent = 'Remove a saved choice before adding another (limit: 100).';
+                            feedbackMessage(feedback, 'Remove a saved choice before adding another (limit: 100).', true);
                             return;
                         }
                         list.push({ Id: item.Id, Name: item.Name, Path: item.Path,
@@ -280,21 +589,21 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     instance.config[spec[1]] = list;
                 } else if (!list.includes(item.Id)) {
                     if (list.length >= 100) {
-                        feedback.textContent = 'Remove a saved choice before adding another (limit: 100).';
+                        feedbackMessage(feedback, 'Remove a saved choice before adding another (limit: 100).', true);
                         return;
                     }
                     instance.config[spec[1]] = list.concat(item.Id);
                 }
                 renderSaved();
                 setupChanged(instance);
-                feedback.textContent = 'Selected: ' + (item.Path || item.Name || item.Id);
+                feedbackMessage(feedback, 'Selected: ' + (item.Path || item.Name || item.Id));
                 return;
             }
             var existing = list.find(function (entry) { return entry.Id === item.Id; });
             if (existing) existing.Enabled = true;
             else {
                 if (list.length >= 100) {
-                    feedback.textContent = 'Remove a saved choice before adding another (limit: 100).';
+                    feedbackMessage(feedback, 'Remove a saved choice before adding another (limit: 100).', true);
                     return;
                 }
                 list.push({ Id: item.Id, Name: item.Name, Path: item.Path, AncestorIds: item.AncestorIds, Enabled: true });
@@ -302,7 +611,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             }
             renderSaved();
             setupChanged(instance);
-            feedback.textContent = 'Selected: ' + item.Path;
+            feedbackMessage(feedback, 'Selected: ' + item.Path);
         }
 
         function branch(parent, caption) {
@@ -330,7 +639,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             function load() {
                 if (epoch !== instance.viewEpoch || !browsingSelected(instance) || picker.hidden || loaded) return;
                 if (pending) return pending;
-                status.textContent = 'Loading choices...';
+                feedbackMessage(status, 'Loading choices...');
                 results.textContent = '';
                 function fetchChoices() {
                     return ApiClient.ajax({
@@ -342,7 +651,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     var code = selectorStatus(error);
                     if ([0, 408, 500, 502, 503, 504].indexOf(code) === -1 ||
                         epoch !== instance.viewEpoch || !browsingSelected(instance) || picker.hidden || !details.open) throw error;
-                    status.textContent = 'Still loading choices. Trying again...';
+                    feedbackMessage(status, 'Still loading choices. Trying again...');
                     return new Promise(function (resolve) { setTimeout(resolve, 1000); }).then(function () {
                         if (epoch !== instance.viewEpoch || !browsingSelected(instance) || picker.hidden || !details.open) throw error;
                         return fetchChoices();
@@ -354,7 +663,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 pending = requests.get(parent).then(function (data) {
                     if (epoch !== instance.viewEpoch) return;
                     loaded = true;
-                    status.textContent = data.Warning || (data.Items.length ? '' : 'No further choices in this branch.');
+                    feedbackMessage(status, data.Warning || (data.Items.length ? '' : 'No further choices in this branch.'));
                     data.Items.forEach(function (item) {
                         var row = document.createElement('li');
                         row.className = 'tuneInSelectorRow';
@@ -381,8 +690,8 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     if (epoch !== instance.viewEpoch) return;
                     console.error('Unable to load TuneIn selector.', error);
                     var code = selectorStatus(error);
-                    status.textContent = 'Could not load choices from TuneIn' +
-                        (code ? ' (HTTP ' + code + ')' : '') + '. Retry this branch.';
+                    feedbackMessage(status, 'Could not load choices from TuneIn' +
+                        (code ? ' (HTTP ' + code + ')' : '') + '. Retry this branch.', true);
                     var retry = document.createElement('li');
                     retry.appendChild(button('Retry', load));
                     results.appendChild(retry);
@@ -412,7 +721,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         columns.appendChild(savedColumn);
         section.appendChild(columns);
         var validation = document.createElement('span');
-        validation.className = 'fieldDescription';
+        validation.className = 'fieldDescription tuneInValidationError';
         validation.setAttribute('role', 'status');
         validation.hidden = true;
         heading.appendChild(validation);
@@ -454,7 +763,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 return spec[4] ? choice && choice.Enabled !== false && pattern.test(choice.Id)
                     : pattern.test(choice);
             });
-            if (!valid) errors[spec[0]] = 'Add a valid ' + spec[2] + ' choice or choose All.';
+            if (!valid) errors[spec[0]] = spec[0] === 'local'
+                ? 'Add at least one enabled saved city or region for Local Radio, or choose coordinates.'
+                : 'Add a valid ' + spec[2] + ' choice or choose All.';
         });
         if (enabled('EnableLocalRadio')) {
             var source = instance.view.querySelector('.localSource').value;
@@ -483,11 +794,16 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var filtering = browsingSelected(instance);
         var eligible = filtering && enabledCount > Object.keys(errors).length;
         var requirements = filtering && enabledCount > 0 && !Object.keys(errors).length;
-        var saved = instance.setupSaved && !instance.setupDirty;
+        var saved = instance.setupSaved && !instance.setupDirty &&
+            instance.savedFilteringConfig && instance.savedFilteringConfig.SchemaVersion === 1;
+        var readyItems = [];
         function item(selector, ready, text) {
             var element = view.querySelector(selector);
-            element.textContent = (ready ? 'Ready: ' : 'Needed: ') + text;
+            var message = (ready ? 'Ready: ' : 'Needed: ') + text;
+            if (element.textContent !== message) element.textContent = message;
             element.setAttribute('data-ready', String(!!ready));
+            view.querySelector(selector + 'Check').checked = !!ready;
+            readyItems.push(!!ready);
         }
         item('.readinessFiltering', filtering, filtering ? 'Station filtering enabled' : 'Enable TuneIn Station Filtering');
         item('.readinessCategory', eligible, eligible ? 'An eligible category is enabled' : 'Enable an eligible audio category');
@@ -497,7 +813,13 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         item('.readinessChannel', channel === true, channel === true ? 'TuneIn channel registered'
             : channel === false ? 'TuneIn channel not registered yet; restart Emby and check plugin registration'
             : 'Waiting to check TuneIn channel registration');
-        view.querySelector('.tuneInReadiness').hidden = !!(status && status.HasCompleteBaseline);
+        var baseline = status && status.HasCompleteBaseline === true;
+        item('.readinessBaseline', baseline, baseline ? 'First catalog refresh completed'
+            : status ? 'Complete the first catalog refresh' : 'Waiting to check the first catalog refresh');
+        var setupComplete = instance.setupSaved && instance.savedFilteringConfig &&
+            instance.savedFilteringConfig.SchemaVersion === 1 && baseline && channel === true;
+        view.querySelector('.tuneInReadiness').hidden = setupComplete || readyItems.every(function (ready) { return ready; });
+        view.querySelector('.settingsChangeNotice').hidden = !setupComplete || !instance.setupDirty;
         instance.selectorErrors.forEach(function (element, key) {
             element.textContent = errors[key] ? ': ' + errors[key] : '';
             element.hidden = !errors[key];
@@ -514,6 +836,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         renderReadiness(instance);
     }
 
+    function expandFilteringGroups(instance) {
+        ['.categoriesSummary', '.stationSelectionsSummary'].forEach(function (selector) {
+            instance.view.querySelector(selector).parentNode.open = true;
+        });
+    }
+
     function showSaveHistory(instance, saved, filteringConfigured) {
         var view = instance.view;
         view.querySelector('.globalSummary').parentNode.setAttribute('data-saved', String(saved));
@@ -523,6 +851,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         ['.globalSummary', '.categoriesSummary', '.stationSelectionsSummary'].forEach(function (selector) {
             view.querySelector(selector).parentNode.open = !saved;
         });
+        if (browsing.open) expandFilteringGroups(instance);
         if (saved) {
             view.querySelector('.selectors').childNodes.forEach(function (section) { section.open = false; });
         }
@@ -534,16 +863,24 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.loginFields').disabled = catalogDisabled;
         instance.view.querySelector('.configurationFields').disabled = catalogDisabled;
         instance.view.querySelector('.globalFields').disabled = disabled;
+        instance.view.querySelector('.artworkUpload').disabled = disabled || !!instance.artworkBusy;
+        instance.view.querySelector('.artworkFile').disabled = disabled || !!instance.artworkBusy;
         instance.view.querySelector('.hideRegionalGenres').disabled = catalogDisabled;
         instance.view.querySelector('.allowPartialCatalogImport').disabled = catalogDisabled;
         instance.view.querySelector('.apiRequestIntervalSeconds').disabled = catalogDisabled;
         instance.view.querySelector('.maximumRateLimitWaitMinutes').disabled = catalogDisabled;
+        instance.view.querySelector('.maximumConsecutiveRateLimitRetries').disabled = catalogDisabled;
         instance.view.querySelector('.importDeadlineHours').disabled = catalogDisabled;
         instance.view.querySelector('.discoveryDeadlineHours').disabled = catalogDisabled;
         instance.view.querySelector('.maxStationCount').disabled = catalogDisabled;
         instance.view.querySelector('.traversalDepthLimit').disabled = catalogDisabled;
         instance.view.querySelector('.enableCatalogIdentityDiagnostics').disabled = catalogDisabled;
         instance.view.querySelector('.allowDirectHlsPlayback').disabled = catalogDisabled;
+        instance.view.querySelector('.enableDiscoveryProgressiveImport').disabled = catalogDisabled;
+        progressiveSettings.forEach(function (setting) {
+            instance.view.querySelector(setting[1]).disabled = catalogDisabled
+                || !instance.view.querySelector('.enableDiscoveryProgressiveImport').checked;
+        });
         instance.view.querySelector('.tuneInSettingsSave').disabled = disabled;
         instance.refreshCategoryRows.forEach(function (row) { row.schedule.disabled = catalogDisabled; });
         var toggle = instance.view.querySelector('.settingsLocked');
@@ -562,7 +899,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             instance.refreshBusy || instance.refreshAction ? 'Settings cannot be changed while catalog refresh is active.' :
             !instance.refreshAvailable ? 'Settings are unavailable until refresh status is available.' :
             typeof confirmed === 'boolean' ? '' : 'Reading settings lock...');
-        if (note.textContent !== text) note.textContent = text;
+        feedbackMessage(note, text, !!instance.lockError);
         renderOptionalChecks(instance, instance.refreshStatus);
     }
 
@@ -578,7 +915,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var write = writeSettingsLock(instance.lockRequested).then(function (locked) {
             if (epoch === instance.viewEpoch) {
                 instance.settingsLocked = locked;
-                if (!locked) instance.view.querySelector('.browsingSummary').parentNode.open = true;
+                if (!locked) {
+                    instance.view.querySelector('.browsingSummary').parentNode.open = true;
+                    expandFilteringGroups(instance);
+                }
             }
         }).catch(function () {
             if (epoch !== instance.viewEpoch) return;
@@ -737,19 +1077,19 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.optionalSaving = true;
         instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
         editing(instance);
-        instance.view.querySelector('.optionalChecksMessage').textContent = 'Saving artwork check preference...';
+        feedbackMessage(instance.view.querySelector('.optionalChecksMessage'), 'Saving artwork check preference...');
         return ApiClient.ajax({
             type: 'POST', dataType: 'json', contentType: 'application/json',
             url: ApiClient.getUrl('TuneIn/OptionalChecks/Preference'), data: JSON.stringify({ Skip: skip })
         }).then(function (result) {
             if (epoch !== instance.viewEpoch) return;
             instance.refreshStatus.SkipOptionalStartupChecks = result.SkipOptionalStartupChecks;
-            instance.view.querySelector('.optionalChecksMessage').textContent = skip
-                ? 'Automatic artwork checks will be skipped.' : 'Automatic artwork checks are enabled.';
+            feedbackMessage(instance.view.querySelector('.optionalChecksMessage'), skip
+                ? 'Automatic artwork checks will be skipped.' : 'Automatic artwork checks are enabled.');
         }, function () {
             if (epoch === instance.viewEpoch)
-                instance.view.querySelector('.optionalChecksMessage').textContent =
-                    'Could not confirm the artwork check preference. Checking the server again.';
+                feedbackMessage(instance.view.querySelector('.optionalChecksMessage'),
+                    'Could not confirm the artwork check preference. Checking the server again.', true);
         }).then(function () {
             instance.optionalSaving = false;
             if (epoch !== instance.viewEpoch) return;
@@ -763,7 +1103,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var epoch = instance.viewEpoch;
         instance.optionalChecking = true;
         instance.view.querySelector('.optionalChecksRun').disabled = true;
-        instance.view.querySelector('.optionalChecksStatus').textContent = 'Checking artwork packs...';
+        feedbackMessage(instance.view.querySelector('.optionalChecksStatus'), 'Checking artwork packs...');
         instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
         var generation = instance.refreshGeneration;
         return ApiClient.ajax({
@@ -773,7 +1113,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         }, function () {
             if (epoch === instance.viewEpoch && generation === instance.refreshGeneration) {
                 renderArtworkPacks(instance, null);
-                instance.view.querySelector('.optionalChecksStatus').textContent = 'Artwork checks failed; status is unavailable. Try again.';
+                feedbackMessage(instance.view.querySelector('.optionalChecksStatus'), 'Artwork checks failed; status is unavailable. Try again.', true);
             }
         }).then(function () {
             instance.optionalChecking = false;
@@ -787,12 +1127,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var dates = packs.map(function (pack) { return pack && (pack.CheckedUtc || pack.checkedUtc); })
             .filter(function (value) { return value && !isNaN(Date.parse(value)); });
         var deferred = !!status && status.ArtworkChecksDeferred === true;
-        instance.view.querySelector('.optionalChecksStatus').textContent = !status ? 'Artwork status unavailable.'
+        feedbackMessage(instance.view.querySelector('.optionalChecksStatus'), !status ? 'Artwork status unavailable.'
             : dates.length ? (deferred ? 'Automatic artwork checks deferred. ' : '')
                 + 'Last checked: ' + new Date(Math.min.apply(null, dates.map(Date.parse))).toLocaleString()
                 + '. Results may have changed since then.'
             : deferred ? 'Artwork checks deferred; run checks now to see pack status.'
-            : 'Artwork check time unavailable.';
+            : 'Artwork check time unavailable.');
         function field(pack, name) {
             return pack && (pack[name] != null ? pack[name] : pack[name.charAt(0).toUpperCase() + name.slice(1)]);
         }
@@ -824,6 +1164,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 : state === 'missing' && installed === 0 ? 'Default artwork'
                 : state === 'missing' ? 'No pack metadata'
                 : state === 'invalid' ? 'Invalid pack metadata'
+                : state === 'unsupported' ? 'Legacy or unsupported pack: install a schema 2 pack; existing files are unchanged'
                 : state === 'deferred' ? 'Check deferred'
                 : 'Status unavailable';
             var images = [];
@@ -843,7 +1184,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function artworkError(error) {
         return error && error.responseJSON && error.responseJSON.ResponseStatus &&
-            error.responseJSON.ResponseStatus.Message || 'Check the server logs and try again.';
+            error.responseJSON.ResponseStatus.Message || error && error.message || 'Check the server logs and try again.';
     }
 
     function pollArtwork(instance, epoch) {
@@ -854,10 +1195,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 var state = status.State || status.state;
                 var labels = { uploading: 'Uploading artwork pack...', validating: 'Validating artwork pack...',
                     scanning: 'Scanning staged artwork...', installing: 'Installing artwork pack...' };
-                if (labels[state]) instance.view.querySelector('.artworkUploadMessage').textContent = labels[state];
+                if (labels[state]) feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), labels[state]);
             }, function () {
                 if (instance.artworkBusy && epoch === instance.viewEpoch)
-                    instance.view.querySelector('.artworkUploadMessage').textContent = 'Waiting for artwork status...';
+                    feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Waiting for artwork status...');
             }).then(function () {
                 if (instance.artworkBusy && epoch === instance.viewEpoch)
                     instance.artworkTimer = setTimeout(function () { pollArtwork(instance, epoch); }, 1500);
@@ -866,27 +1207,29 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function uploadArtwork(instance, file) {
         if (!file || instance.artworkBusy) return;
+        if (editingBlocked(instance)) {
+            feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Unlock settings and wait for active work before verifying artwork.', true);
+            return;
+        }
         var epoch = instance.viewEpoch;
         if (file.size > 768 * 1024 * 1024) {
-            instance.view.querySelector('.artworkUploadMessage').textContent = 'The ZIP exceeds the 768 MiB upload limit.';
+            feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'The ZIP exceeds the 768 MiB upload limit.', true);
             return;
         }
         instance.artworkBusy = true;
         instance.view.querySelector('.artworkUpload').disabled = true;
-        instance.view.querySelector('.artworkUploadMessage').textContent = 'Uploading artwork pack...';
+        feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Uploading artwork pack...');
         pollArtwork(instance, epoch);
         // Emby's ajax helper form-encodes non-string data, including File objects.
         var request = { url: ApiClient.getUrl('TuneIn/Artwork/Upload'), headers: { 'Content-Type': 'application/zip', accept: 'application/json' } };
         ApiClient.setAuthorizationInfoIntoRequest(request);
         return fetch(request.url, { method: 'POST', headers: request.headers, body: file, credentials: 'same-origin' })
             .then(function (response) {
-                return response.json().then(function (result) {
-                    if (!response.ok) {
-                        var error = new Error('Artwork upload returned HTTP ' + response.status);
-                        error.responseJSON = result;
-                        throw error;
-                    }
-                    return result;
+                if (response.ok) return response.json();
+                return response.text().then(function (body) {
+                    var error = new Error(body.trim().slice(0, 500) || 'Artwork upload returned HTTP ' + response.status);
+                    try { error.responseJSON = JSON.parse(body); } catch (parseError) { /* Emby can return plain text. */ }
+                    throw error;
                 });
             }).then(function (result) {
             if (epoch !== instance.viewEpoch) {
@@ -898,7 +1241,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             if (result.ScanStatus !== 'Clean' && result.ScanStatus !== 'Not scanned') {
                 discardArtwork(instance).then(function () {
                     if (epoch === instance.viewEpoch)
-                        instance.view.querySelector('.artworkUploadMessage').textContent = 'Artwork scan status was invalid. Upload the pack again.';
+                        feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Artwork scan status was invalid. Upload the pack again.', true);
                 });
                 return;
             }
@@ -906,21 +1249,23 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             instance.view.querySelector('.artworkConfirmText').textContent =
                 result.Name + ' — ' + result.Scope + ', ' + result.ImageCount + ' images. ' + result.ScanStatus +
                 '. Installing replaces the existing pack in ' + result.Destination + '.';
+            instance.view.querySelector('.artworkConfirmError').textContent = '';
             instance.view.querySelector('.artworkUnscannedLabel').hidden = !unscanned;
             instance.view.querySelector('.artworkApproveUnscanned').checked = false;
             instance.view.querySelector('.artworkInstall').disabled = unscanned;
             instance.view.querySelector('.artworkConfirmDialog').showModal();
-            instance.view.querySelector('.artworkUploadMessage').textContent = 'Validation complete. Confirm installation.';
-        }, function (error) {
+            feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Validation complete. Confirm installation.');
+        }).catch(function (error) {
             if (epoch === instance.viewEpoch)
-                instance.view.querySelector('.artworkUploadMessage').textContent = 'Artwork upload failed: ' + artworkError(error);
+                feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Artwork upload failed: ' + artworkError(error), true);
         }).then(function () {
             instance.artworkBusy = false;
             clearTimeout(instance.artworkTimer);
             if (instance.refreshVisible) {
-                instance.view.querySelector('.artworkUpload').disabled = false;
+                instance.view.querySelector('.artworkUpload').disabled = !!editingBlocked(instance);
+                instance.view.querySelector('.artworkFile').disabled = !!editingBlocked(instance);
                 if (epoch !== instance.viewEpoch)
-                    instance.view.querySelector('.artworkUploadMessage').textContent = 'Artwork operation finished while the page was away. Check the pack status.';
+                    feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Artwork operation finished while the page was away. Check the pack status.');
             }
         });
     }
@@ -935,15 +1280,19 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         return ApiClient.ajax({ type: 'POST', dataType: 'json', contentType: 'application/json',
             url: ApiClient.getUrl('TuneIn/Artwork/Discard'), data: JSON.stringify({ Token: pending.Token }) })
             .then(function () {
-                if (epoch === instance.viewEpoch) instance.view.querySelector('.artworkUploadMessage').textContent = 'Artwork installation cancelled.';
+                if (epoch === instance.viewEpoch) feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Artwork installation cancelled.');
             }, function () {
-                if (epoch === instance.viewEpoch) instance.view.querySelector('.artworkUploadMessage').textContent = 'Could not discard staged artwork; it will expire.';
+                if (epoch === instance.viewEpoch) feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Could not discard staged artwork; it will expire.', true);
             });
     }
 
     function installArtwork(instance) {
         var pending = instance.artworkPending;
         if (!pending || instance.artworkBusy) return;
+        if (editingBlocked(instance)) {
+            instance.view.querySelector('.artworkConfirmError').textContent = 'Unlock settings and wait for active work before installing artwork.';
+            return;
+        }
         var unscanned = pending.ScanStatus === 'Not scanned';
         if (unscanned && !instance.view.querySelector('.artworkApproveUnscanned').checked) return;
         var epoch = instance.viewEpoch;
@@ -954,14 +1303,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         refreshControls(instance, instance.refreshAvailable);
         var statusConfirmed = false;
         instance.view.querySelector('.artworkUpload').disabled = true;
-        instance.view.querySelector('.artworkUploadMessage').textContent = 'Installing artwork pack...';
+        feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Installing artwork pack...');
         return ApiClient.ajax({ type: 'POST', dataType: 'json', contentType: 'application/json',
             url: ApiClient.getUrl('TuneIn/Artwork/Install'),
             data: JSON.stringify({ Token: pending.Token, ApproveUnscanned: unscanned }) }).then(function (result) {
             if (epoch !== instance.viewEpoch) return;
             instance.artworkInstalled = result;
-            instance.view.querySelector('.artworkUploadMessage').textContent = result.CleanupPending
-                ? 'Pack installed successfully; server cleanup is pending.' : 'Pack installed successfully.';
+            feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), result.CleanupPending
+                ? 'Pack installed successfully; server cleanup is pending.' : 'Pack installed successfully.');
             return ApiClient.ajax({ type: 'GET', dataType: 'json', url: ApiClient.getUrl('TuneIn/Refresh/Status') })
                 .then(function (status) {
                     if (epoch !== instance.viewEpoch) return;
@@ -971,26 +1320,25 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                         return (result.AffectedCategories || []).includes(category.Category);
                     });
                     instance.artworkAffected = affected.map(function (category) { return category.Category; });
-                    instance.view.querySelector('.artworkRefreshText').textContent = affected.length
+                    feedbackMessage(instance.view.querySelector('.artworkRefreshText'), affected.length
                         ? 'Affected enabled categories: ' + affected.map(function (category) { return category.Name; }).join(', ') + '.'
-                        : 'No enabled categories are affected.';
+                        : 'No enabled categories are affected.');
                 }, function () {
                     if (epoch !== instance.viewEpoch) return;
                     instance.artworkAffected = null;
-                    instance.view.querySelector('.artworkRefreshText').textContent = 'Could not load affected categories. Refresh status must be available before starting.';
+                    feedbackMessage(instance.view.querySelector('.artworkRefreshText'), 'Could not load affected categories. Refresh status must be available before starting.', true);
                 }).then(function () {
                     if (epoch === instance.viewEpoch) instance.view.querySelector('.artworkRefreshDialog').showModal();
                 });
         }, function (error) {
             if (epoch === instance.viewEpoch)
-                instance.view.querySelector('.artworkUploadMessage').textContent = 'Could not confirm artwork installation: ' + artworkError(error);
+                feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Could not confirm artwork installation: ' + artworkError(error), true);
         }).then(function () {
             instance.artworkBusy = false;
             instance.artworkInstalling = false;
             if (instance.refreshVisible) {
-                instance.view.querySelector('.artworkUpload').disabled = false;
                 if (epoch !== instance.viewEpoch)
-                    instance.view.querySelector('.artworkUploadMessage').textContent = 'Artwork operation finished while the page was away. Check the pack status.';
+                    feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Artwork operation finished while the page was away. Check the pack status.');
                 refreshControls(instance, statusConfirmed && epoch === instance.viewEpoch);
                 if (!statusConfirmed || epoch !== instance.viewEpoch) pollStatus(instance, instance.viewEpoch);
             }
@@ -1002,7 +1350,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var affected = instance.artworkAffected;
         instance.view.querySelector('.artworkRefreshDialog').close();
         if (!affected) {
-            instance.view.querySelector('.artworkUploadMessage').textContent = 'Pack installed, but refresh status is unavailable. Use Catalog Refresh when it is available.';
+            feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Pack installed, but refresh status is unavailable. Use Catalog Refresh when it is available.', true);
             return;
         }
         if (!affected.length) return;
@@ -1015,21 +1363,21 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         function next(index) {
             if (epoch !== instance.viewEpoch) return;
             if (index >= affected.length) {
-                instance.view.querySelector('.artworkUploadMessage').textContent = 'Pack installed; affected category refreshes started or queued.';
+                feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Pack installed; affected category refreshes started or queued.');
                 return;
             }
             var key = affected[index];
             var action = doRefresh(instance, 'Start', key);
             if (!action) {
-                instance.view.querySelector('.artworkUploadMessage').textContent =
-                    'Pack installed, but refresh could not start for: ' + remaining(index) + '. Check Catalog Refresh.';
+                feedbackMessage(instance.view.querySelector('.artworkUploadMessage'),
+                    'Pack installed, but refresh could not start for: ' + remaining(index) + '. Check Catalog Refresh.', true);
                 return;
             }
             return action.then(function (status) {
                 if (epoch !== instance.viewEpoch) return;
                 if (!status || status.RecoveryChoiceRequired) {
-                    instance.view.querySelector('.artworkUploadMessage').textContent =
-                        'Pack installed, but refresh could not start for: ' + remaining(index) + '. Check Catalog Refresh.';
+                    feedbackMessage(instance.view.querySelector('.artworkUploadMessage'),
+                        'Pack installed, but refresh could not start for: ' + remaining(index) + '. Check Catalog Refresh.', true);
                     return;
                 }
                 return next(index + 1);
@@ -1040,16 +1388,24 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function renderRefresh(instance, status, lockStatusCurrent) {
         instance.refreshBusy = !!status.Busy;
+        var diagnostics = instance.diagnostics;
+        if (diagnostics && diagnosticsCurrent(instance, diagnostics)) {
+            var signature = JSON.stringify([status.RunId, status.State, status.Busy, status.StartedUtc, status.Category]);
+            if (diagnostics.refreshSignature !== null && diagnostics.refreshSignature !== signature)
+                diagnosticsLoad(instance);
+            diagnostics.refreshSignature = signature;
+        }
         var version = instance.view.querySelector('.tuneInPluginVersion');
         if (version && status.PluginVersion) {
             version.textContent = 'TuneIn plugin ' + status.PluginVersion;
             version.hidden = false;
         }
         renderArtworkPacks(instance, status);
+        var refreshRequired = status.HasCompleteBaseline === false || !!status.RecoveryCategory || !!status.DirtyCategory ||
+            status.State === 'NeverRun' && status.HasRefreshBeenStarted === false && !status.StartedUtc;
         if (instance.refreshDefaultPending) {
             instance.refreshDefaultPending = false;
-            instance.refreshSection.open = instance.refreshBusy ||
-                status.State === 'NeverRun' && status.HasRefreshBeenStarted === false && !status.StartedUtc;
+            instance.refreshSection.open = instance.refreshBusy || refreshRequired;
         }
         var outcomes = (status.Categories || []).map(function (category) { return categoryOutcome(category.State); });
         var overall = categoryOutcome(status.State);
@@ -1189,7 +1545,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         else if (status.ErrorCode) description += '. ' + status.ErrorCode;
         if (status.ImportMayHavePartiallyApplied && status.Phase !== 'Importing')
             description += '. An interrupted import may have changed Emby metadata.';
-        instance.view.querySelector('.refreshStatus').textContent = description;
+        feedbackMessage(instance.view.querySelector('.refreshStatus'), description, categoryOutcome(status.State) === 'Error');
         var queued = status.QueuedRequests || [];
         var queueNote = instance.view.querySelector('.refreshQueueNote');
         queueNote.hidden = !queued.length;
@@ -1208,7 +1564,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
 
     function renderCategoryRefresh(instance, status) {
         var list = instance.view.querySelector('.tuneInRefreshCategories');
-        var categories = status.Categories || [];
+        var categories = (status.Categories || []).slice().sort(function (a, b) {
+            var left = refreshCategoryOrder.indexOf(a.Category);
+            var right = refreshCategoryOrder.indexOf(b.Category);
+            return (left < 0 ? refreshCategoryOrder.length : left) -
+                (right < 0 ? refreshCategoryOrder.length : right);
+        });
         var note = '';
         if (!categories.length) note = 'No categories are enabled in the saved browsing settings.';
         else if (status.ChannelRegistered === false)
@@ -1227,6 +1588,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             categories.forEach(function (item) {
                 var row = document.createElement('li');
                 var caption = document.createElement('span');
+                caption.className = 'tuneInRefreshCategoryCaption';
+                var captionText = document.createElement('span');
+                var indicator = document.createElement('span');
+                indicator.className = 'tuneInActivity';
+                indicator.hidden = true;
+                indicator.setAttribute('role', 'status');
+                caption.appendChild(captionText);
+                caption.appendChild(indicator);
                 var control = button('Refresh', function () { return doRefresh(instance, 'Start', item.Category); });
                 control.setAttribute('aria-label', 'Refresh ' + item.Name);
                 var actions = document.createElement('div');
@@ -1270,14 +1639,19 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 actions.appendChild(schedule);
                 row.appendChild(actions);
                 list.appendChild(row);
-                rows.set(item.Category, { row: row, caption: caption, control: control, schedule: schedule, counts: countValues });
+                rows.set(item.Category, { row: row, caption: captionText, indicator: indicator, control: control, schedule: schedule, counts: countValues });
             });
             $(list).trigger('create');
         }
         categories.forEach(function (item) {
-            var state = (status.QueuedRequests || []).includes(item.Category) ? 'Queued' : item.State;
+            var active = status.Busy && status.State === 'Running' && !status.SharedImport && status.Category === item.Category;
+            var state = !active && (status.QueuedRequests || []).includes(item.Category) ? 'Queued' : item.State;
             var row = rows.get(item.Category);
             row.row.setAttribute('data-outcome', categoryOutcome(state));
+            row.row.setAttribute('data-refreshing', String(!!active));
+            row.indicator.hidden = !active;
+            var indicatorText = active ? 'Refreshing' : '';
+            if (row.indicator.textContent !== indicatorText) row.indicator.textContent = indicatorText;
             var text = item.Name + ': ' + state;
             if (item.LimitReason && /^Limited\b/.test(state)) text += ' - ' + item.LimitReason;
             if (!status.Busy && item.Category === status.DirtyCategory) text += ' (reconciliation needed)';
@@ -1295,9 +1669,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 + (metrics.AvailablePartial && typeof metrics.AvailableStations === 'number' ? ' (partial)' : '');
             var knownInventory = typeof metrics.EmbyStations === 'number'
                 && Number.isInteger(metrics.EmbyStations) && metrics.EmbyStations >= 0;
-            values.emby.textContent = metrics.EmbyCountError
+            feedbackMessage(values.emby, metrics.EmbyCountError
                 ? (knownInventory ? count(metrics.EmbyStations) + ' (last known)' : 'Unavailable')
-                : count(metrics.EmbyStations);
+                : count(metrics.EmbyStations), !!metrics.EmbyCountError);
             values.missing.textContent = metrics.AvailablePartial || metrics.EmbyCountError
                 ? 'Unavailable' : count(metrics.NotInLatestDiscovery);
             values.missing.setAttribute('title', 'Emby stations absent from the latest complete comparable discovery. Unavailable for partial discoveries or failed inventory checks.');
@@ -1327,7 +1701,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.backupRequest = request;
         if (start) {
             instance.backupStarting = true;
-            instance.view.querySelector('.backupStatus').textContent = 'Requesting Emby Server Backup...';
+            feedbackMessage(instance.view.querySelector('.backupStatus'), 'Requesting Emby Server Backup...');
             refreshControls(instance, instance.refreshAvailable);
         }
         return ApiClient.ajax({
@@ -1346,11 +1720,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 Unconfirmed: 'Emby has not confirmed a new backup result. Check Scheduled Tasks before cleanup.'
             }[status.State];
             var target = instance.view.querySelector('.backupStatus');
-            if (target.textContent !== message) target.textContent = message;
+            feedbackMessage(target, message, status.State === 'Failed');
         }).catch(function () {
             if (epoch !== instance.viewEpoch || instance.backupRequest !== request) return;
-            instance.view.querySelector('.backupStatus').textContent =
-                'Could not verify the Emby backup status. Check Scheduled Tasks before cleanup.';
+            feedbackMessage(instance.view.querySelector('.backupStatus'),
+                'Could not verify the Emby backup status. Check Scheduled Tasks before cleanup.', true);
             // A failed start response does not prove that the server did not start the backup.
             if (start) instance.backupState = 'Running';
         }).finally(function () {
@@ -1373,7 +1747,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             if (cleanup.Failed) text += ' ' + cleanup.Failed + ' entries could not be removed.';
             if (cleanup.Message) text += ' ' + cleanup.Message;
         }
-        if (target.textContent !== text) target.textContent = text;
+        feedbackMessage(target, text, !!cleanup && (cleanup.State === 'Failed' || cleanup.State === 'Error' || !!cleanup.Failed));
     }
 
     function clearCleanupPreview(instance) {
@@ -1387,7 +1761,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.stationSearchGeneration = (instance.stationSearchGeneration || 0) + 1;
         instance.stationSearching = false;
         instance.view.querySelector('.cleanupStationResults').textContent = '';
-        instance.view.querySelector('.cleanupStationSearchStatus').textContent = '';
+        feedbackMessage(instance.view.querySelector('.cleanupStationSearchStatus'), '');
     }
 
     function stationReferenceLike(text) {
@@ -1406,16 +1780,16 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var status = view.querySelector('.cleanupStationSearchStatus');
         var results = view.querySelector('.cleanupStationResults');
         instance.stationSearching = true;
-        status.textContent = 'Searching TuneIn station entries...';
+        feedbackMessage(status, 'Searching TuneIn station entries...');
         refreshControls(instance, instance.refreshAvailable);
         return ApiClient.ajax({
             type: 'GET', dataType: 'json', url: ApiClient.getUrl('TuneIn/Cleanup/Stations', { Name: name })
         }).then(function (result) {
             if (epoch !== instance.viewEpoch || generation !== instance.stationSearchGeneration) return;
             var matches = result && result.Matches || [];
-            status.textContent = !matches.length ? 'No TuneIn station entries match "' + name + '".'
+            feedbackMessage(status, !matches.length ? 'No TuneIn station entries match "' + name + '".'
                 : (result.More ? 'Showing the first ' + matches.length + ' matches; enter more of the name to narrow them.'
-                    : matches.length + (matches.length === 1 ? ' match' : ' matches') + '. Choose the entry to delete.');
+                    : matches.length + (matches.length === 1 ? ' match' : ' matches') + '. Choose the entry to delete.'));
             var buttons = [];
             matches.forEach(function (match) {
                 var button = document.createElement('button');
@@ -1438,7 +1812,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     buttons.forEach(function (other) {
                         other.setAttribute('aria-pressed', other === button ? 'true' : 'false');
                     });
-                    status.textContent = 'Selected "' + match.Name + '" in ' + match.Path + '. Select Preview cleanup.';
+                    feedbackMessage(status, 'Selected "' + match.Name + '" in ' + match.Path + '. Select Preview cleanup.');
                     refreshControls(instance, instance.refreshAvailable);
                 });
                 buttons.push(button);
@@ -1447,7 +1821,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             $(results).trigger('create');
         }).catch(function () {
             if (epoch === instance.viewEpoch && generation === instance.stationSearchGeneration)
-                status.textContent = 'Could not search TuneIn station entries. Try again.';
+                feedbackMessage(status, 'Could not search TuneIn station entries. Try again.', true);
         }).finally(function () {
             if (epoch !== instance.viewEpoch || generation !== instance.stationSearchGeneration) return;
             instance.stationSearching = false;
@@ -1467,7 +1841,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
         var error = view.querySelector('.cleanupError');
         error.textContent = '';
-        view.querySelector('.cleanupStatus').textContent = start ? 'Starting cleanup...' : 'Checking channel entries...';
+        feedbackMessage(view.querySelector('.cleanupStatus'), start ? 'Starting cleanup...' : 'Checking channel entries...');
         refreshControls(instance, instance.refreshAvailable);
         return ApiClient.ajax({
             type: 'POST', dataType: 'json',
@@ -1498,7 +1872,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     : 'Remove ' + result.Folders + ' folders and ' + result.Stations + ' station entries from ' + result.Scope + '?') +
                 (result.Message ? ' ' + result.Message : '');
             view.querySelector('.cleanupConfirm').textContent = result.StationReference ? 'Confirm delete station' : 'Remove generated entries';
-            view.querySelector('.cleanupStatus').textContent = '';
+            feedbackMessage(view.querySelector('.cleanupStatus'), '');
             view.querySelector('.cleanupConfirmation').hidden = false;
         }).catch(function () {
             if (epoch === instance.viewEpoch) error.textContent = start
@@ -1597,7 +1971,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var finishedUtc = instance.refreshStatus.FinishedUtc;
         var requestToken = {};
         instance.refreshLogAction = requestToken;
-        instance.view.querySelector('.refreshLogMessage').textContent = 'Retrieving the latest refresh diagnostic report...';
+        feedbackMessage(instance.view.querySelector('.refreshLogMessage'), 'Retrieving the latest refresh diagnostic report...');
         refreshControls(instance, instance.refreshAvailable);
         return ApiClient.ajax({
             type: 'GET', dataType: 'json', url: ApiClient.getUrl('TuneIn/Refresh/Log')
@@ -1608,15 +1982,15 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             var report = instance.view.querySelector('.refreshFailureLog');
             report.textContent = result.Text || '';
             report.hidden = false;
-            instance.view.querySelector('.refreshLogMessage').textContent = result.Truncated
+            feedbackMessage(instance.view.querySelector('.refreshLogMessage'), result.Truncated
                 ? 'Refresh report retrieved; some details were omitted or truncated.'
-                : 'Refresh report retrieved.';
+                : 'Refresh report retrieved.');
         }).catch(function () {
             if (epoch === instance.viewEpoch && generation === (instance.refreshGeneration || 0)
                 && hasRefreshReport(instance.refreshStatus) && !instance.refreshStatus.Busy
                 && instance.refreshStatus.FinishedUtc === finishedUtc)
-                instance.view.querySelector('.refreshLogMessage').textContent =
-                    'Could not retrieve the latest refresh report. Check refresh status and try again.';
+                feedbackMessage(instance.view.querySelector('.refreshLogMessage'),
+                    'Could not retrieve the latest refresh report. Check refresh status and try again.', true);
         }).then(function () {
             if (instance.refreshLogAction === requestToken) {
                 instance.refreshLogAction = false;
@@ -1652,7 +2026,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 renderOptionalChecks(instance, null);
                 renderReadiness(instance);
                 setRefreshOutcome(instance, '', 'status unavailable');
-                instance.view.querySelector('.refreshStatus').textContent = 'Could not read refresh status. Retrying automatically.';
+                feedbackMessage(instance.view.querySelector('.refreshStatus'), 'Could not read refresh status. Retrying automatically.', true);
                 instance.view.querySelector('.refreshCategoryNote').textContent = '';
                 renderArtworkPacks(instance, null);
                 if (!instance.openLockFailed)
@@ -1745,8 +2119,13 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             message(instance, 'Use a whole number from 5 to 60 for the maximum rate-limit wait per refresh.');
             return false;
         }
-        if (!/^[0-9]+$/.test(discoveryDeadline) || Number(discoveryDeadline) < 1 || Number(discoveryDeadline) > 10) {
-            message(instance, 'Use a whole number from 1 to 10 for the discovery deadline.');
+        var rateLimitRetries = String(instance.view.querySelector('.maximumConsecutiveRateLimitRetries').value).trim();
+        if (!/^[0-9]+$/.test(rateLimitRetries) || Number(rateLimitRetries) > 10) {
+            message(instance, 'Use a whole number from 0 to 10 for consecutive HTTP 429 retries.');
+            return false;
+        }
+        if (!/^[0-9]+$/.test(discoveryDeadline) || Number(discoveryDeadline) < 2 || Number(discoveryDeadline) > 48) {
+            message(instance, 'Use a whole number from 2 to 48 for the discovery deadline.');
             return false;
         }
         var importDeadline = String(instance.view.querySelector('.importDeadlineHours').value || '').trim();
@@ -1755,14 +2134,23 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             return false;
         }
         var maxStationCount = String(instance.view.querySelector('.maxStationCount').value || '').trim();
-        if (maxStationCount !== '' && (!/^[0-9]+$/.test(maxStationCount) || Number(maxStationCount) < 1 || Number(maxStationCount) > 4000)) {
-            message(instance, 'Use Not set (blank) or a whole number from 1 to 4000 for Max Station Count.');
+        if (maxStationCount !== '' && (!/^[0-9]+$/.test(maxStationCount) || Number(maxStationCount) < 5 || Number(maxStationCount) > 10000)) {
+            message(instance, 'Use unlimited (blank) or a whole number from 5 to 10000 for Max Station Count.');
             return false;
         }
         var traversalDepth = String(instance.view.querySelector('.traversalDepthLimit').value || '').trim();
         if (!/^[0-9]+$/.test(traversalDepth) || Number(traversalDepth) < 3 || Number(traversalDepth) > 50) {
             message(instance, 'Use a whole number from 3 to 50 for the traversal depth limit.');
             return false;
+        }
+        for (var i = 0; i < progressiveSettings.length; i++) {
+            var setting = progressiveSettings[i];
+            var value = String(instance.view.querySelector(setting[1]).value || '').trim();
+            if (!/^[0-9]+$/.test(value) || Number(value) < 1 || Number(value) > setting[2]) {
+                message(instance, 'Use a whole number from 1 to ' + setting[2] + ' for ' + setting[4] + '.');
+                return false;
+            }
+            config[setting[0]] = Number(value);
         }
         var localEnabled = instance.view.querySelector('[data-category="EnableLocalRadio"]').checked;
         var browsing = browsingSelected(instance);
@@ -1774,13 +2162,12 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         }
         var source = instance.view.querySelector('.localSource').value;
         var useCoordinates = localEnabled && source === 'coordinates';
-        var localSelectionMode = selectorMode(instance, selectors[6]);
         var hasSavedRegion = (config.LocalCities || []).some(function (item) {
             return item && item.Enabled !== false && /^r[1-9][0-9]{0,9}$/.test(item.Id);
         });
         if (browsing && localEnabled && source !== 'coordinates' && (source !== 'regions' ||
-            localSelectionMode === 'selected' && !hasSavedRegion)) {
-            message(instance, 'Choose coordinates or regions for Local Radio; Selected only requires at least one saved city or region.');
+            !hasSavedRegion)) {
+            message(instance, 'Choose valid coordinates or at least one enabled saved city or region for Local Radio.');
             return false;
         }
         var parts = coordinates.split(',');
@@ -1796,6 +2183,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         config.LatLon = coordinates || null;
         config.ApiRequestIntervalSeconds = Number(requestInterval);
         config.MaximumRateLimitWaitMinutes = Number(maximumRateLimitWait);
+        config.MaximumConsecutiveRateLimitRetries = Number(rateLimitRetries);
         config.ImportDeadlineHours = Number(importDeadline);
         config.DiscoveryDeadlineHours = Number(discoveryDeadline);
         config.MaxStationCount = maxStationCount === '' ? null : Number(maxStationCount);
@@ -1804,11 +2192,15 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         config.AllowDirectHlsPlayback = instance.view.querySelector('.allowDirectHlsPlayback').checked;
         config.HideRegionalGenres = instance.view.querySelector('.hideRegionalGenres').checked;
         config.AllowPartialCatalogImport = instance.view.querySelector('.allowPartialCatalogImport').checked;
+        config.EnableDiscoveryProgressiveImport = instance.view.querySelector('.enableDiscoveryProgressiveImport').checked;
         config.RefreshSchedules = Array.from(instance.refreshSchedules)
             .filter(function (entry) { return entry[1] > 0; })
             .map(function (entry) { return { Category: entry[0], IntervalHours: entry[1] }; });
         config.UseCoordinates = useCoordinates;
-        config.LocalRadioSource = source || null;
+        var savedSource = normalizeLocalSource(config.LocalRadioSource);
+        config.LocalRadioSource = source === (savedSource === 'cities' ? 'regions' : savedSource)
+            ? config.LocalRadioSource : source || null;
+        if (localEnabled && source === 'regions') config.LocalMode = 'selected';
         categories.forEach(function (spec) {
             config[spec[0]] = instance.view.querySelector('[data-category="' + spec[0] + '"]').checked;
         });
@@ -1839,8 +2231,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             instance.settingsLocked = true;
             if (epoch !== instance.viewEpoch) return;
             Dashboard.processPluginConfigurationUpdateResult(result);
-            message(instance, ['Configuration saved and locked.', browsingStatus(config), 'No catalog crawl was started.']
-                .filter(Boolean).join(' '), configurationRequired(config));
+            message(instance, browsingStatus(config), configurationRequired(config), false);
             renderCatalogRefreshPrompt(instance);
         }, function (error) {
             if (epoch !== instance.viewEpoch) return;
@@ -1866,12 +2257,74 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshSchedules = new Map();
         instance.selectorErrors = new Map();
         instance.setupControlsReady = false;
-        ['.globalSummary', '.browsingSummary', '.categoriesSummary', '.stationSelectionsSummary', '.maintenanceSummary'].forEach(function (selector) {
+        var helpStates = new WeakMap();
+        view.querySelectorAll('.tuneInHelp, .tuneInArtworkHelp').forEach(function (help) {
+            var state = { pinned: false, hovering: false, dismissed: false };
+            helpStates.set(help, state);
+            function positionHelp() {
+                var popup = help.querySelector(':scope > :not(summary)');
+                var anchor = help.getBoundingClientRect();
+                var bounds = popup.getBoundingClientRect();
+                var width = document.documentElement.clientWidth;
+                var height = document.documentElement.clientHeight;
+                var scale = anchor.width / help.offsetWidth || 1;
+                var right = anchor.right + bounds.width <= width - 8;
+                var left = right ? anchor.width : Math.max(8 - anchor.left, Math.min(0, width - 8 - bounds.width - anchor.left));
+                var top = right ? Math.max(8 - anchor.top, Math.min(0, height - 8 - bounds.height - anchor.top))
+                    : anchor.height;
+                if (!right && anchor.bottom + bounds.height > height - 8 && anchor.top >= bounds.height + 8)
+                    top = -bounds.height;
+                help.style.setProperty('--tunein-help-left', left / scale + 'px');
+                help.style.setProperty('--tunein-help-top', top / scale + 'px');
+            }
+            help.addEventListener('pointerenter', function (event) {
+                if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
+                state.hovering = true;
+                state.dismissed = false;
+                help.open = true;
+                positionHelp();
+            });
+            help.addEventListener('pointerleave', function (event) {
+                if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
+                state.hovering = false;
+                state.dismissed = false;
+                help.open = state.pinned;
+            });
+            help.querySelector('summary').addEventListener('click', function (event) {
+                event.preventDefault();
+                state.pinned = !state.pinned;
+                state.dismissed = !state.pinned;
+                help.open = state.pinned || (state.hovering && !state.dismissed);
+                if (help.open) positionHelp();
+            });
+        });
+        view.addEventListener('keydown', function (event) {
+            if (event.key !== 'Escape' || !event.target.closest) return;
+            var help = event.target.closest('.tuneInHelp, .tuneInArtworkHelp');
+            if (!help || !help.open) return;
+            var state = helpStates.get(help);
+            if (state) {
+                state.pinned = false;
+                state.dismissed = true;
+            }
+            help.open = false;
+            help.querySelector('summary').focus();
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        ['.globalSummary', '.categoriesSummary', '.stationSelectionsSummary', '.maintenanceSummary'].forEach(function (selector) {
             bindDisclosure(view.querySelector(selector));
+        });
+        bindDisclosure(view.querySelector('.browsingSummary'), function () {
+            if (!view.querySelector('.browsingSummary').parentNode.open) expandFilteringGroups(instance);
         });
         bindDisclosure(view.querySelector('.refreshSummary'), function () { instance.refreshDefaultPending = false; });
         view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });
         view.querySelector('.configurationCompleted').addEventListener('change', function () { editing(instance); setupChanged(instance); });
+        view.querySelector('.enableDiscoveryProgressiveImport').addEventListener('change', function () {
+            showProgressivePacing(instance);
+            editing(instance);
+        });
         view.querySelector('.optionalChecksRun').addEventListener('click', function () { return runOptionalChecks(instance); });
         view.querySelector('.skipOptionalChecks').addEventListener('input', function (event) { event.stopPropagation(); });
         view.querySelector('.skipOptionalChecks').addEventListener('change', function (event) {
@@ -1883,23 +2336,56 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             if (!instance.refreshSection.open && dialog.open) dialog.close();
             if (!instance.refreshSection.open || !instance.refreshVisible) return;
             instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
-            view.querySelector('.refreshStatus').textContent = 'Reading refresh status...';
+            feedbackMessage(view.querySelector('.refreshStatus'), 'Reading refresh status...');
             view.querySelector('.refreshCategoryNote').textContent = '';
             refreshControls(instance, false);
             pollStatus(instance, instance.viewEpoch);
         });
         view.querySelector('form').addEventListener('submit', onSubmit.bind(this));
-        view.querySelector('form').addEventListener('input', function () { setupChanged(instance); });
-        view.querySelector('form').addEventListener('change', function () { setupChanged(instance); });
+        view.querySelector('form').addEventListener('invalid', function (event) {
+            for (var parent = event.target.parentElement; parent && parent !== view; parent = parent.parentElement) {
+                if (parent.tagName === 'DETAILS') parent.open = true;
+            }
+        }, true);
+        function settingsChanged(event) {
+            if (event && event.target === view.querySelector('.settingsLocked')) return;
+            setupChanged(instance);
+        }
+        view.querySelector('form').addEventListener('input', settingsChanged);
+        view.querySelector('form').addEventListener('change', settingsChanged);
         view.querySelector('.artworkUpload').addEventListener('click', function () {
-            if (!instance.artworkBusy) view.querySelector('.artworkFile').click();
+            if (!instance.artworkBusy && !editingBlocked(instance)) view.querySelector('.artworkFile').click();
         });
         view.querySelector('.artworkFile').addEventListener('change', function (event) {
             event.stopPropagation();
             var file = this.files && this.files[0];
             this.value = '';
+            if (!file || instance.artworkBusy) return;
+            if (editingBlocked(instance)) {
+                feedbackMessage(view.querySelector('.artworkUploadMessage'), 'Unlock settings and wait for active work before verifying artwork.', true);
+                return;
+            }
+            instance.artworkSelectedFile = file;
+            view.querySelector('.artworkVerifyText').textContent = 'Selected: ' + file.name + '.';
+            view.querySelector('.artworkVerifyDialog').showModal();
+        });
+        view.querySelector('.artworkVerifyStart').addEventListener('click', function () {
+            var file = instance.artworkSelectedFile;
+            instance.artworkSelectedFile = null;
+            view.querySelector('.artworkVerifyDialog').close();
+            if (editingBlocked(instance)) {
+                feedbackMessage(view.querySelector('.artworkUploadMessage'), 'Unlock settings and wait for active work before verifying artwork.', true);
+                return;
+            }
             return uploadArtwork(instance, file);
         });
+        function cancelArtworkVerification() {
+            instance.artworkSelectedFile = null;
+            var verifyDialog = view.querySelector('.artworkVerifyDialog');
+            if (verifyDialog.open) verifyDialog.close();
+        }
+        view.querySelector('.artworkVerifyCancel').addEventListener('click', cancelArtworkVerification);
+        view.querySelector('.artworkVerifyDialog').addEventListener('cancel', cancelArtworkVerification);
         view.querySelector('.artworkApproveUnscanned').addEventListener('change', function (event) {
             event.stopPropagation();
             view.querySelector('.artworkInstall').disabled = !this.checked;
@@ -1910,11 +2396,52 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         view.querySelector('.artworkRefreshNow').addEventListener('click', function () { return refreshArtwork(instance); });
         view.querySelector('.artworkRefreshLater').addEventListener('click', function () {
             view.querySelector('.artworkRefreshDialog').close();
-            view.querySelector('.artworkUploadMessage').textContent = 'Pack installed. No refresh was started.';
+            feedbackMessage(view.querySelector('.artworkUploadMessage'), 'Pack installed. No refresh was started.');
         });
         view.querySelector('.refreshStart').addEventListener('click', function () { return doRefresh(instance, 'Start'); });
         view.querySelector('.refreshCancel').addEventListener('click', function () { return doRefresh(instance, 'Cancel'); });
         view.querySelector('.refreshLogButton').addEventListener('click', function () { return retrieveRefreshLog(instance); });
+        view.querySelector('.diagnosticsCapture').addEventListener('click', function () { return diagnosticsCapture(instance); });
+        view.querySelector('.diagnosticsPacks').addEventListener('change', function () { return diagnosticsSelect(instance); });
+        view.querySelector('.diagnosticsReviewed').addEventListener('change', function () {
+            diagnosticsClearDraftLink(instance);
+            instance.diagnostics.reviewVersion++;
+            diagnosticsControls(instance);
+        });
+        view.querySelector('.diagnosticsDownload').addEventListener('click', function () {
+            var pack = instance.diagnostics.preview;
+            if (!pack || this.disabled) return;
+            var url;
+            try {
+                url = URL.createObjectURL(new Blob([pack.PreviewText], { type: 'application/json' }));
+                var link = document.createElement('a');
+                link.href = url;
+                link.download = pack.FileName;
+                link.click();
+                diagnosticsMessage(instance, 'Downloaded the exact redacted preview. Nothing was uploaded.');
+            } catch (error) {
+                diagnosticsMessage(instance, 'Could not download the diagnostic pack. Try again.', true);
+            } finally {
+                if (url) URL.revokeObjectURL(url);
+            }
+        });
+        view.querySelector('.diagnosticsOpen').addEventListener('click', function (event) {
+            if (event) { event.preventDefault(); event.stopPropagation(); }
+            return diagnosticsDraft(instance);
+        });
+        view.querySelector('.diagnosticsDelete').addEventListener('click', function () { diagnosticsDelete(instance, false); });
+        view.querySelector('.diagnosticsDeleteAll').addEventListener('click', function () { diagnosticsDelete(instance, true); });
+        view.querySelector('.diagnosticsDeleteCancel').addEventListener('click', function () {
+            instance.diagnostics.deleteTarget = null;
+            view.querySelector('.diagnosticsDeleteDialog').close();
+        });
+        view.querySelector('.diagnosticsDeleteConfirm').addEventListener('click', function () { return diagnosticsConfirmDelete(instance); });
+        view.querySelector('.diagnosticsDeleteDialog').addEventListener('close', function () {
+            var state = instance.diagnostics;
+            state.deleteTarget = null;
+            if (state.deleteFocus && !state.deleteFocus.disabled) state.deleteFocus.focus();
+            else view.querySelector('.diagnosticsCapture').focus();
+        });
         view.querySelector('.cleanupPreview').addEventListener('click', function () { return doCleanup(instance, false); });
         view.querySelector('.cleanupConfirm').addEventListener('click', function () { return doCleanup(instance, true); });
         view.querySelector('.cleanupCancel').addEventListener('click', function () { return stopCleanup(instance); });
@@ -1980,7 +2507,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         art.onload = function () { hero.hidden = false; };
         art.onerror = function () { hero.hidden = true; };
         // An img request cannot send Emby's auth header, so pass the session token like Emby's own image URLs.
-        art.src = ApiClient.getUrl('TuneIn/PanelArtwork', { v: '1', api_key: ApiClient.accessToken() });
+        art.src = ApiClient.getUrl('TuneIn/PanelArtwork', { v: '2', api_key: ApiClient.accessToken() });
     }
 
     Object.assign(View.prototype, BaseView.prototype);
@@ -1990,8 +2517,19 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var instance = this;
         var epoch = instance.viewEpoch = (instance.viewEpoch || 0) + 1;
         instance.refreshVisible = true;
+        instance.diagnostics = { epoch: epoch, packs: [], latest: null, captureAvailable: false,
+            repository: null, reportingError: null, storageError: null, hasStoredPacks: false,
+            preview: null, previewVersion: 0, reviewVersion: 0,
+            listVersion: 0, listPending: false, listAgain: false, busy: false, refreshSignature: null };
+        instance.view.querySelector('.diagnosticsPublic').checked = false;
+        instance.view.querySelector('.diagnosticsPacks').value = '';
+        instance.view.querySelector('.diagnosticsRepository').textContent = 'Unavailable';
+        diagnosticsClearPreview(instance);
+        diagnosticsMessage(instance, '');
+        diagnosticsLoad(instance);
         instance.view.querySelector('.optionalChecksRun').disabled = !!instance.optionalChecking;
-        instance.view.querySelector('.artworkUpload').disabled = !!instance.artworkBusy;
+        instance.view.querySelector('.artworkUpload').disabled = true;
+        instance.view.querySelector('.artworkFile').disabled = true;
         if (instance.artworkBusy) pollArtwork(instance, epoch);
         showLibraryArtwork(instance.view);
         instance.refreshDefaultPending = true;
@@ -2000,7 +2538,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         setRefreshOutcome(instance, '', 'status unavailable');
         clearCleanupPreview(instance);
         instance.view.querySelector('.cleanupError').textContent = '';
-        instance.view.querySelector('.refreshStatus').textContent = 'Reading refresh status...';
+        feedbackMessage(instance.view.querySelector('.refreshStatus'), 'Reading refresh status...');
         instance.view.querySelector('.refreshError').textContent = '';
         instance.view.querySelector('.catalogRefreshPrompt').hidden = true;
         instance.view.querySelector('.catalogRefreshPrompt').textContent = '';
@@ -2015,6 +2553,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshStatus = null;
         renderOptionalChecks(instance, null);
         instance.view.querySelector('.tuneInReadiness').hidden = true;
+        instance.view.querySelector('.settingsChangeNotice').hidden = true;
         instance.setupControlsReady = false;
         instance.selectorErrors.clear();
         instance.settingsLocked = undefined;
@@ -2043,24 +2582,33 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 config.ApiRequestIntervalSeconds == null ? 3 : Math.min(config.ApiRequestIntervalSeconds, 30);
             view.querySelector('.maximumRateLimitWaitMinutes').value =
                 config.MaximumRateLimitWaitMinutes == null ? 15 : config.MaximumRateLimitWaitMinutes;
+            view.querySelector('.maximumConsecutiveRateLimitRetries').value =
+                config.MaximumConsecutiveRateLimitRetries == null ? 6 : config.MaximumConsecutiveRateLimitRetries;
             view.querySelector('.importDeadlineHours').value =
-                config.ImportDeadlineHours == null ? 8 : config.ImportDeadlineHours;
+                config.ImportDeadlineHours == null ? 24 : config.ImportDeadlineHours;
             view.querySelector('.discoveryDeadlineHours').value =
-                config.DiscoveryDeadlineHours == null ? 2 : config.DiscoveryDeadlineHours;
+                config.DiscoveryDeadlineHours == null ? 12 : config.DiscoveryDeadlineHours;
             view.querySelector('.maxStationCount').value =
-                config.MaxStationCount == null ? '' : config.MaxStationCount;
+                config.MaxStationCount === undefined ? 500 : config.MaxStationCount == null ? '' : config.MaxStationCount;
             view.querySelector('.traversalDepthLimit').value =
                 config.TraversalDepthLimit == null ? 10 : config.TraversalDepthLimit;
             view.querySelector('.enableCatalogIdentityDiagnostics').checked = config.EnableCatalogIdentityDiagnostics === true;
             view.querySelector('.allowDirectHlsPlayback').checked = config.AllowDirectHlsPlayback === true;
             view.querySelector('.hideRegionalGenres').checked = config.HideRegionalGenres !== false;
             view.querySelector('.allowPartialCatalogImport').checked = config.AllowPartialCatalogImport !== false;
+            view.querySelector('.enableDiscoveryProgressiveImport').checked = config.EnableDiscoveryProgressiveImport === true;
+            progressiveSettings.forEach(function (setting) {
+                view.querySelector(setting[1]).value = config[setting[0]] == null ? setting[3] : config[setting[0]];
+            });
+            showProgressivePacing(instance);
             var hasRegions = (config.LocalCities || []).some(function (item) {
                 return item && item.Enabled !== false && /^r[1-9][0-9]{0,9}$/.test(item.Id);
             });
             var ambiguous = !config.LocalRadioSource && config.UseCoordinates && hasRegions;
-            view.querySelector('.localSource').value = config.LocalRadioSource ||
-                (ambiguous ? '' : config.UseCoordinates ? 'coordinates' : hasRegions ? 'regions' : '');
+            var localSource = normalizeLocalSource(config.LocalRadioSource);
+            view.querySelector('.localSource').value = config.LocalRadioSource
+                ? (localSource === 'cities' ? 'regions' : localSource)
+                : (ambiguous ? '' : config.UseCoordinates ? 'coordinates' : hasRegions ? 'regions' : '');
             view.querySelector('.configurationCompleted').checked = config.SchemaVersion === 1 ?
                 !!config.ConfigurationCompleted : config.SchemaVersion === 0 || config.SchemaVersion == null;
             var saved = config.SettingsSaved === true || (config.SettingsSaved == null && config.SchemaVersion === 1);
@@ -2085,7 +2633,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             renderReadiness(instance);
             $(view).trigger('create');
             message(instance, browsingStatus(config) + (ambiguous && config.EnableLocalRadio ?
-                ' Local Radio is disabled until you choose one source and save.' : ''), configurationRequired(config));
+                ' Local Radio is disabled until you choose one source and save.' : ''), configurationRequired(config), false);
         }).catch(function (error) {
             if (epoch !== instance.viewEpoch) return;
             instance.config = null;
@@ -2103,6 +2651,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     View.prototype.onPause = function () {
         this.viewEpoch = (this.viewEpoch || 0) + 1;
         this.refreshVisible = false;
+        if (this.diagnostics) diagnosticsResetReview(this);
+        var diagnosticsDialog = this.view.querySelector('.diagnosticsDeleteDialog');
+        if (diagnosticsDialog.open) diagnosticsDialog.close();
         this.backupRequest = null;
         this.backupStarting = false;
         clearCleanupPreview(this);
@@ -2112,6 +2663,9 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         closeChannelScheduleDialog(this);
         clearTimeout(this.refreshTimer);
         clearTimeout(this.artworkTimer);
+        this.artworkSelectedFile = null;
+        var artworkVerifyDialog = this.view.querySelector('.artworkVerifyDialog');
+        if (artworkVerifyDialog.open) artworkVerifyDialog.close();
         if (this.artworkPending) discardArtwork(this);
         var artworkRefreshDialog = this.view.querySelector('.artworkRefreshDialog');
         if (artworkRefreshDialog.open) artworkRefreshDialog.close();

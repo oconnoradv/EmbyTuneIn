@@ -62,8 +62,7 @@ namespace MediaBrowser.Plugins.TuneIn
             directory.CheckCurrent(snapshot, cancellationToken);
             if (snapshot.Ready && !string.IsNullOrEmpty(query.FolderId))
                 directory.Resolve(snapshot, query.FolderId);
-            // Emby forwards the RefreshChannelContent token unchanged; its scheduled channel refresh and
-            // client browsing use other tokens and must not consume or fail the staged import.
+            // Only the import token can consume staged data; other requests must remain isolated.
             var active = Volatile.Read(ref activeImport);
             if (active != null && active.Token == cancellationToken)
                 return Task.FromResult(active.Staged.Read(query.FolderId, cancellationToken));
@@ -101,7 +100,6 @@ namespace MediaBrowser.Plugins.TuneIn
             if (staged == null || import == null) throw new ArgumentNullException(staged == null ? nameof(staged) : nameof(import));
             // The token identifies the import traversal, so it must be unique to this import.
             if (!token.CanBeCanceled) throw new ArgumentException("A TuneIn import requires its own cancellation token.", nameof(token));
-            // Emby can request listings in a different execution context from the import caller.
             var active = new ActiveImport(staged, token);
             if (Interlocked.CompareExchange(ref activeImport, active, null) != null)
                 throw new InvalidOperationException("A TuneIn channel import is already active.");

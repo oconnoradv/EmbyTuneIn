@@ -8,10 +8,11 @@ using Xunit;
 
 namespace MediaBrowser.Plugins.TuneIn.Tests
 {
-    [CollectionDefinition("Artwork status cache", DisableParallelization = true)]
-    public sealed class ArtworkStatusCacheCollection { }
+    // Artwork paths are process-wide; tests that replace them must also exclude concurrent readers.
+    [CollectionDefinition("Artwork globals", DisableParallelization = true)]
+    public sealed class ArtworkGlobalsCollection { }
 
-    [Collection("Artwork status cache")]
+    [Collection("Artwork globals")]
     public class ArtworkPackStatusCacheTests
     {
         private sealed class Clock
@@ -66,7 +67,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 var bytes = new byte[] { 1, 2, 3 };
                 File.WriteAllBytes(image, bytes);
                 var hash = Convert.ToHexString(SHA256.HashData(bytes));
-                File.WriteAllText(manifest, "{\"schemaVersion\":1,\"scope\":\"categories\",\"packName\":\"Test\",\"imageCount\":1,"
+                File.WriteAllText(manifest, "{\"schemaVersion\":2,\"scope\":\"categories\",\"packId\":\"test\",\"packName\":\"Test\",\"theme\":\"Test\",\"version\":\"1\",\"imageCount\":1,"
                     + "\"images\":[{\"id\":\"talk\",\"file\":\"talk.jpg\",\"sha256\":\"" + hash + "\"}]}");
                 var clock = new Clock();
                 var cache = clock.Cache(TuneInCategoryArtwork.ReadPackStatus);
@@ -120,7 +121,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var result = new TuneInArtworkPackStatus
             {
                 Scope = "genres", Path = "pack", Status = "unavailable", InstalledCount = 2,
-                Name = "Actual", ImageCount = 3, MatchedCount = 1, ModifiedCount = 1, AddedCount = 0
+                Name = "Actual", PackId = "actual", Theme = "Custom", Version = "2.0", ImageCount = 3, MatchedCount = 1, ModifiedCount = 1, AddedCount = 0
             };
             var cache = clock.Cache(scope => scope == "genres" ? result
                 : new TuneInArtworkPackStatus { Scope = scope, Status = "invalid" });
@@ -137,6 +138,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal("genres", genres.Status.Scope);
             Assert.Equal("pack", genres.Status.Path);
             Assert.Equal("Actual", genres.Status.Name);
+            Assert.Equal("actual", genres.Status.PackId);
+            Assert.Equal("Custom", genres.Status.Theme);
+            Assert.Equal("2.0", genres.Status.Version);
             Assert.Equal(3, genres.Status.ImageCount);
             Assert.Equal(2, genres.Status.InstalledCount);
             Assert.Equal(1, genres.Status.MatchedCount);

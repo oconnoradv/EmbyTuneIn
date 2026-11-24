@@ -26,6 +26,7 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         public string ConfigurationKey { get; set; }
         public string RequestedCategory { get; set; }
+        public string CurrentCategory { get; set; }
         public DateTime StartedUtc { get; set; }
         public DateTime SavedUtc { get; set; }
         public List<TuneInCachedPage> Pages { get; set; } = new List<TuneInCachedPage>();
@@ -37,6 +38,15 @@ namespace MediaBrowser.Plugins.TuneIn
         public string RequestedCategory { get; set; }
         public int Retries { get; set; }
         public string Phase { get; set; } = "discovery";
+        public List<TuneInDiscoveryImportPacing> DiscoveryImports { get; set; } = new List<TuneInDiscoveryImportPacing>();
+    }
+
+    public sealed class TuneInDiscoveryImportPacing
+    {
+        public string Category { get; set; }
+        public int Passes { get; set; }
+        public int Entries { get; set; }
+        public DateTime LastUtc { get; set; }
     }
 
     public sealed class TuneInItemSnapshot
@@ -88,6 +98,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public List<TuneInCategorySnapshot> Categories { get; set; } = new List<TuneInCategorySnapshot>();
         public string DirtyCategory { get; set; }
         public bool DirtyImportWasScoped { get; set; }
+        public bool DirtyDiscoveryPreview { get; set; }
         public int ChannelImportVersion { get; set; }
         public List<string> PendingCategories { get; set; } = new List<string>();
         public List<string> CleanedCategories { get; set; } = new List<string>();
@@ -174,6 +185,12 @@ namespace MediaBrowser.Plugins.TuneIn
             if (recovery == null || recovery.ConfigurationKey?.Length != 64
                 || recovery.Retries < 0 || recovery.Retries > TuneInRefresh.InterruptionRetryLimit
                 || (recovery.Phase != "discovery" && recovery.Phase != "import")
+                || recovery.DiscoveryImports == null || recovery.DiscoveryImports.Count > 8
+                || recovery.DiscoveryImports.Any(pacing => pacing == null
+                    || !new[] { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" }.Contains(pacing.Category)
+                    || pacing.Passes < 0 || pacing.Passes > 100 || pacing.Entries < 0
+                    || pacing.Entries > TuneInStagedImport.MaxItems)
+                || recovery.DiscoveryImports.Select(pacing => pacing.Category).Distinct(StringComparer.Ordinal).Count() != recovery.DiscoveryImports.Count
                 || (recovery.RequestedCategory != null && !new[]
                     { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" }
                     .Contains(recovery.RequestedCategory)))
@@ -257,7 +274,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     + (item?.Type?.Length ?? 0) + (item?.ContentType?.Length ?? 0)
                     + (item?.MediaType?.Length ?? 0) + (item?.ImageUrl?.Length ?? 0))))) > TuneInStagedImport.MaxEstimatedBytes
                 || (checkpoint.DirtyCategory != null && !validCategories.Contains(checkpoint.DirtyCategory))
-                || (checkpoint.DirtyImportWasScoped && checkpoint.DirtyCategory == null))
+                || (checkpoint.DirtyImportWasScoped && checkpoint.DirtyCategory == null)
+                || (checkpoint.DirtyDiscoveryPreview && !checkpoint.DirtyImportWasScoped))
                 throw new InvalidDataException("Invalid TuneIn refresh state.");
 
             foreach (var category in checkpoint.Categories)
@@ -303,11 +321,13 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly Action<int> received;
         private readonly Action rateLimitRetry;
         private readonly Action<string, string, string> skippedBrowseLink;
+        private readonly Action<string, string, string, string, bool> diagnosticLink;
         private readonly bool strictBudget;
         private readonly int maxPages;
         private readonly int maxBytes;
         private long cachedBytes;
         private readonly bool retryRateLimit;
+        private readonly int maxRateLimitRetries;
         private int consecutiveRateLimits;
         private long rateLimitGeneration;
         internal int SkippedBrowseLinks { get; private set; }
@@ -341,7 +361,8 @@ namespace MediaBrowser.Plugins.TuneIn
             Action<bool> requested = null, Action completed = null, Action<int> received = null,
             bool strictBudget = true, bool retryRateLimit = false, Action<string, string, string> skippedBrowseLink = null,
             int maxPages = MaxPages, TuneInRefreshTimings timings = null, int maxBytes = MaxBytes,
-            Action rateLimitRetry = null, IEnumerable<TuneInCachedPage> recentPages = null)
+            Action rateLimitRetry = null, IEnumerable<TuneInCachedPage> recentPages = null, int maxRateLimitRetries = 6,
+            Action<string, string, string, string, bool> diagnosticLink = null)
         {
             this.clock = clock ?? (() => DateTime.UtcNow);
             this.lifetime = lifetime;
@@ -350,6 +371,7 @@ namespace MediaBrowser.Plugins.TuneIn
             this.received = received;
             this.rateLimitRetry = rateLimitRetry;
             this.skippedBrowseLink = skippedBrowseLink;
+            this.diagnosticLink = diagnosticLink;
             this.strictBudget = strictBudget;
             this.maxPages = maxPages;
             this.maxBytes = maxBytes;
@@ -357,6 +379,9 @@ namespace MediaBrowser.Plugins.TuneIn
                 .ToDictionary(page => page.Key, StringComparer.Ordinal);
             Timings = timings;
             this.retryRateLimit = retryRateLimit;
+            if (maxRateLimitRetries < 0 || maxRateLimitRetries > 10)
+                throw new ArgumentOutOfRangeException(nameof(maxRateLimitRetries));
+            this.maxRateLimitRetries = maxRateLimitRetries;
             foreach (var page in cached ?? Enumerable.Empty<TuneInCachedPage>())
                 if (Fresh(page)) CachePage(page);
         }
@@ -390,6 +415,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 folder.SkippedLink = true;
                 folder.SkippedStation |= stationUrl;
             }
+            diagnosticLink?.Invoke(category, reason, source.Url, rejectedLink, stationUrl);
             skippedBrowseLink(category, stationUrl ? "station URL: " + reason : reason,
                 "Source: " + TuneInCatalogDiagnostics.DescribeLink(source.Url)
                 + Environment.NewLine + "Rejected link: " + TuneInCatalogDiagnostics.DescribeLink(rejectedLink));
@@ -503,7 +529,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             {
                                 rateLimitRecorded = true;
                                 rateLimitGeneration++;
-                                rateLimitAllowed = ++consecutiveRateLimits <= 6;
+                                rateLimitAllowed = ++consecutiveRateLimits <= maxRateLimitRetries;
                             }
                         }
                     };
@@ -521,7 +547,7 @@ namespace MediaBrowser.Plugins.TuneIn
                         if (!rateLimitRecorded)
                         {
                             rateLimitGeneration++;
-                            rateLimitAllowed = ++consecutiveRateLimits <= 6;
+                            rateLimitAllowed = ++consecutiveRateLimits <= maxRateLimitRetries;
                         }
                         if (!rateLimitAllowed) throw;
                     }

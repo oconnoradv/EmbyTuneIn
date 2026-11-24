@@ -33,6 +33,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 Serializer.Serialize(writer, value);
                 using (var reader = new StringReader(writer.ToString()))
                     Value = (PluginConfiguration)Serializer.Deserialize(reader);
+                // XML cloning can erase a whitespace-only source and incorrectly trigger legacy inference.
+                Value.LocalRadioSource = value.LocalRadioSource;
                 writer.GetStringBuilder().Clear();
                 var keyValue = (PluginConfiguration)Serializer.Deserialize(new StringReader(
                     SerializeConfiguration(Value)));
@@ -117,6 +119,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private static bool UsesSelectedSelections(PluginConfiguration value, string category)
         {
             if (!SelectionCategories.Contains(category)) return false;
+            if (category == "local" && value.EnableLocalRadio && !value.UseCoordinates) return true;
             var mode = SelectionMode(value, category);
             if (string.Equals(mode, "selected", StringComparison.OrdinalIgnoreCase)) return true;
             if (string.Equals(mode, "all", StringComparison.OrdinalIgnoreCase)) return false;
@@ -250,9 +253,10 @@ namespace MediaBrowser.Plugins.TuneIn
         private static string ResolveLocalSource(PluginConfiguration value)
         {
             var regions = ConfiguredSelections(value, "local").Any(s => s != null && s.Enabled && ValidId(s.Id, "local"));
-            var hasRegionSource = !UsesSelectedSelections(value, "local") || regions;
-            if (value.LocalRadioSource == "regions") return hasRegionSource && !value.UseCoordinates ? "regions" : null;
-            if (value.LocalRadioSource == "coordinates")
+            var source = value.LocalRadioSource?.Trim().ToLowerInvariant();
+            if (source == "regions" || source == "cities")
+                return regions && !value.UseCoordinates ? "regions" : null;
+            if (source == "coordinates")
                 return value.UseCoordinates && TryCoordinates(value.LatLon, out _) ? "coordinates" : null;
             if (!string.IsNullOrEmpty(value.LocalRadioSource)) return null;
             if (!value.UseCoordinates) return regions ? "regions" : null;
@@ -288,6 +292,9 @@ namespace MediaBrowser.Plugins.TuneIn
                 throw new ArgumentException("TuneIn API request interval must be between 1 and 30 seconds.");
             if (value.MaximumRateLimitWaitMinutes < 5 || value.MaximumRateLimitWaitMinutes > 60)
                 throw new ArgumentException("TuneIn maximum rate-limit wait must be between 5 and 60 minutes.");
+            if (value.MaximumConsecutiveRateLimitRetries < 0 || value.MaximumConsecutiveRateLimitRetries > 10)
+                throw new ArgumentException("TuneIn consecutive HTTP 429 retries must be between 0 and 10.");
+            ValidateProgressiveSettings(value);
             if (value.ImportDeadlineHours < PluginConfiguration.MinImportDeadlineHours
                 || value.ImportDeadlineHours > PluginConfiguration.MaxImportDeadlineHours)
                 throw new ArgumentException($"TuneIn import deadline must be between {PluginConfiguration.MinImportDeadlineHours} and {PluginConfiguration.MaxImportDeadlineHours} hours.");
@@ -299,13 +306,13 @@ namespace MediaBrowser.Plugins.TuneIn
                 throw new ArgumentException($"TuneIn traversal depth limit must be between {PluginConfiguration.MinTraversalDepthLimit} and {PluginConfiguration.MaxTraversalDepthLimit}.");
             if (value.DiscoveryDeadlineHours < PluginConfiguration.MinDiscoveryDeadlineHours
                 || value.DiscoveryDeadlineHours > PluginConfiguration.MaxDiscoveryDeadlineHours)
-                throw new ArgumentException("TuneIn discovery deadline must be between 1 and 10 hours.");
+                throw new ArgumentException($"TuneIn discovery deadline must be between {PluginConfiguration.MinDiscoveryDeadlineHours} and {PluginConfiguration.MaxDiscoveryDeadlineHours} hours.");
             var schedules = value.RefreshSchedules;
             if (schedules != null && (schedules.Count > CategoryKeys.Length || schedules.Any(schedule => !ValidSchedule(schedule))
                 || schedules.Select(schedule => schedule.Category).Distinct(StringComparer.Ordinal).Count() != schedules.Count))
                 throw new ArgumentException("Invalid TuneIn category refresh schedule.");
             if (value.EnableLocalRadio && ResolveLocalSource(value) == null)
-                throw new ArgumentException("Choose one Local Radio source: all or selected regions, or valid coordinates.");
+                throw new ArgumentException("Choose one Local Radio source: at least one enabled saved city or region, or valid coordinates.");
             if ((value.Username ?? "").Length > 128)
                 throw new ArgumentException("TuneIn username exceeds 128 characters.");
             foreach (var category in TopicCategories)
@@ -318,6 +325,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 if (ids != null && (ids.Count > 100 || ids.Any(id => !ValidId(id, category))))
                     throw new ArgumentException("Invalid or excessive TuneIn topic selections.");
             }
+
             foreach (var category in SelectionCategories)
             {
                 var mode = SelectionMode(value, category);
@@ -333,6 +341,16 @@ namespace MediaBrowser.Plugins.TuneIn
                         && !ValidId(id, category))))
                     throw new ArgumentException("Invalid or excessive TuneIn selections.");
             }
+        }
+
+        internal static void ValidateProgressiveSettings(PluginConfiguration value)
+        {
+            if (value.ProgressiveFirstEntries < 1 || value.ProgressiveFirstEntries > 10000
+                || value.ProgressiveMinimumNewEntries < 1 || value.ProgressiveMinimumNewEntries > 10000
+                || value.ProgressiveMinimumGrowthPercent < 1 || value.ProgressiveMinimumGrowthPercent > 100
+                || value.ProgressiveMinimumIntervalSeconds < 1 || value.ProgressiveMinimumIntervalSeconds > 3600
+                || value.ProgressiveMaximumPasses < 1 || value.ProgressiveMaximumPasses > 100)
+                throw new ArgumentException("Invalid TuneIn during-discovery import pacing settings.");
         }
     }
 

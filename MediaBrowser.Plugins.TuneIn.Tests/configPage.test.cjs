@@ -32,6 +32,7 @@ class Element {
     get textContent() { return this._text + this.childNodes.map(child => child.textContent).join(''); }
     appendChild(child) { this.childNodes.push(child); child.parentNode = this; return child; }
     setAttribute(name, value) { this.attributes[name] = value; }
+    removeAttribute(name) { delete this.attributes[name]; if (name === 'href') delete this.href; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
     click() { if (!this.disabled && this.handlers.click) return this.handlers.click.call(this); }
     showModal() { this.open = true; }
@@ -40,7 +41,7 @@ class Element {
     descendants() { return this.childNodes.flatMap(child => [child, ...child.descendants()]); }
 }
 
-function harness(manualStatus = false, manualSave = false, manualBackup = false, manualOpen = false) {
+function harness(manualStatus = false, manualSave = false, manualBackup = false, manualOpen = false, manualDiagnostics = false) {
     const handlers = {};
     const formHandlers = {};
     const username = new Element('input');
@@ -49,18 +50,24 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
     const form = { addEventListener: (event, handler) => { formHandlers[event] = handler; } };
     const elements = { form, '.txtUsername': username, '.txtLatLon': latLon,
         '.apiRequestIntervalSeconds': requestInterval, '.importDeadlineHours': new Element('input'),
-        '.maximumRateLimitWaitMinutes': new Element('input'),
+        '.maximumRateLimitWaitMinutes': new Element('input'), '.maximumConsecutiveRateLimitRetries': new Element('input'),
         '.discoveryDeadlineHours': new Element('input'), '.maxStationCount': new Element('input'),
-        '.traversalDepthLimit': new Element('input') };
-    for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.allowDirectHlsPlayback', '.categories', '.selectors',
+        '.traversalDepthLimit': new Element('input'),
+        '.progressiveFirstEntries': new Element('input'), '.progressiveMinimumNewEntries': new Element('input'),
+        '.progressiveMinimumGrowthPercent': new Element('input'), '.progressiveMinimumIntervalSeconds': new Element('input'),
+        '.progressiveMaximumPasses': new Element('input') };
+    for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.allowDirectHlsPlayback', '.enableDiscoveryProgressiveImport', '.progressivePacing', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
-        '.catalogRefreshPrompt', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
+        '.catalogRefreshPrompt', '.settingsChangeNotice', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
         '.optionalChecksRun', '.optionalChecksStatus', '.optionalChecksMessage',
         '.optionalChecksUnlockHint', '.skipOptionalChecks',
         '.tuneInReadiness', '.readinessFiltering', '.readinessCategory', '.readinessRequirements',
-        '.readinessSaved', '.readinessChannel', '.favoritesValidation', '.localValidation',
+        '.readinessSaved', '.readinessChannel', '.readinessBaseline',
+        ...['Filtering', 'Category', 'Requirements', 'Saved', 'Channel', 'Baseline'].map(name => `.readiness${name}Check`),
+        '.favoritesValidation', '.localValidation',
         '.channelScheduleConfirm', '.channelScheduleAdjust', '.tuneInPluginVersion',
-        '.artworkFile', '.artworkUpload', '.artworkUploadMessage', '.artworkConfirmDialog', '.artworkConfirmText',
+        '.artworkFile', '.artworkUpload', '.artworkUploadMessage', '.artworkVerifyDialog', '.artworkVerifyText',
+        '.artworkVerifyStart', '.artworkVerifyCancel', '.artworkConfirmDialog', '.artworkConfirmText', '.artworkConfirmError',
         '.artworkUnscannedLabel', '.artworkApproveUnscanned', '.artworkInstall', '.artworkDiscard',
         '.artworkRefreshDialog', '.artworkRefreshText', '.artworkRefreshNow', '.artworkRefreshLater',
         ...['Genres', 'Languages', 'Locations', 'Categories'].flatMap(scope =>
@@ -68,6 +75,9 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
         '.refreshElapsed', '.refreshWork', '.refreshLastProgress', '.refreshDiagnosticsText',
         '.refreshImportContents', '.refreshPendingFolders', '.refreshPendingFolderText',
         '.refreshStart', '.refreshCancel', '.refreshLogButton', '.refreshLogMessage', '.refreshFailureLog',
+        ...['Latest', 'Public', 'Capture', 'Packs', 'PackHint', 'PreviewDetails', 'Preview', 'Download',
+            'Delete', 'DeleteAll', 'Repository', 'DraftDetails', 'DraftTitle', 'DraftBody', 'Reviewed', 'Open',
+            'Message', 'DraftLink', 'DeleteDialog', 'DeleteTitle', 'DeleteCancel', 'DeleteConfirm'].map(name => `.diagnostics${name}`),
         '.tuneInRefreshCategories', '.refreshCategoryNote', '.settingsLocked',
         '.settingsLockState', '.settingsLockStatus', '.refreshQueueNote', '.tuneInRefreshRecoveryDialog', '.refreshRecoveryText',
         '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
@@ -101,8 +111,18 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
     elements['.refreshSummaryDetails'] = elements['.refreshSummary'].appendChild(new Element('span'));
     elements['.refreshOverall'] = elements['.refreshSummary'].appendChild(new Element('span'));
     const enhanced = [];
+    const help = new Element('details');
+    const helpSummary = help.appendChild(new Element('summary'));
+    const helpPopup = help.appendChild(new Element());
+    help.querySelector = selector => selector === 'summary' ? helpSummary : helpPopup;
+    help.getBoundingClientRect = () => ({ left: 100, right: 144, top: 100, bottom: 144, width: 44, height: 44 });
+    helpPopup.getBoundingClientRect = () => ({ width: 300, height: 100 });
+    help.style = { setProperty(name, value) { this[name] = value; } };
     const view = {
         addEventListener(event, handler) { handlers[event] = handler; },
+        querySelectorAll(selector) {
+            return selector === '.tuneInHelp, .tuneInArtworkHelp' ? [help] : [];
+        },
         querySelector(selector) {
             const category = /^\[data-category="(.+)"\]$/.exec(selector);
             if (selector === '.tuneInRecoveryDialog') {
@@ -126,6 +146,10 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
     const backup = [];
     const artwork = [];
     const optionalChecks = [];
+    const diagnostics = [];
+    const downloads = [];
+    const popups = [];
+    const popupControl = { blocked: false, throws: false };
     const scheduledTasks = { tasks: [], requests: [] };
     const timers = new Map();
     let timerId = 0;
@@ -172,7 +196,12 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
                 }
                 refresh.push({ options, ...request });
                 if (!manualStatus && options.type === 'GET') request.resolve({ SettingsLocked: serverLocked });
-            }             else if (options.url.route === 'TuneIn/OptionalChecks/Preference') optionalChecks.push({ options, ...request });
+            }                         else if (options.url.route.startsWith('TuneIn/Diagnostics')) {
+                diagnostics.push({ options, ...request });
+                if (!manualDiagnostics && options.url.route === 'TuneIn/Diagnostics')
+                    request.resolve({ CaptureAvailable: false, LatestRefresh: null, Packs: [], Repository: null });
+            }
+            else if (options.url.route === 'TuneIn/OptionalChecks/Preference') optionalChecks.push({ options, ...request });
             else if (options.url.route.startsWith('TuneIn/Artwork/')) artwork.push({ options, ...request });
             else if (options.url.route.startsWith('TuneIn/Cleanup/')) cleanup.push({ options, ...request });
             else if (options.url.route.startsWith('TuneIn/Backup/')) {
@@ -206,17 +235,34 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
         fetch(url, options) {
             const request = deferred();
             artwork.push({ options: { url, type: options.method, ...options }, ...request });
-            return request.promise.then(result => ({
-                ok: true, status: 200, json: () => Promise.resolve(result)
-            }));
+            return request.promise.then(result => result && result.__httpStatus
+                ? { ok: false, status: result.__httpStatus, text: () => Promise.resolve(result.body) }
+                : { ok: true, status: 200, json: () => Promise.resolve(result) });
         },
-        document: { createElement(tag) { return new Element(tag); } },
+        document: { createElement(tag) {
+            const element = new Element(tag);
+            if (tag === 'a') element.click = () => downloads.push({ href: element.href, filename: element.download });
+            return element;
+        }, documentElement: { clientWidth: 800, clientHeight: 600 } },
+        Blob,
+        URL: Object.assign(URL, {
+            createObjectURL(blob) { downloads.push({ blob }); return 'blob:diagnostics'; },
+            revokeObjectURL(url) { downloads.push({ revoked: url }); }
+        }),
+        window: { open(url, target, features) {
+            if (popupControl.throws) throw new Error('Opening a tab failed');
+            if (popupControl.blocked) return null;
+            const popup = { url, target, features, closed: false, close() { this.closed = true; } };
+            popups.push(popup);
+            if (popupControl.onOpen) popupControl.onOpen();
+            return popup;
+        } },
         setTimeout(handler, delay) { timers.set(++timerId, { handler, delay }); return timerId; },
         clearTimeout(id) { timers.delete(id); }
     });
 
     return { instance: new PluginView(view), username, latLon, requestInterval, formHandlers, reads, writes, notices, errors, loader,
-        elements, selectors, enhanced, calls, handlers, refresh, locks, opens, cleanup, backup, artwork, optionalChecks, timers, scheduledTasks };
+        elements, selectors, enhanced, calls, handlers, help, helpSummary, refresh, locks, opens, cleanup, backup, artwork, optionalChecks, diagnostics, downloads, popups, popupControl, timers, scheduledTasks };
 }
 
 function open(details) {
@@ -235,6 +281,351 @@ function selectOnly(app, index) {
     mode.value = 'selected';
     return mode.handlers.change();
 }
+
+function diagnosticPack(id = 'one', repository = 'owner/repo') {
+    const DraftTitle = 'Title <script>not html</script>';
+    const DraftBody = 'Body & details';
+    const DraftUrl = `https://github.com/${repository}/issues/new?${new URLSearchParams({ title: DraftTitle, body: DraftBody })}`;
+    return { Id: id, Revision: 'rev-' + id, CapturedUtc: '2026-11-24', Category: 'location', State: 'Partial',
+        Bytes: 19, PublicNavigationIncluded: false, PreviewText: '{"unsafe":"<img src=x>"}\n',
+        FileName: 'diagnostics.json', Repository: repository, DraftTitle, DraftBody, DraftUrl, ReportingError: null };
+}
+
+function diagnosticList(packs = [], repository = 'owner/repo') {
+    return { CaptureAvailable: true, LatestRefresh: { RunId: 'run-1', State: 'Running', Category: 'location', Busy: true },
+        Packs: packs, Repository: repository, ReportingError: null, StorageError: null, HasStoredPacks: !!packs.length };
+}
+
+async function diagnosticsVisit(packs = [], repository = 'owner/repo') {
+    const app = harness(true, false, false, false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true, HiddenRepositoryOverride: 'preserve-me' });
+    app.refresh[0].resolve({ SettingsLocked: true, State: 'Running', Busy: true });
+    app.diagnostics[0].resolve(diagnosticList(packs, repository));
+    await visit;
+    await settle();
+    return app;
+}
+
+async function diagnosticSelect(app, pack) {
+    const select = app.elements['.diagnosticsPacks'];
+    select.value = pack.Id;
+    const request = select.handlers.change();
+    app.diagnostics.at(-1).resolve(pack);
+    await request;
+}
+
+test('diagnostics load only lists packs, capture is opt-in and ignores settings lock', async () => {
+    const app = await diagnosticsVisit();
+    assert.deepEqual(app.diagnostics.map(item => item.options.url.route), ['TuneIn/Diagnostics']);
+    assert.equal(app.elements['.diagnosticsPublic'].checked, false);
+    app.instance.settingsLocked = true;
+    const capture = app.elements['.diagnosticsCapture'].click();
+    assert.deepEqual(JSON.parse(app.diagnostics.at(-1).options.data), { RunId: 'run-1', IncludePublicNavigation: false });
+    const pack = diagnosticPack();
+    app.diagnostics.at(-1).resolve(pack);
+    await capture;
+    app.diagnostics.at(-1).resolve(diagnosticList([pack]));
+    await settle();
+    app.elements['.diagnosticsPublic'].checked = true;
+    const second = app.elements['.diagnosticsCapture'].click();
+    assert.equal(JSON.parse(app.diagnostics.at(-1).options.data).IncludePublicNavigation, true);
+    app.diagnostics.at(-1).resolve(pack);
+    await second;
+    app.diagnostics.at(-1).resolve(diagnosticList([pack]));
+});
+
+test('diagnostic preview and download preserve exact redacted text without HTML interpretation', async () => {
+    const pack = diagnosticPack();
+    const app = await diagnosticsVisit([pack]);
+    await diagnosticSelect(app, pack);
+    assert.equal(app.elements['.diagnosticsPreview'].textContent, pack.PreviewText);
+    assert.equal(app.elements['.diagnosticsPreview'].childNodes.length, 0);
+    assert.equal(app.elements['.diagnosticsDraftTitle'].textContent, pack.DraftTitle);
+    app.elements['.diagnosticsDownload'].click();
+    assert.equal(await app.downloads[0].blob.text(), pack.PreviewText);
+    assert.equal(app.downloads[1].filename, pack.FileName);
+    assert.equal(app.downloads[2].revoked, 'blob:diagnostics');
+    assert.equal(app.diagnostics.length, 2);
+});
+
+test('diagnostic review resets on selection, revision and repository changes', async () => {
+    const pack = diagnosticPack(), other = diagnosticPack('two');
+    const app = await diagnosticsVisit([pack, other]);
+    await diagnosticSelect(app, pack);
+    const reviewed = app.elements['.diagnosticsReviewed'];
+    reviewed.checked = true; reviewed.handlers.change();
+    assert.equal(app.elements['.diagnosticsOpen'].disabled, false);
+    await diagnosticSelect(app, other);
+    assert.equal(reviewed.checked, false);
+    reviewed.checked = true; reviewed.handlers.change();
+    app.timers.get(app.instance.refreshTimer).handler();
+    app.refresh.at(-1).resolve({ SettingsLocked: true, State: 'Completed', Busy: false });
+    await settle();
+    assert.equal(app.diagnostics.at(-1).options.url.route, 'TuneIn/Diagnostics');
+    app.diagnostics.at(-1).resolve(diagnosticList([{ ...other, Revision: 'new-revision' }]));
+    await settle();
+    assert.equal(reviewed.checked, false);
+    assert.equal(app.instance.diagnostics.preview, null);
+    const updated = { ...other, Revision: 'new-revision' };
+    await diagnosticSelect(app, updated);
+    reviewed.checked = true; reviewed.handlers.change();
+    app.timers.get(app.instance.refreshTimer).handler();
+    app.refresh.at(-1).resolve({ SettingsLocked: true, State: 'Running', Busy: true });
+    await settle();
+    app.diagnostics.at(-1).resolve(diagnosticList([updated], 'other/repo'));
+    await settle();
+    assert.equal(reviewed.checked, false);
+    assert.equal(app.instance.diagnostics.preview, null);
+    assert.equal(app.elements['.diagnosticsRepository'].textContent, 'other/repo');
+});
+
+test('refresh status changes update capture availability without replacing a selected preview', async () => {
+    const pack = diagnosticPack();
+    const app = await diagnosticsVisit([pack]);
+    await diagnosticSelect(app, pack);
+    const reviewed = app.elements['.diagnosticsReviewed'];
+    reviewed.checked = true; reviewed.handlers.change();
+    app.timers.get(app.instance.refreshTimer).handler();
+    app.refresh.at(-1).resolve({ SettingsLocked: true, State: 'Completed', Busy: false });
+    await settle();
+    const next = diagnosticList([pack]);
+    next.LatestRefresh = { RunId: 'run-2', Category: 'talk', State: 'Completed', Busy: false };
+    app.diagnostics.at(-1).resolve(next);
+    await settle();
+    assert.equal(app.instance.diagnostics.preview.Id, pack.Id);
+    assert.equal(reviewed.checked, true);
+    assert.match(app.elements['.diagnosticsLatest'].textContent, /talk/);
+    const capture = app.elements['.diagnosticsCapture'].click();
+    assert.equal(JSON.parse(app.diagnostics.at(-1).options.data).RunId, 'run-2');
+    app.diagnostics.at(-1).reject(new Error('race'));
+    await capture;
+    app.diagnostics.at(-1).resolve(next);
+});
+
+test('stale diagnostics list and pack responses cannot change a later visit', async () => {
+    const pack = diagnosticPack();
+    const app = await diagnosticsVisit([pack]);
+    app.elements['.diagnosticsPacks'].value = pack.Id;
+    const pending = app.elements['.diagnosticsPacks'].handlers.change();
+    app.instance.onPause();
+    const visit = app.instance.onResume();
+    app.reads.at(-1).resolve({ SchemaVersion: 1, ConfigurationCompleted: false });
+    app.diagnostics.at(-1).resolve(diagnosticList([]));
+    await visit;
+    app.diagnostics.find(item => item.options.url.route.endsWith('/Pack')).resolve(pack);
+    await pending;
+    assert.equal(app.elements['.diagnosticsPreview'].textContent, '');
+    assert.equal(app.instance.diagnostics.preview, null);
+});
+
+test('a late list from a previous visit cannot overwrite the current list', async () => {
+    const app = harness(false, false, false, false, true);
+    const first = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1 });
+    await first;
+    app.instance.onPause();
+    const second = app.instance.onResume();
+    app.reads[1].resolve({ SchemaVersion: 1 });
+    app.diagnostics[1].resolve(diagnosticList([], 'new/repo'));
+    await second; await settle();
+    app.diagnostics[0].resolve(diagnosticList([], 'old/repo'));
+    await settle();
+    assert.equal(app.elements['.diagnosticsRepository'].textContent, 'new/repo');
+});
+
+test('draft requires review, retains a native link when popups are blocked and rejects destination mismatch', async () => {
+    const pack = diagnosticPack();
+    const app = await diagnosticsVisit([pack]);
+    await diagnosticSelect(app, pack);
+    app.elements['.diagnosticsOpen'].click();
+    assert.equal(app.popups.length, 0);
+    const reviewed = app.elements['.diagnosticsReviewed'];
+    reviewed.checked = true; reviewed.handlers.change();
+    app.popupControl.blocked = true;
+    const blocked = app.elements['.diagnosticsOpen'].click();
+    assert.equal(app.popups.length, 0);
+    app.diagnostics.at(-1).resolve({ Id: pack.Id, Revision: pack.Revision, Repository: pack.Repository, Url: pack.DraftUrl });
+    await blocked;
+    assert.equal(app.popups.length, 0);
+    assert.equal(app.elements['.diagnosticsDraftLink'].hidden, false);
+    assert.equal(app.elements['.diagnosticsDraftLink'].href, pack.DraftUrl);
+    assert.match(app.elements['.diagnosticsMessage'].textContent, /If no tab opens/);
+    app.popupControl.blocked = false;
+    const draft = app.elements['.diagnosticsOpen'].click();
+    assert.deepEqual(JSON.parse(app.diagnostics.at(-1).options.data), { Id: pack.Id, Revision: pack.Revision, Repository: pack.Repository });
+    app.diagnostics.at(-1).resolve({ Id: pack.Id, Revision: pack.Revision, Repository: 'wrong/repo', Url: pack.DraftUrl });
+    await draft;
+    assert.equal(app.popups.length, 0);
+    assert.equal(reviewed.checked, false);
+    assert.equal(app.elements['.diagnosticsDraftLink'].hidden, true);
+    assert.equal(app.elements['.diagnosticsDraftLink'].href, undefined);
+    assert.equal(app.elements['.diagnosticsMessage'].attributes['data-error'], 'true');
+    app.diagnostics.at(-1).resolve(diagnosticList([pack]));
+});
+
+test('draft validates before opening GitHub with no opener/referrer and does not bubble into host actions', async () => {
+    const pack = diagnosticPack();
+    const app = await diagnosticsVisit([pack]);
+    await diagnosticSelect(app, pack);
+    const reviewed = app.elements['.diagnosticsReviewed'];
+    reviewed.checked = true; reviewed.handlers.change();
+    let prevented = false, stopped = false;
+    const draft = app.elements['.diagnosticsOpen'].handlers.click({
+        preventDefault() { prevented = true; }, stopPropagation() { stopped = true; }
+    });
+    assert.equal(prevented, true);
+    assert.equal(stopped, true);
+    assert.equal(app.popups.length, 0);
+    app.diagnostics.at(-1).resolve({ Id: pack.Id, Revision: pack.Revision, Repository: pack.Repository, Url: pack.DraftUrl });
+    await draft;
+    assert.equal(app.popups[0].url, pack.DraftUrl);
+    assert.equal(app.popups[0].target, '_blank');
+    assert.equal(app.popups[0].features, 'noopener,noreferrer');
+    assert.match(app.elements['.diagnosticsMessage'].textContent, /no issue has been created or pack uploaded/);
+    assert.equal(app.writes.length, 0);
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /<a class="diagnosticsDraftLink" target="_blank" rel="noopener noreferrer" hidden>/);
+    reviewed.checked = false; reviewed.handlers.change();
+    assert.equal(app.elements['.diagnosticsDraftLink'].hidden, true);
+    assert.equal(app.elements['.diagnosticsDraftLink'].href, undefined);
+    reviewed.checked = true; reviewed.handlers.change();
+    const stale = app.elements['.diagnosticsOpen'].click();
+    app.instance.onPause();
+    assert.equal(app.popups[0].closed, false);
+    app.diagnostics.at(-1).resolve({ Id: pack.Id, Revision: pack.Revision, Repository: pack.Repository, Url: pack.DraftUrl });
+    await stale;
+    assert.equal(app.popups.length, 1);
+    assert.equal(app.elements['.diagnosticsDraftLink'].hidden, true);
+});
+
+test('opening the validated GitHub draft survives the Emby pause caused by switching tabs', async () => {
+    const pack = diagnosticPack();
+    const app = await diagnosticsVisit([pack]);
+    await diagnosticSelect(app, pack);
+    const reviewed = app.elements['.diagnosticsReviewed'];
+    reviewed.checked = true; reviewed.handlers.change();
+    app.popupControl.onOpen = () => app.instance.onPause();
+    const draft = app.elements['.diagnosticsOpen'].click();
+    assert.equal(app.popups.length, 0);
+    app.diagnostics.at(-1).resolve({ Id: pack.Id, Revision: pack.Revision, Repository: pack.Repository, Url: pack.DraftUrl });
+    await draft;
+    assert.equal(app.popups[0].url, pack.DraftUrl);
+    assert.equal(app.popups[0].closed, false);
+});
+
+test('draft retains the reviewed native link when browser tab opening throws', async () => {
+    const pack = diagnosticPack();
+    const app = await diagnosticsVisit([pack]);
+    await diagnosticSelect(app, pack);
+    const reviewed = app.elements['.diagnosticsReviewed'];
+    reviewed.checked = true; reviewed.handlers.change();
+    app.popupControl.throws = true;
+    const draft = app.elements['.diagnosticsOpen'].click();
+    app.diagnostics.at(-1).resolve({ Id: pack.Id, Revision: pack.Revision, Repository: pack.Repository, Url: pack.DraftUrl });
+    await draft;
+    assert.equal(app.popups.length, 0);
+    assert.equal(app.elements['.diagnosticsDraftLink'].hidden, false);
+    assert.equal(app.elements['.diagnosticsDraftLink'].href, pack.DraftUrl);
+    assert.equal(app.elements['.diagnosticsMessage'].attributes['data-error'], 'true');
+    assert.match(app.elements['.diagnosticsMessage'].textContent, /browser could not open a new tab/);
+});
+
+test('invalid diagnostic repository disables reporting but retains download', async () => {
+    const pack = diagnosticPack('one', 'invalid');
+    pack.ReportingError = 'private server detail';
+    const app = await diagnosticsVisit([pack], 'invalid');
+    await diagnosticSelect(app, pack);
+    assert.equal(app.elements['.diagnosticsReviewed'].disabled, true);
+    assert.equal(app.elements['.diagnosticsOpen'].disabled, true);
+    assert.equal(app.elements['.diagnosticsDownload'].disabled, false);
+    assert.equal(app.elements['.diagnosticsMessage'].attributes['data-error'], 'true');
+    assert.doesNotMatch(app.elements['.diagnosticsMessage'].textContent, /private server detail/);
+});
+
+test('capture success preserves a highlighted reporting warning for an invalid repository', async () => {
+    const app = await diagnosticsVisit([], 'invalid');
+    app.instance.diagnostics.reportingError = 'Reporting repository is invalid.';
+    const capture = app.elements['.diagnosticsCapture'].click();
+    const pack = diagnosticPack('one', 'invalid');
+    pack.ReportingError = 'Reporting repository is invalid.';
+    app.diagnostics.at(-1).resolve(pack);
+    await capture;
+    assert.match(app.elements['.diagnosticsMessage'].textContent, /saved locally.*Reporting is unavailable/);
+    assert.equal(app.elements['.diagnosticsMessage'].attributes['data-error'], 'true');
+    assert.equal(app.elements['.diagnosticsDownload'].disabled, false);
+    const list = diagnosticList([pack], 'invalid');
+    list.ReportingError = pack.ReportingError;
+    app.diagnostics.at(-1).resolve(list);
+    await settle();
+    assert.equal(app.elements['.diagnosticsMessage'].attributes['data-error'], 'true');
+});
+
+test('unreadable diagnostic storage permits confirmed delete all and then restores capture', async () => {
+    const app = harness(false, false, false, false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1 });
+    const unreadable = { ...diagnosticList(), HasStoredPacks: true,
+        StorageError: 'Saved diagnostic packs could not be read. Delete all packs to recover.' };
+    app.diagnostics[0].resolve(unreadable);
+    await visit; await settle();
+    assert.equal(app.elements['.diagnosticsMessage'].textContent, unreadable.StorageError);
+    assert.equal(app.elements['.diagnosticsMessage'].attributes['data-error'], 'true');
+    assert.equal(app.elements['.diagnosticsCapture'].disabled, true);
+    assert.equal(app.elements['.diagnosticsPacks'].disabled, true);
+    assert.equal(app.elements['.diagnosticsDeleteAll'].disabled, false);
+    assert.equal(app.instance.diagnostics.latest.RunId, 'run-1');
+    app.elements['.diagnosticsDeleteAll'].click();
+    assert.equal(app.elements['.diagnosticsDeleteDialog'].open, true);
+    assert.equal(app.diagnostics.length, 1);
+    const deletion = app.elements['.diagnosticsDeleteConfirm'].click();
+    assert.deepEqual(JSON.parse(app.diagnostics.at(-1).options.data), { All: true });
+    app.diagnostics.at(-1).resolve(diagnosticList());
+    await deletion;
+    assert.equal(app.instance.diagnostics.storageError, null);
+    assert.equal(app.instance.diagnostics.hasStoredPacks, false);
+    assert.equal(app.elements['.diagnosticsMessage'].attributes['data-error'], 'false');
+    assert.equal(app.elements['.diagnosticsCapture'].disabled, false);
+    assert.equal(app.elements['.diagnosticsDeleteAll'].disabled, true);
+});
+
+test('unavailable diagnostics endpoint is isolated and highlighted', async () => {
+    const app = harness(false, false, false, false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: false });
+    app.diagnostics[0].reject(new Error('private response'));
+    await visit; await settle();
+    assert.equal(app.elements['.diagnosticsMessage'].attributes['data-error'], 'true');
+    assert.match(app.elements['.diagnosticsMessage'].textContent, /diagnostics are unavailable/i);
+    assert.doesNotMatch(app.elements['.diagnosticsMessage'].textContent, /private response/);
+    assert.ok(app.instance.config);
+});
+
+test('diagnostic deletion requires confirmation, cancel preserves data, failures are highlighted', async () => {
+    const pack = diagnosticPack();
+    const app = await diagnosticsVisit([pack]);
+    await diagnosticSelect(app, pack);
+    app.elements['.diagnosticsDelete'].click();
+    assert.equal(app.elements['.diagnosticsDeleteDialog'].open, true);
+    assert.equal(app.elements['.diagnosticsDeleteCancel'].focused, true);
+    app.elements['.diagnosticsDeleteCancel'].click();
+    assert.equal(app.diagnostics.length, 2);
+    app.elements['.diagnosticsDeleteAll'].click();
+    const deletion = app.elements['.diagnosticsDeleteConfirm'].click();
+    assert.deepEqual(JSON.parse(app.diagnostics.at(-1).options.data), { All: true });
+    app.diagnostics.at(-1).reject(new Error('private response'));
+    await deletion;
+    assert.equal(app.elements['.diagnosticsMessage'].attributes['data-error'], 'true');
+    assert.doesNotMatch(app.elements['.diagnosticsMessage'].textContent, /private response/);
+    assert.equal(app.instance.diagnostics.preview.Id, pack.Id);
+    app.elements['.diagnosticsDelete'].click();
+    const selected = app.elements['.diagnosticsDeleteConfirm'].click();
+    assert.deepEqual(JSON.parse(app.diagnostics.at(-1).options.data), { Id: pack.Id, Revision: pack.Revision });
+    app.diagnostics.at(-1).resolve(diagnosticList([]));
+    await selected;
+    assert.equal(app.instance.diagnostics.preview, null);
+    assert.equal(app.elements['.diagnosticsMessage'].attributes['data-error'], 'false');
+});
 
 test('all dashboard actions use native Emby buttons without plugin color overrides', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
@@ -265,12 +656,42 @@ test('Catalog Refresh uses the native submit theme for its actions and inherits 
 
 test('main settings, refresh, and maintenance share one width container', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    assert.match(html, /<div class="auto-center tuneInPanelLayout">\s*<div class="tuneInHero" hidden>[\s\S]*?<\/div>\s*<form>[\s\S]*?<\/form>\s*<details class="tuneInSection tuneInNeutralPanel tuneInRefresh"/);
+    assert.match(html, /<div class="tuneInWorkspace">\s*<section class="tuneInReadiness"[\s\S]*?<\/section>\s*<div class="auto-center tuneInPanelLayout">\s*<div class="tuneInPinned"[^>]*>[\s\S]*?<div class="tuneInHero" hidden>[\s\S]*?<\/div>\s*<form>[\s\S]*?<\/form>\s*<details class="tuneInSection tuneInNeutralPanel tuneInRefresh"/);
     assert.match(html, /<\/details>\s*<details class="tuneInSection tuneInNeutralPanel">\s*<summary class="maintenanceSummary">/);
-    assert.match(html, /\.tuneInPanelLayout\s*\{\s*max-width:\s*80ch/);
+    assert.match(html, /\.tuneInWorkspace\s*\{[^}]*max-width:\s*80ch/);
+    assert.match(html, /\[data-controller="__plugin\/tuneinjs"\]\s*>\s*\.scrollSlider\s*\{[^}]*position:\s*relative/);
     assert.match(html, /\.tuneInActivity\s*\{[^}]*animation:\s*tuneInActivityPulse/);
     assert.match(html, /\.tuneInActivity\s*\{[^}]*background-color:\s*#fff0c2/);
     assert.match(html, /@keyframes tuneInActivityPulse\s*\{\s*50%\s*\{\s*background-color:\s*#ffcb71/);
+});
+
+test('all control sections stay in the main column and settings stay in their form', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const stack = [];
+    const found = new Set();
+    for (const match of html.matchAll(/<\/?(?:div|form|details|summary|button)\b[^>]*>/gi)) {
+        const tag = match[0];
+        const name = /^<\/?(\w+)/.exec(tag)[1].toLowerCase();
+        if (tag.startsWith('</')) {
+            if (name === 'div' || name === 'form') {
+                const index = stack.findLastIndex(item => item.name === name);
+                assert.notEqual(index, -1, `unexpected ${tag}`);
+                stack.length = index;
+            }
+            continue;
+        }
+        for (const selector of ['browsingSummary', 'tuneInSettingsSave', 'tuneInRefresh', 'maintenanceSummary']) {
+            if (!new RegExp(`\\b${selector}\\b`).test(tag)) continue;
+            assert.ok(stack.some(item => item.main), `${selector} is outside the main panel`);
+            if (selector === 'browsingSummary' || selector === 'tuneInSettingsSave')
+                assert.ok(stack.some(item => item.name === 'form'), `${selector} is outside the settings form`);
+            found.add(selector);
+        }
+        if (name === 'div' || name === 'form')
+            stack.push({ name, main: /\btuneInPanelLayout\b/.test(tag) });
+    }
+    assert.deepEqual([...found].sort(), ['browsingSummary', 'maintenanceSummary', 'tuneInRefresh', 'tuneInSettingsSave'].sort());
+    assert.equal(stack.length, 0);
     assert.match(html, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.tuneInActivity\s*\{\s*animation:\s*none/);
 });
 
@@ -452,9 +873,9 @@ test('selector retry is bounded and does not send requests after leaving setting
 test('native view lifecycle loads labeled upstream settings on each visit', async () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /data-controller="__plugin\/tuneinjs"/);
-    assert.match(html, /<fieldset class="globalFields"[\s\S]*<fieldset class="loginFields"[\s\S]*<legend>TuneIn Favorites and Location<\/legend>[\s\S]*class="txtUsername"[^>]*label="TuneIn User:"[\s\S]*class="localSource"[\s\S]*class="txtLatLon"[\s\S]*class="configurationCompleted"[\s\S]*class="settingsLocked"/);
+    assert.match(html, /<fieldset class="globalFields"[\s\S]*<fieldset class="loginFields"[\s\S]*<legend>TuneIn Favorites and Location<\/legend>[\s\S]*<label for="tuneInUsername">TuneIn User:<\/label>[\s\S]*class="txtUsername"[\s\S]*class="localSource"[\s\S]*<label for="tuneInLatLon">Your LatLon:<\/label>[\s\S]*class="txtLatLon"[\s\S]*class="configurationCompleted"/);
     assert.doesNotMatch(html, /<h2>Favorites<\/h2>/);
-    assert.match(html, /class="txtLatLon"[^>]*label="Your LatLon:"/);
+    assert.doesNotMatch(html, /is="emby-input"[^>]*class="txt(?:Username|LatLon)"/);
     const app = harness();
     assert.equal(app.instance.onBeginResume(), 'native transition');
     const first = app.instance.onResume('first');
@@ -472,13 +893,41 @@ test('native view lifecycle loads labeled upstream settings on each visit', asyn
     assert.equal(app.loader.shown, 2);
     assert.equal(app.loader.hidden, 2);
     assert.deepEqual(app.calls, ['construct', ['resume', 'first'], ['pause', 'away'], ['resume', undefined]]);
-    assert.deepEqual(app.handlers, {});
+    assert.deepEqual(Object.keys(app.handlers), ['keydown']);
+});
+
+test('Local Radio retains the Emby select and an aligned, focusable field outline', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /<label for="tuneInLocalSource">Local Radio source:<\/label>/);
+    assert.match(html, /<select is="emby-select" id="tuneInLocalSource" class="localSource"/);
+    assert.match(html, /\.tuneInLoginRow input\[type="text"\],\s*\.tuneInLoginRow \.emby-select-wrapper,\s*\.tuneInLoginRow \.localSource:not\(\.emby-select\)\s*\{[^}]*block-size:\s*2\.75rem/s);
+    assert.match(html, /\.tuneInLoginRow input\[type="text"\],\s*\.tuneInLoginRow \.emby-select-wrapper,[\s\S]*?border:\s*1px solid currentColor/);
+    assert.match(html, /\.tuneInLoginRow \.emby-select-wrapper:focus-within\s*\{[^}]*outline:\s*2px solid currentColor/s);
+    assert.match(html, /\.tuneInLoginRow \.selectLabelText:empty\s*\{[^}]*display:\s*none/s);
+});
+
+test('cleanup guidance and highlighted backup warning are visible without help', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const section = html.slice(html.indexOf('<div class="tuneInCleanupWarning">'), html.indexOf('<label for="tuneInCleanupScope">'));
+    assert.match(section, /<h3>Clean Up Library Folders<\/h3>\s*<p>Cleanup removes generated folders/);
+    assert.match(section, /<p>For one category, compatible saved snapshots[\s\S]*?Disable a category if it should stay absent\.<\/p>/);
+    assert.doesNotMatch(section, /<details|Help: library cleanup/);
+    assert.match(section, /<p class="tuneInCleanupBackupWarning"><strong>Cleanup cannot be undone\.<\/strong> Back up Emby and wait for a successful backup before removing any entries\.<\/p>/);
+    assert.match(html, /\.tuneInCleanupBackupWarning\s*\{[^}]*border-inline-start:\s*\.25em solid #d64545;[^}]*background:\s*color-mix\(in srgb, #d64545 12%, transparent\)/s);
+});
+
+test('error feedback uses a theme-independent highlight for explicit and inline errors', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /\[data-error="true"\]:not\(:empty\):not\(\[hidden\]\)/);
+    assert.match(html, /\[role="alert"\]:not\(:empty\):not\(\[hidden\]\)/);
+    assert.match(html, /\.tuneInValidationError:not\(:empty\):not\(\[hidden\]\)/);
+    assert.match(html, /background: #fff2a8;\s*color: #332900;/);
 });
 
 test('save retains unrelated configuration and converts empty fields to null', async () => {
     const app = harness();
     const visit = app.instance.onResume();
-    app.reads[0].resolve({ Username: 'old', LatLon: '1,2', Other: 42 });
+    app.reads[0].resolve({ Username: 'old', LatLon: '1,2', Other: 42, DiagnosticsRepository: 'private/override' });
     await visit;
     app.username.value = 'listener';
     app.latLon.value = '';
@@ -491,12 +940,13 @@ test('save retains unrelated configuration and converts empty fields to null', a
     assert.equal(app.writes[0].config.Username, 'listener');
     assert.equal(app.writes[0].config.LatLon, null);
     assert.equal(app.writes[0].config.Other, 42);
+    assert.equal(app.writes[0].config.DiagnosticsRepository, 'private/override');
     assert.equal(app.writes[0].config.SchemaVersion, 1);
     assert.equal(app.writes[0].config.ConfigurationCompleted, true);
     assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 3);
     assert.equal(app.writes[0].config.MaximumRateLimitWaitMinutes, 15);
-    assert.equal(app.writes[0].config.ImportDeadlineHours, 8);
-    assert.equal(app.writes[0].config.DiscoveryDeadlineHours, 2);
+    assert.equal(app.writes[0].config.ImportDeadlineHours, 24);
+    assert.equal(app.writes[0].config.DiscoveryDeadlineHours, 12);
     assert.equal(app.writes[0].config.EnableCatalogIdentityDiagnostics, false);
     assert.deepEqual(app.notices, ['saved']);
 });
@@ -517,6 +967,28 @@ test('rate-limit wait validates and saves the configured budget', async () => {
     field.value = '60';
     app.formHandlers.submit({ preventDefault() {} });
     assert.equal(app.writes[0].config.MaximumRateLimitWaitMinutes, 60);
+});
+
+test('rate-limit retries accept zero and ten and reject values outside the range', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ MaximumConsecutiveRateLimitRetries: 0 });
+    await visit;
+    const field = app.elements['.maximumConsecutiveRateLimitRetries'];
+    assert.equal(field.value, 0);
+    for (const value of ['-1', '11', '1.5', '']) {
+        field.value = value;
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes.length, 0);
+    }
+    for (const value of ['0', '10']) {
+        const toggle = app.elements['.settingsLocked'];
+        if (toggle.checked) { toggle.checked = false; await toggle.handlers.change(); }
+        field.value = value;
+        app.formHandlers.submit({ preventDefault() {} });
+        assert.equal(app.writes.at(-1).config.MaximumConsecutiveRateLimitRetries, Number(value));
+        await settle();
+    }
 });
 
 test('API request interval validates and saves the shared catalog pacing setting', async () => {
@@ -546,7 +1018,7 @@ test('API request interval validates and saves the shared catalog pacing setting
 });
 
 test('discovery controls keep missing and null station limits Not set and preserve saved limits', async () => {
-    for (const [config, maximum, depth] of [[{}, '', 10], [{ MaxStationCount: null }, '', 10],
+    for (const [config, maximum, depth] of [[{}, 500, 10], [{ MaxStationCount: null }, '', 10],
         [{ MaxStationCount: 4000, TraversalDepthLimit: 50 }, 4000, 50]]) {
         const app = harness();
         const visit = app.instance.onResume();
@@ -570,11 +1042,11 @@ test('discovery controls reject invalid values and save inclusive boundaries and
     await visit;
     const cap = app.elements['.maxStationCount'];
     const depth = app.elements['.traversalDepthLimit'];
-    for (const value of ['0', '4001', '1.5', 'abc']) {
+    for (const value of ['4', '10001', '1.5', 'abc']) {
         cap.value = value;
         app.formHandlers.submit({ preventDefault() {} });
         assert.equal(app.writes.length, 0);
-        assert.match(app.elements['.status'].textContent, /1 to 4000/);
+        assert.match(app.elements['.status'].textContent, /5 to 10000/);
     }
     cap.value = '';
     for (const value of ['', '2', '51', '3.5']) {
@@ -583,7 +1055,7 @@ test('discovery controls reject invalid values and save inclusive boundaries and
         assert.equal(app.writes.length, 0);
         assert.match(app.elements['.status'].textContent, /3 to 50/);
     }
-    for (const [maximum, limit] of [['', 3], ['1', 50], ['4000', 5]]) {
+    for (const [maximum, limit] of [['', 3], ['5', 50], ['10000', 5]]) {
         const toggle = app.elements['.settingsLocked'];
         if (toggle.checked) { toggle.checked = false; await toggle.handlers.change(); }
         cap.value = maximum;
@@ -705,15 +1177,16 @@ test(`${setting.toLowerCase()} deadline loads saved values, validates whole hour
     app.reads[0].resolve({ [setting + 'DeadlineHours']: 7 });
     await visit;
     const deadline = app.elements['.' + setting.toLowerCase() + 'DeadlineHours'];
-    const maximum = setting === 'Import' ? 100 : 10;
+    const minimum = setting === 'Import' ? 1 : 2;
+    const maximum = setting === 'Import' ? 100 : 48;
     assert.equal(deadline.value, 7);
-    for (const value of ['', '0', String(maximum + 1), '1.5', 'abc']) {
+    for (const value of ['', String(minimum - 1), String(maximum + 1), '1.5', 'abc']) {
         deadline.value = value;
         app.formHandlers.submit({ preventDefault() {} });
         assert.equal(app.writes.length, 0);
-        assert.ok(app.elements['.status'].textContent.includes('whole number from 1 to ' + maximum));
+        assert.ok(app.elements['.status'].textContent.includes('whole number from ' + minimum + ' to ' + maximum));
     }
-    for (const value of [1, maximum]) {
+    for (const value of [minimum, maximum]) {
         const toggle = app.elements['.settingsLocked'];
         if (toggle.checked) {
             toggle.checked = false;
@@ -771,13 +1244,42 @@ test('direct HLS playback is off by default and loads, saves and locks with adva
 
 test('advanced settings start collapsed and group the controls in order', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    const advanced = html.match(/<details class="tuneInAdvancedSettings">([\s\S]*?)<\/details>/);
-    assert.ok(advanced);
-    assert.match(advanced[1], /<summary>Advanced Settings<\/summary>/);
-    assert.ok(advanced[1].indexOf('id="tuneInApiInterval"') < advanced[1].indexOf('id="tuneInDiscoveryDeadline"'));
-    assert.ok(advanced[1].indexOf('id="tuneInDiscoveryDeadline"') < advanced[1].indexOf('id="tuneInImportDeadline"'));
-    assert.ok(advanced[1].indexOf('id="tuneInImportDeadline"') < advanced[1].indexOf('class="enableCatalogIdentityDiagnostics"'));
-    assert.match(advanced[1], /Off by default/);
+    const start = html.indexOf('<details class="tuneInAdvancedSettings">');
+    assert.ok(start >= 0);
+    const advanced = html.slice(start, html.indexOf('</fieldset>', start));
+    assert.match(advanced, /<summary>Advanced Settings<\/summary>/);
+    const groups = ['Discovery limits', 'Request pacing &amp; retry', 'Import behavior', 'Playback &amp; diagnostics'];
+    assert.ok(groups.every((group, i) => advanced.indexOf(`<summary>${group}</summary>`) >= 0
+        && (i === 0 || advanced.indexOf(`<summary>${groups[i - 1]}</summary>`) < advanced.indexOf(`<summary>${group}</summary>`))));
+    assert.ok(advanced.indexOf('id="tuneInDiscoveryDeadline"') < advanced.indexOf('id="tuneInApiInterval"'));
+    assert.ok(advanced.indexOf('id="tuneInApiInterval"') < advanced.indexOf('id="tuneInImportDeadline"'));
+    assert.ok(advanced.indexOf('id="tuneInImportDeadline"') < advanced.indexOf('class="enableCatalogIdentityDiagnostics"'));
+    assert.match(advanced, /Off by default/);
+});
+
+test('discovery import pacing is opt-in, editable, and validated', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    const enabled = app.elements['.enableDiscoveryProgressiveImport'];
+    const first = app.elements['.progressiveFirstEntries'];
+    assert.equal(enabled.checked, false);
+    assert.equal(app.elements['.progressivePacing'].hidden, true);
+    assert.equal(first.value, 50);
+    assert.equal(first.disabled, true);
+    enabled.checked = true;
+    enabled.handlers.change();
+    assert.equal(app.elements['.progressivePacing'].hidden, false);
+    assert.equal(first.disabled, false);
+    first.value = '0';
+    app.formHandlers.submit({ preventDefault() {} });
+    assert.equal(app.writes.length, 0);
+    first.value = '60';
+    app.formHandlers.submit({ preventDefault() {} });
+    assert.equal(app.writes[0].config.EnableDiscoveryProgressiveImport, true);
+    assert.equal(app.writes[0].config.ProgressiveFirstEntries, 60);
+    assert.equal(app.writes[0].config.ProgressiveMinimumNewEntries, 500);
 });
 
 test('artwork scan actions and preference are grouped beside artwork pack controls with help', () => {
@@ -799,11 +1301,131 @@ test('artwork scan actions and preference are grouped beside artwork pack contro
     assert.match(preference[0], /Skip automatic artwork pack status checks/);
     assert.match(preference[0], /aria-describedby="tuneInOptionalChecksHint"/);
     assert.match(preference[0], /id="tuneInOptionalChecksHint" role="tooltip"/);
-    assert.match(html, /\.tuneInArtworkHelp:hover \.tuneInArtworkTooltip,[\s\S]*?\.tuneInArtworkHelp:focus-within \.tuneInArtworkTooltip/);
+    assert.match(html, /\.tuneInArtworkHelp\[open\] \.tuneInArtworkTooltip/);
     assert.match(artwork, /class="optionalChecksStatus"/);
     assert.doesNotMatch(html.slice(advancedStart), /skipOptionalChecks|optionalChecksMessage|optionalChecksStatus|optionalChecksRun/);
     for (const selector of ['optionalChecksRun', 'optionalChecksStatus', 'artworkUpload'])
         assert.equal((html.match(new RegExp(`class="[^"]*\\b${selector}\\b[^"]*"`, 'g')) || []).length, 1);
+});
+
+test('help disclosure closes on Escape and returns focus to its summary', () => {
+    const app = harness();
+    const summary = new Element('summary');
+    const help = { open: true, querySelector: () => summary };
+    let prevented = false;
+    let stopped = false;
+    app.handlers.keydown({
+        key: 'Escape', target: { closest: () => help },
+        preventDefault: () => { prevented = true; },
+        stopPropagation: () => { stopped = true; }
+    });
+    assert.equal(help.open, false);
+    assert.equal(summary.focused, true);
+    assert.ok(prevented && stopped);
+});
+
+test('help opens on pointer hover and can be pinned with a click or dismissed with Escape', () => {
+    const { help, helpSummary, handlers } = harness();
+    const click = () => helpSummary.handlers.click({ preventDefault() {} });
+    const enter = type => help.handlers.pointerenter({ pointerType: type });
+    const leave = type => help.handlers.pointerleave({ pointerType: type });
+    enter('touch');
+    assert.ok(!help.open);
+    enter('mouse');
+    assert.equal(help.open, true);
+    assert.equal(help.style['--tunein-help-left'], '44px');
+    click();
+    leave('mouse');
+    assert.equal(help.open, true);
+    click();
+    assert.equal(help.open, false);
+    enter('mouse');
+    handlers.keydown({ key: 'Escape', target: { closest: () => help }, preventDefault() {}, stopPropagation() {} });
+    assert.equal(help.open, false);
+    assert.equal(helpSummary.focused, true);
+    leave('mouse');
+    enter('mouse');
+    assert.equal(help.open, true);
+    leave('mouse');
+    assert.equal(help.open, false);
+    click();
+    assert.equal(help.open, true);
+    click();
+    assert.equal(help.open, false);
+});
+
+test('help falls back below when there is not enough space to its right', () => {
+    const { help } = harness();
+    help.getBoundingClientRect = () => ({ left: 700, right: 744, top: 100, bottom: 144, width: 44, height: 44 });
+    help.handlers.pointerenter({ pointerType: 'mouse' });
+    assert.equal(help.style['--tunein-help-left'], '-208px');
+    assert.equal(help.style['--tunein-help-top'], '44px');
+});
+
+test('help offsets account for page zoom', () => {
+    const { help } = harness();
+    help.offsetWidth = 44;
+    help.getBoundingClientRect = () => ({ left: 500, right: 588, top: 100, bottom: 188, width: 88, height: 88 });
+    help.querySelector(':scope > :not(summary)').getBoundingClientRect = () => ({ width: 600, height: 200 });
+    help.handlers.pointerenter({ pointerType: 'mouse' });
+    assert.equal(help.style['--tunein-help-left'], '-154px');
+    assert.equal(help.style['--tunein-help-top'], '44px');
+});
+
+test('invalid advanced fields open their containing disclosures', () => {
+    const app = harness();
+    const outer = { tagName: 'DETAILS', open: false, parentElement: null };
+    const group = { tagName: 'DETAILS', open: false, parentElement: outer };
+    const wrapper = { tagName: 'DIV', parentElement: group };
+    app.formHandlers.invalid({ target: { parentElement: wrapper } });
+    assert.equal(outer.open, true);
+    assert.equal(group.open, true);
+});
+
+test('static admin controls have unique IDs and valid accessible description references', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);
+    assert.equal(new Set(ids).size, ids.length);
+    for (const match of html.matchAll(/\saria-(?:describedby|labelledby)="([^"]+)"/g)) {
+        for (const id of match[1].split(/\s+/)) assert.ok(ids.includes(id), `Missing referenced ID: ${id}`);
+    }
+    for (const match of html.matchAll(/<details class="tuneInHelp">\s*<summary([^>]*)>/g))
+        assert.match(match[1], /aria-label="Help: [^"]+"/);
+    assert.match(html, /Warning: Skipped entries can represent whole branches/);
+    assert.match(html, /Privacy warning: Diagnostic folder labels may be private/);
+    assert.match(html, /Warning: Emby fetches direct HLS streams without/);
+    assert.match(html, /class="enableDiscoveryProgressiveImport" aria-describedby="tuneInDiscoveryImportWarning tuneInDiscoveryImportHint"/);
+    assert.match(html, /<p id="tuneInDiscoveryImportWarning"[^>]*>If Emby changes the import token[^<]*recovery is required/);
+});
+
+test('help icons share one visual design and sit alongside field labels', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /\.tuneInHelp > summary::before,\s*\.tuneInArtworkHelp > summary::before/);
+    for (const [label, help] of [['tuneInUsername', 'TuneIn user'], ['tuneInLatLon', 'coordinates']]) {
+        assert.match(html, new RegExp(`<div class="tuneInFieldHeading">\\s*<label for="${label}">[^<]+<\\/label>\\s*<details class="tuneInHelp"><summary aria-label="Help: ${help}">`));
+    }
+    for (const [label, help] of [
+        ['tuneInMaxStationCount', 'Max Station Count'], ['tuneInDiscoveryDeadline', 'discovery deadline'],
+        ['tuneInImportDeadline', 'import deadline'], ['tuneInApiInterval', 'API request interval']
+    ]) {
+        assert.match(html, new RegExp(`<label for="${label}">[^<]+<\\/label>\\s*<input id="${label}"[^>]+>\\s*<details class="tuneInHelp"><summary aria-label="Help: ${help}">`));
+    }
+    assert.match(html, /tuneInApiIntervalRow input\s*\{[^}]*inline-size:\s*6ch/);
+    for (const text of ['Choose All or Selected only for each browser category.',
+        'Refresh all resumes interrupted work first', 'Choose a refresh interval next to a category',
+        'Distinct stations at the last category refresh']) {
+        assert.match(html, new RegExp(`<p class="fieldDescription">${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    }
+    const advanced = html.match(/\.tuneInAdvancedSettings\s*\{([^}]+)\}/)[1];
+    assert.match(advanced, /background:\s*color-mix\(in srgb, #d9822b 14%, hsl\(var\(--background-hue/);
+    assert.doesNotMatch(advanced, /\[open\]/);
+});
+
+test('artwork tooltips use the host theme for both foreground and background', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const rule = html.match(/\.tuneInHelp > :not\(summary\),\s*\.tuneInArtworkHelp > :not\(summary\)\s*\{([^}]+)\}/)[1];
+    assert.match(rule, /background:\s*hsl\(var\(--background-hue/);
+    assert.match(rule, /color:\s*hsl\(var\(--theme-text-color-hue/);
 });
 
 test('navigation discards stale loads without hiding the next visit loader', async () => {
@@ -893,6 +1515,87 @@ test('enabled filtering collapses the filtering section', async () => {
     assert.equal(app.elements['.browsingSection'].open, false);
 });
 
+test('station filtering categories follow the full refresh order', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableFavorites: true, EnableTalk: true });
+    await visit;
+    const controls = app.elements['.categories'].descendants()
+        .filter(element => element.tagName === 'input');
+    assert.deepEqual(controls.map(element => element.attributes['data-category']), [
+        'EnableFavorites', 'EnableLocalRadio', 'EnableMusic', 'EnableLanguage',
+        'EnableLocation', 'EnableTalk', 'EnableSports', 'EnablePodcasts'
+    ]);
+    assert.equal(controls[0].checked, true);
+    assert.equal(controls[5].checked, true);
+    assert.equal(controls[1].checked, false);
+    app.instance.onPause();
+});
+
+test('locked station filtering remains inspectable without unlocking its fields', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.refresh[0].resolve({ State: 'Completed', HasCompleteBaseline: true, SettingsLocked: true });
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, SettingsSaved: true });
+    await visit;
+    await settle();
+    assert.equal(app.elements['.configurationFields'].disabled, true);
+    for (const selector of ['.browsingSummary', '.categoriesSummary', '.stationSelectionsSummary']) {
+        const summary = app.elements[selector];
+        const wasOpen = summary.parentNode.open;
+        summary.handlers.click({ preventDefault() {} });
+        assert.equal(summary.parentNode.open, !wasOpen);
+        summary.handlers.click({ preventDefault() {} });
+        assert.equal(summary.parentNode.open, wasOpen);
+    }
+    assert.equal(app.elements['.configurationFields'].disabled, true);
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.doesNotMatch(html, /summary\.browsingSummary\s*,\s*\.tuneInSection\s*>\s*summary\.refreshSummary\s*\{\s*display:\s*inline-block/);
+});
+
+test('opening Station Filtering expands both groups but still allows independent collapse', async () => {
+    for (const locked of [true, false]) {
+        const app = harness(true);
+        const visit = app.instance.onResume();
+        app.refresh[0].resolve({ State: 'Completed', HasCompleteBaseline: true, SettingsLocked: locked });
+        app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, SettingsSaved: true });
+        await visit;
+        const parent = app.elements['.browsingSection'];
+        const groups = ['.categoriesSummary', '.stationSelectionsSummary'].map(selector => app.elements[selector]);
+        const click = summary => summary.handlers.click({ preventDefault() {} });
+        assert.equal(parent.open, false);
+        click(app.elements['.browsingSummary']);
+        assert.equal(parent.open, true);
+        assert.ok(groups.every(summary => summary.parentNode.open));
+        click(groups[0]);
+        assert.equal(groups[0].parentNode.open, false);
+        assert.equal(groups[1].parentNode.open, true);
+        click(groups[1]);
+        assert.ok(groups.every(summary => !summary.parentNode.open));
+        [...app.timers.values()][0].handler();
+        app.refresh[1].resolve({ State: 'Completed', HasCompleteBaseline: true, SettingsLocked: locked });
+        await settle();
+        assert.ok(groups.every(summary => !summary.parentNode.open));
+        click(app.elements['.browsingSummary']);
+        assert.equal(parent.open, false);
+        click(app.elements['.browsingSummary']);
+        assert.ok(groups.every(summary => summary.parentNode.open));
+        assert.equal(app.elements['.configurationFields'].disabled, locked);
+        assert.equal(app.selectors.length, 0);
+        app.instance.onPause();
+    }
+});
+
+test('library refresh is an always-expanded section inside the collapsible Catalog Refresh', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const js = fs.readFileSync(path.join(configDir, 'configPage.js'), 'utf8');
+    assert.match(html, /<section class="tuneInSectionBox tuneInLibraryRefresh" aria-labelledby="tuneInLibraryRefreshTitle">/);
+    assert.match(html, /<h3 class="libraryRefreshTitle" id="tuneInLibraryRefreshTitle">TuneIn Library Refresh<\/h3>/);
+    assert.match(html, /<details class="tuneInSection tuneInNeutralPanel tuneInRefresh">/);
+    assert.doesNotMatch(html, /<summary class="libraryRefresh/);
+    assert.doesNotMatch(js, /libraryRefreshSection|libraryRefreshDefaultPending|libraryRefreshSummary/);
+});
+
 test('yellow first-refresh prompt appears only until refresh history exists', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();
@@ -928,7 +1631,7 @@ test('only explicit selector actions fetch branches and save multiple local sele
         node.childNodes[0].textContent === 'Local Cities and Regions');
     assert.equal(section.tagName, 'details');
     const mode = section.childNodes[1];
-    assert.equal(mode.value, 'all');
+    assert.equal(mode.value, 'selected');
     mode.value = 'selected';
     mode.handlers.change();
     const root = section.descendants().find(node => node.tagName === 'details');
@@ -976,9 +1679,9 @@ test('browser selectors use All or Selected only and save selected branches', as
         const section = app.elements['.selectors'].childNodes[index];
         const [heading, mode, columns] = section.childNodes;
         assert.equal(heading.textContent, label);
-        assert.equal(mode.value, 'all');
+        assert.equal(mode.value, index === 6 ? 'selected' : 'all');
         const [browseColumn, savedColumn] = columns.childNodes;
-        assert.equal(browseColumn.hidden, true);
+        assert.equal(browseColumn.hidden, index !== 6);
         mode.value = 'selected';
         mode.handlers.change();
         const root = browseColumn.childNodes.find(node => node.tagName === 'details');
@@ -1000,19 +1703,71 @@ test('browser selectors use All or Selected only and save selected branches', as
         assert.equal(app.writes[0].config[key], 'selected');
 });
 
-test('Local Radio All mode accepts the Regions source without saved regions', async () => {
+test('Local Radio rejects empty saved regions even with a persisted All mode', async () => {
     const app = harness();
     const visit = app.instance.onResume();
-    app.reads[0].resolve({});
+    app.reads[0].resolve({ LocalMode: 'all' });
     await visit;
     enableBrowsing(app);
     app.instance.view.querySelector('[data-category="EnableLocalRadio"]').checked = true;
     app.elements['.localSource'].value = 'regions';
     app.formHandlers.submit({ preventDefault() {} });
     await settle();
+    assert.equal(app.writes.length, 0);
+    assert.match(app.elements['.status'].textContent, /at least one enabled saved city or region/);
+    assert.equal(app.elements['.status'].attributes['data-error'], 'true');
+    const section = app.elements['.selectors'].childNodes[6];
+    assert.deepEqual(section.childNodes[1].childNodes.map(option => option.value), ['selected']);
+    app.instance.config.LocalCities = [{ Id: 'r1', Enabled: false }];
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.writes.length, 0);
+    app.instance.config.LocalCities[0].Enabled = true;
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
     assert.equal(app.writes.length, 1);
     assert.equal(app.writes[0].config.LocalRadioSource, 'regions');
-    assert.deepEqual(Array.from(app.writes[0].config.LocalCities || []), []);
+    assert.equal(app.writes[0].config.LocalMode, 'selected');
+});
+
+for (const source of ['cities', ' Cities ', '\tCITIES\r\n', 'REGIONS', ' regions ', ' COORDINATES '])
+test(`Local Radio source ${JSON.stringify(source)} loads and saves without rewriting its identity`, async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    const coordinates = source.trim().toLowerCase() === 'coordinates';
+    app.reads[0].resolve({ LocalRadioSource: source, UseCoordinates: coordinates, LatLon: '10,20',
+        LocalCities: [{ Id: 'r1', Enabled: true }], Other: 42 });
+    await visit;
+    assert.equal(app.elements['.localSource'].value, coordinates ? 'coordinates' : 'regions');
+    assert.equal(app.instance.config.LocalRadioSource, source);
+    assert.equal(app.writes.length, 0);
+    enableBrowsing(app);
+    app.instance.view.querySelector('[data-category="EnableLocalRadio"]').checked = true;
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.writes[0].config.LocalRadioSource, source);
+    assert.equal(app.writes[0].config.UseCoordinates, coordinates);
+    assert.equal(app.writes[0].config.Other, 42);
+});
+
+for (const source of ['   ', 'unknown'])
+test(`unrecognized Local Radio source ${JSON.stringify(source)} blocks saving instead of inferring a source`, async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ LocalRadioSource: source, EnableLocalRadio: true, UseCoordinates: true,
+        LatLon: '10,20', LocalCities: [{ Id: 'r1', Enabled: true }] });
+    await visit;
+    enableBrowsing(app);
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.writes.length, 0);
+    assert.match(app.elements['.status'].textContent, /Choose coordinates or regions/);
+    assert.equal(app.elements['.status'].attributes['data-error'], 'true');
+    app.elements['.localSource'].value = 'regions';
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.writes[0].config.LocalRadioSource, 'regions');
+    assert.equal(app.writes[0].config.UseCoordinates, false);
 });
 
 test('first-run checklist follows setup and saving without starting a refresh', async () => {
@@ -1022,6 +1777,7 @@ test('first-run checklist follows setup and saving without starting a refresh', 
     await visit;
     assert.equal(app.elements['.tuneInReadiness'].hidden, false);
     assert.equal(app.elements['.readinessFiltering'].attributes['data-ready'], 'false');
+    assert.equal(app.elements['.readinessFilteringCheck'].checked, false);
     assert.equal(app.elements['.readinessCategory'].attributes['data-ready'], 'false');
     assert.equal(app.elements['.readinessSaved'].attributes['data-ready'], 'false');
     enableBrowsing(app);
@@ -1030,9 +1786,13 @@ test('first-run checklist follows setup and saving without starting a refresh', 
     talk.handlers.change();
     assert.equal(app.elements['.readinessCategory'].attributes['data-ready'], 'true');
     assert.equal(app.elements['.readinessRequirements'].attributes['data-ready'], 'true');
+    assert.equal(app.elements['.readinessCategoryCheck'].checked, true);
+    assert.equal(app.elements['.readinessRequirementsCheck'].checked, true);
     app.formHandlers.submit({ preventDefault() {} });
     await settle();
     assert.equal(app.elements['.readinessSaved'].attributes['data-ready'], 'true');
+    assert.equal(app.elements['.readinessSavedCheck'].checked, true);
+    assert.equal(app.elements['.tuneInReadiness'].hidden, false);
     assert.ok(app.refresh.every(request => request.options.type === 'GET'));
     app.formHandlers.input();
     assert.equal(app.elements['.readinessSaved'].attributes['data-ready'], 'false');
@@ -1071,6 +1831,47 @@ test('eligible artwork preference saves a choice and permits re-enabling', async
         SkipOptionalStartupChecks: false });
     await settle();
     assert.equal(toggle.checked, false);
+});
+
+test('artwork preference changes do not retain a catalog notice from an earlier settings save', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    const status = { State: 'Completed', SettingsLocked: false, OptionalChecksEligible: true,
+        HasCompleteBaseline: true, ChannelRegistered: true, SkipOptionalStartupChecks: false };
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, SettingsSaved: true, EnableTalk: true });
+    app.refresh[0].resolve(status);
+    await visit;
+    await settle();
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    app.refresh[1].resolve({ ...status, SettingsLocked: true });
+    await settle();
+    assert.deepEqual(app.notices, ['saved']);
+    assert.equal(app.elements['.status'].textContent, '');
+
+    const lock = app.elements['.settingsLocked'];
+    lock.checked = false;
+    const unlock = lock.handlers.change();
+    app.locks[0].resolve({ Locked: false });
+    await unlock;
+    app.refresh[2].resolve(status);
+    await settle();
+    const toggle = app.elements['.skipOptionalChecks'];
+    toggle.checked = true;
+    const save = toggle.handlers.change.call(toggle, { stopPropagation() {} });
+    app.optionalChecks[0].resolve({ SkipOptionalStartupChecks: true });
+    await save;
+    app.refresh[3].resolve({ ...status, SkipOptionalStartupChecks: true });
+    await settle();
+    assert.equal(app.elements['.status'].textContent, '');
+    assert.equal(app.elements['.catalogRefreshPrompt'].hidden, true);
+    assert.equal(app.elements['.settingsChangeNotice'].hidden, true);
+    assert.equal(app.elements['.tuneInReadiness'].hidden, true);
+    assert.equal(app.instance.setupDirty, false);
+    assert.match(app.elements['.optionalChecksMessage'].textContent, /Automatic artwork checks will be skipped/);
+    assert.equal(app.writes.length, 1);
+    assert.ok(app.refresh.every(request => request.options.type === 'GET'));
+    app.instance.onPause();
 });
 
 test('a failed optional preference write is not reported as saved', async () => {
@@ -1223,12 +2024,20 @@ test('reopening waits for an earlier unlock request before locking', async () =>
     assert.equal(app.elements['.globalFields'].disabled, true);
 });
 
-test('settings lock explanation is in the adjacent accessible help disclosure', () => {
+test('settings lock and accessible help stay in the pinned header, with version beside Global Settings', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    const controls = html.match(/<div class="tuneInLockControls">([\s\S]*?)<p id="tuneInLockStatus"/)[1];
+    const header = html.match(/<div class="tuneInPinned"[\s\S]*?(?=<form>)/)[0];
+    const controls = header.match(/<div class="tuneInLockControls">([\s\S]*?)<p id="tuneInLockStatus"/)[1];
     assert.match(controls, /class="settingsLocked"/);
+    assert.match(controls, /aria-labelledby="tuneInLockCaption" aria-describedby="tuneInLockStatus"/);
     assert.match(controls, /<summary aria-label="About the settings lock">\?<\/summary>/);
     assert.match(controls, /<div class="tuneInArtworkTooltip">Manually unlock to edit saved settings/);
+    assert.match(header, /id="tuneInLockStatus" class="settingsLockStatus" role="status"/);
+    assert.doesNotMatch(header, /class="tuneInPluginVersion"/);
+    const globalPanel = html.match(/<div class="tuneInSection tuneInSectionBox tuneInGlobalPanel">([\s\S]*?)(?=<summary class="browsingSummary")/)[1];
+    assert.match(globalPanel, /<p class="tuneInPluginVersion" hidden><\/p>/);
+    assert.doesNotMatch(globalPanel, /class="settingsLocked"/);
+    assert.equal((html.match(/class="settingsLocked"/g) || []).length, 1);
     assert.equal((html.match(/Manually unlock to edit saved settings/g) || []).length, 1);
 });
 
@@ -1295,11 +2104,15 @@ test('null and failed status reads discard a previously unlocked state until rec
     await settle();
     assert.equal(app.elements['.settingsLocked'].disabled, true);
     assert.equal(app.elements['.globalFields'].disabled, true);
+    assert.equal(app.elements['.refreshStatus'].attributes['data-error'], 'true');
+    assert.equal(app.elements['.settingsLockStatus'].attributes['data-error'], 'true');
     [...app.timers.values()][0].handler();
     app.refresh[3].resolve({ SettingsLocked: true });
     await settle();
     assert.equal(app.elements['.settingsLocked'].checked, true);
     assert.equal(app.elements['.globalFields'].disabled, true);
+    assert.equal(app.elements['.refreshStatus'].attributes['data-error'], 'false');
+    assert.equal(app.elements['.settingsLockStatus'].attributes['data-error'], 'false');
 });
 
 test('optional checks are deferred until explicitly requested, and errors are reported', async () => {
@@ -1325,7 +2138,13 @@ test('optional checks are deferred until explicitly requested, and errors are re
     app.refresh[2].reject(new Error('offline'));
     await retry;
     assert.match(app.elements['.optionalChecksStatus'].textContent, /failed/);
+    assert.equal(app.elements['.optionalChecksStatus'].attributes['data-error'], 'true');
     assert.equal(app.elements['.artworkGenresName'].textContent, 'Status unavailable');
+    const retryAgain = app.elements['.optionalChecksRun'].click();
+    assert.equal(app.elements['.optionalChecksStatus'].attributes['data-error'], 'false');
+    app.refresh[3].resolve({ State: 'Completed', SettingsLocked: false, ArtworkPacks: [] });
+    await retryAgain;
+    assert.equal(app.elements['.optionalChecksStatus'].attributes['data-error'], 'false');
 });
 
 test('enabled Selected only categories require valid saved choices with inline guidance', async () => {
@@ -1345,7 +2164,9 @@ test('enabled Selected only categories require valid saved choices with inline g
         await visit;
         const guidance = app.instance.selectorErrors.get(selector);
         assert.equal(guidance.hidden, false, category);
-        assert.match(guidance.textContent, /Add a valid .* choice or choose All/, category);
+        assert.match(guidance.textContent, selector === 'local'
+            ? /at least one enabled saved city or region/
+            : /Add a valid .* choice or choose All/, category);
         app.formHandlers.submit({ preventDefault() {} });
         assert.equal(app.writes.length, 0, category);
         app.instance.config[list] = [valid];
@@ -1401,6 +2222,81 @@ test('first baseline gates individual refresh and distinguishes an unregistered 
         }
         assert.ok(app.refresh.every(request => request.options.type === 'GET'));
     }
+});
+
+test('completed setup stays hidden on unlock and shows an edit notice only after a settings change', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, SettingsSaved: true, EnableTalk: true });
+    const status = { State: 'Completed', SettingsLocked: true,
+        HasCompleteBaseline: true, ChannelRegistered: true };
+    app.refresh[0].resolve(status);
+    await visit;
+    await settle();
+    assert.equal(app.elements['.tuneInReadiness'].hidden, true);
+    assert.equal(app.elements['.settingsChangeNotice'].hidden, true);
+
+    const lock = app.elements['.settingsLocked'];
+    lock.checked = false;
+    const unlock = lock.handlers.change();
+    // Native checkbox input and change events both bubble to the form.
+    app.formHandlers.input({ target: lock });
+    app.formHandlers.change({ target: lock });
+    app.locks[0].resolve({ Locked: false });
+    await unlock;
+    app.refresh[1].resolve({ ...status, SettingsLocked: false });
+    await settle();
+    assert.equal(app.instance.setupDirty, false);
+    assert.equal(app.elements['.tuneInReadiness'].hidden, true);
+    assert.equal(app.elements['.settingsChangeNotice'].hidden, true);
+
+    app.requestInterval.value = '4';
+    app.formHandlers.input({ target: app.requestInterval });
+    assert.equal(app.elements['.readinessSavedCheck'].checked, false);
+    assert.equal(app.elements['.tuneInReadiness'].hidden, true);
+    assert.equal(app.elements['.settingsChangeNotice'].hidden, false);
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 4);
+    assert.equal(app.elements['.settingsChangeNotice'].hidden, true);
+    assert.equal(app.elements['.tuneInReadiness'].hidden, true);
+    assert.ok(app.refresh.every(request => request.options.type === 'GET'));
+    app.instance.onPause();
+});
+
+test('setup checklist tracks completion, reappears for unmet requirements, and honors schema upgrades', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, SettingsSaved: true, EnableTalk: true });
+    app.refresh[0].resolve({ State: 'Completed', SettingsLocked: true,
+        HasCompleteBaseline: true, ChannelRegistered: true });
+    await visit;
+    await settle();
+    for (const name of ['Filtering', 'Category', 'Requirements', 'Saved', 'Channel', 'Baseline'])
+        assert.equal(app.elements[`.readiness${name}Check`].checked, true, name);
+    assert.equal(app.elements['.tuneInReadiness'].hidden, true);
+
+    const timer = app.timers.get(app.instance.refreshTimer);
+    timer.handler();
+    app.refresh[1].resolve({ State: 'Completed', SettingsLocked: true,
+        HasCompleteBaseline: true, ChannelRegistered: false });
+    await settle();
+    assert.equal(app.elements['.tuneInReadiness'].hidden, false);
+    assert.equal(app.elements['.readinessChannelCheck'].checked, false);
+    assert.equal(app.elements['.readinessBaselineCheck'].checked, true);
+    app.instance.onPause();
+
+    const upgrade = harness(true);
+    const upgradeVisit = upgrade.instance.onResume();
+    upgrade.reads[0].resolve({ SchemaVersion: 0, SettingsSaved: true, EnableTalk: true });
+    upgrade.refresh[0].resolve({ State: 'Completed', SettingsLocked: true,
+        HasCompleteBaseline: true, ChannelRegistered: true });
+    await upgradeVisit;
+    await settle();
+    assert.equal(upgrade.elements['.tuneInReadiness'].hidden, false);
+    assert.equal(upgrade.elements['.readinessSavedCheck'].checked, false);
+    assert.equal(upgrade.elements['.readinessBaselineCheck'].checked, true);
+    upgrade.instance.onPause();
 });
 
 test('browsing options default checked and preserve saved choices without starting a refresh', async () => {
@@ -1641,22 +2537,71 @@ test('category counts show availability, inventory and missing discovery left of
     await visit;
     await settle();
     const rows = app.elements['.tuneInRefreshCategories'].childNodes;
-    assert.equal(rows[4].childNodes[0].textContent, 'By Language: Imported (TuneIn lists no stations for the selected languages)');
-    assert.equal(rows[1].childNodes[0].textContent, 'Sports: Imported');
+    assert.equal(rows[2].childNodes[0].textContent, 'By Language: Imported (TuneIn lists no stations for the selected languages)');
+    assert.equal(rows[4].childNodes[0].textContent, 'Sports: Imported');
     const values = row => row.childNodes[1].childNodes[0].childNodes.map(group => group.childNodes[1]);
     assert.equal(rows[0].childNodes[1].childNodes[1].textContent, 'Refresh');
     assert.equal(rows[0].childNodes[1].childNodes[1].attributes.is, 'emby-button');
     assert.match(rows[0].childNodes[1].childNodes[1].className, /\braised\b/);
     assert.match(rows[0].childNodes[1].childNodes[1].className, /\bbutton-submit\b/);
-    assert.deepEqual(values(rows[0]).map(value => value.textContent), ['123 (partial)', '145', 'Unavailable']);
-    assert.match(values(rows[0])[0].attributes.title, /lower bound/);
-    assert.deepEqual(values(rows[1]).map(value => value.textContent), ['0', '0', '0']);
-    assert.deepEqual(values(rows[2]).map(value => value.textContent), ['Not checked', 'Not checked', 'Not checked']);
-    assert.deepEqual(values(rows[3]).map(value => value.textContent), ['4', 'Unavailable', 'Unavailable']);
+    assert.deepEqual(values(rows[3]).map(value => value.textContent), ['123 (partial)', '145', 'Unavailable']);
+    assert.match(values(rows[3])[0].attributes.title, /lower bound/);
+    assert.deepEqual(values(rows[4]).map(value => value.textContent), ['0', '0', '0']);
+    assert.deepEqual(values(rows[1]).map(value => value.textContent), ['Not checked', 'Not checked', 'Not checked']);
+    assert.deepEqual(values(rows[0]).map(value => value.textContent), ['4', 'Unavailable', 'Unavailable']);
     assert.doesNotMatch(app.elements['.tuneInRefreshCategories'].textContent, /unfiltered|Not measured|Not applicable/i);
-    assert.equal(values(rows[3])[1].childNodes.length, 0);
+    assert.equal(values(rows[0])[1].childNodes.length, 0);
     assert.equal(app.selectors.length, 0);
     assert.equal(app.refresh.length, 1);
+    app.instance.onPause();
+});
+
+test('library refresh follows full-refresh order and marks only the current running category', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.elements['.refreshSummary'].handlers.click({ preventDefault() {} });
+    app.reads[0].resolve({});
+    const categories = [
+        ['podcast', 'Podcasts'], ['sports', 'Sports'], ['talk', 'Talk'], ['location', 'By Location'],
+        ['language', 'By Language'], ['music', 'Music'], ['local', 'Local Radio'], ['presets', 'My Favorites']
+    ].map(([Category, Name]) => ({ Category, Name, State: 'No recorded refresh' }));
+    app.refresh[0].resolve({ State: 'Running', Busy: true, Category: 'local',
+        QueuedRequests: ['local', 'music'], Categories: categories });
+    await visit;
+    await settle();
+    const rows = app.instance.refreshCategoryRows;
+    assert.deepEqual([...rows.keys()], ['presets', 'local', 'music', 'language', 'location', 'talk', 'sports', 'podcast']);
+    const local = rows.get('local');
+    const music = rows.get('music');
+    assert.equal(local.row.attributes['data-refreshing'], 'true');
+    assert.equal(local.indicator.hidden, false);
+    assert.equal(local.indicator.textContent, 'Refreshing');
+    assert.equal(local.indicator.attributes.role, 'status');
+    assert.equal(local.caption.textContent, 'Local Radio: No recorded refresh');
+    assert.equal(music.row.attributes['data-refreshing'], 'false');
+    assert.equal(music.caption.textContent, 'Music: Queued');
+    const originalLocal = local.row;
+    const originalMusic = music.row;
+    const poll = async status => {
+        [...app.timers.values()][0].handler();
+        app.refresh.at(-1).resolve(status);
+        await settle();
+    };
+    await poll({ State: 'Running', Busy: true, Category: 'music',
+        QueuedRequests: [], Categories: categories.slice().reverse() });
+    assert.equal(rows.get('local').row, originalLocal);
+    assert.equal(rows.get('music').row, originalMusic);
+    assert.equal(local.indicator.hidden, true);
+    assert.equal(local.indicator.textContent, '');
+    assert.equal(music.indicator.hidden, false);
+    assert.equal(music.row.attributes['data-refreshing'], 'true');
+    await poll({ State: 'Running', Busy: true, Category: 'music', SharedImport: true, Categories: categories });
+    assert.equal(music.indicator.hidden, true);
+    await poll({ State: 'Running', Busy: true, Category: null, Categories: categories });
+    assert.equal(music.indicator.hidden, true);
+    await poll({ State: 'Completed', Busy: false, Category: 'music', Categories: categories });
+    assert.equal(music.row.attributes['data-refreshing'], 'false');
+    assert.equal(music.indicator.hidden, true);
     app.instance.onPause();
 });
 
@@ -1691,6 +2636,7 @@ test('In Emby keeps last known values and timestamps when the settings screen re
                 EmbyCountError: 'Emby inventory read failed; check server log' } }] });
         await settle();
         assert.equal(value().textContent, inventory + ' (last known)');
+        assert.equal(value().attributes['data-error'], 'true');
         assert.match(value().attributes.title, /Last successful inventory check:/);
         assert.match(value().attributes.title, /inventory read failed/);
         app.instance.onPause();
@@ -2185,7 +3131,7 @@ for (const resume of [true, false]) {
         app.refresh[0].resolve(failure);
         await visit;
         const rows = app.elements['.tuneInRefreshCategories'].childNodes;
-        const [local, favorites, sports] = rows.map(row => row.childNodes[1].childNodes[1]);
+        const [favorites, local, sports] = rows.map(row => row.childNodes[1].childNodes[1]);
         const action = favorites.handlers.click();
         assert.equal(app.refresh[1].options.url.route, 'TuneIn/Refresh/Start');
         assert.equal(app.refresh[1].options.url.params.Category, 'presets');
@@ -2246,7 +3192,7 @@ test('category interval dropdowns restore saved values and save changes without 
     assert.ok(app.refresh.every(request => request.options.type === 'GET'));
 });
 
-test('returning to saved settings opens the Control Panel with the category sections collapsed', async () => {
+test('returning to configured filtering collapses groups while unfinished filtering opens them', async () => {
     const app = harness();
     const sections = () => [app.elements['.categoriesSection'], app.elements['.stationSelectionsSection'],
         ...app.elements['.selectors'].childNodes];
@@ -2254,9 +3200,10 @@ test('returning to saved settings opens the Control Panel with the category sect
     app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: false });
     await first;
     for (const section of sections()) {
-        assert.equal(section.open, false);
+        const group = section === app.elements['.categoriesSection'] || section === app.elements['.stationSelectionsSection'];
+        assert.equal(section.open, group);
         section.childNodes[0].handlers.click({ preventDefault() {} });
-        assert.equal(section.open, true);
+        assert.equal(section.open, !group);
     }
     app.instance.onPause();
     const second = app.instance.onResume();
@@ -2297,6 +3244,7 @@ test('first save history is independent of the browsing checkbox and the setting
     app.formHandlers.submit({ preventDefault() {} });
     app.writes[0].reject(new Error('save failed'));
     await settle();
+    assert.equal(app.elements['.status'].attributes['data-error'], 'true');
     assert.equal(global.open, true);
     assert.equal(global.attributes['data-saved'], 'false');
     app.elements['.configurationCompleted'].checked = false;
@@ -2304,11 +3252,12 @@ test('first save history is independent of the browsing checkbox and the setting
     app.formHandlers.submit({ preventDefault() {} });
     app.writes[1].resolve('saved');
     await settle();
+    assert.equal(app.elements['.status'].attributes['data-error'], 'false');
     assert.equal(global.open, false);
     assert.equal(global.attributes['data-saved'], 'true');
     assert.equal(app.elements['.browsingSection'].open, true);
-    assert.ok(categorySections.filter(section => section !== app.elements['.browsingSection'])
-        .concat(categoryPickers()).every(section => !section.open));
+    assert.ok(categorySections.every(section => section.open));
+    assert.ok(categoryPickers().every(section => !section.open));
     assert.equal(app.writes[1].config.ConfigurationCompleted, false);
     assert.equal(app.elements['.globalFields'].disabled, true);
     app.instance.onPause();
@@ -2317,8 +3266,8 @@ test('first save history is independent of the browsing checkbox and the setting
     await next;
     assert.equal(global.open, false);
     assert.equal(app.elements['.browsingSection'].open, true);
-    assert.ok(categorySections.filter(section => section !== app.elements['.browsingSection'])
-        .concat(categoryPickers()).every(section => !section.open));
+    assert.ok(categorySections.every(section => section.open));
+    assert.ok(categoryPickers().every(section => !section.open));
     assert.equal(app.elements['.configurationFields'].disabled, true);
 });
 
@@ -2418,9 +3367,9 @@ test('category outcomes keep their status text as well as color, and queued rows
     ] });
     await visit;
     const rows = app.elements['.tuneInRefreshCategories'].childNodes;
-    assert.deepEqual(rows.map(row => row.attributes['data-outcome']), ['Completed', 'Partial', 'Error', '']);
+    assert.deepEqual(rows.map(row => row.attributes['data-outcome']), ['', 'Completed', 'Partial', 'Error']);
     assert.deepEqual(rows.map(row => row.childNodes[0].textContent),
-        ['Talk: Imported', 'Sports: Partial (applied)', 'Podcasts: Failed', 'Music: Queued']);
+        ['Music: Queued', 'Talk: Imported', 'Sports: Partial (applied)', 'Podcasts: Failed']);
 });
 
 test('Catalog Refresh aggregates category outcomes even while collapsed', async () => {
@@ -2588,6 +3537,22 @@ test('plugin version label shows the running build reported by refresh status', 
     app.instance.onPause();
 });
 
+test('unsupported artwork packs show migration guidance without claiming verified identity', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', ArtworkPacks: [
+        { Scope: 'genres', Status: 'unsupported', Name: 'Old trusted name', InstalledCount: 123, Path: 'C:\\art\\genres' }
+    ] });
+    await visit;
+    assert.equal(app.elements['.artworkGenresName'].textContent,
+        'Legacy or unsupported pack: install a schema 2 pack; existing files are unchanged');
+    assert.equal(app.elements['.artworkGenresImages'].textContent, '123 installed');
+    assert.equal(app.elements['.artworkGenresChanges'].textContent, '(change counts unavailable)');
+    assert.equal(app.elements['.artworkGenresPath'].textContent, 'C:\\art\\genres');
+    app.instance.onPause();
+});
+
 test('scoped artwork packs show detected names, counts and paths safely', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();
@@ -2618,6 +3583,9 @@ test('scoped artwork packs show detected names, counts and paths safely', async 
     assert.equal(app.elements['.artworkCategoriesPath'].textContent, 'C:\\art\\categories');
     app.instance.onPause();
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /class="tuneInArtworkTableScroll" role="region" aria-label="[^"]+" tabindex="0">\s*<table/);
+    assert.match(html, /\.tuneInArtworkTableScroll\s*\{[^}]*overflow-x:\s*auto/);
+    assert.match(html, /\.tuneInArtworkPacks th,\s*\.tuneInArtworkPacks td\s*\{[^}]*white-space:\s*nowrap/);
     assert.match(html, /class="hideRegionalGenres"[\s\S]*?<details class="tuneInArtworkPacks">\s*<summary>Custom Artwork Packs<\/summary>[\s\S]*?<\/details>\s*<details class="tuneInAdvancedSettings">/);
     assert.equal((html.match(/<details class="tuneInArtworkPacks">/g) || []).length, 1);
     assert.match(html, /<fieldset class="loginFields" disabled>\s*<legend>TuneIn Favorites and Location<\/legend>/);
@@ -2646,7 +3614,11 @@ async function prepareArtworkUpload(app, scanStatus = 'Not scanned') {
     await visit;
     const file = app.elements['.artworkFile'];
     file.files = [new File([new Uint8Array([80, 75, 3, 4])], 'pack.zip', { type: 'application/zip' })];
-    const upload = file.handlers.change.call(file, { stopPropagation() {} });
+    file.handlers.change.call(file, { stopPropagation() {} });
+    assert.equal(app.elements['.artworkVerifyDialog'].open, true);
+    assert.match(app.elements['.artworkVerifyText'].textContent, /pack\.zip/);
+    assert.equal(app.artwork.some(request => request.options.url.route === 'TuneIn/Artwork/Upload'), false);
+    const upload = app.elements['.artworkVerifyStart'].click();
     const sent = app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').options;
     assert.equal(sent.body, file.files[0]);
     assert.equal(sent.headers.Authorization, 'test-session');
@@ -2660,6 +3632,118 @@ async function prepareArtworkUpload(app, scanStatus = 'Not scanned') {
     return status;
 }
 
+test('artwork selection can be cancelled before upload and reports plain-text validation errors', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', Categories: [] });
+    await visit;
+    const file = app.elements['.artworkFile'];
+    file.files = [new File(['test'], 'example.zip', { type: 'application/zip' })];
+    file.handlers.change.call(file, { stopPropagation() {} });
+    assert.equal(app.elements['.artworkVerifyDialog'].open, true);
+    app.elements['.artworkVerifyCancel'].click();
+    assert.equal(app.elements['.artworkVerifyDialog'].open, false);
+    assert.equal(app.artwork.length, 0);
+    file.handlers.change.call(file, { stopPropagation() {} });
+    const upload = app.elements['.artworkVerifyStart'].click();
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'validating' });
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload')
+        .resolve({ __httpStatus: 500, body: 'Scanner unavailable; artwork was not scanned.' });
+    await upload;
+    assert.match(app.elements['.artworkUploadMessage'].textContent, /Scanner unavailable; artwork was not scanned/);
+    assert.equal(app.elements['.artworkUploadMessage'].attributes['data-error'], 'true');
+    assert.equal(app.elements['.artworkUpload'].disabled, false);
+    file.handlers.change.call(file, { stopPropagation() {} });
+    const retry = app.elements['.artworkVerifyStart'].click();
+    assert.equal(app.elements['.artworkUploadMessage'].attributes['data-error'], 'false');
+    app.artwork.filter(request => request.options.url.route === 'TuneIn/Artwork/Status').at(-1).resolve({ State: 'validating' });
+    app.artwork.filter(request => request.options.url.route === 'TuneIn/Artwork/Upload').at(-1)
+        .resolve({ __httpStatus: 500, body: 'Scanner unavailable.' });
+    await retry;
+    app.instance.onPause();
+});
+
+for (const format of ['json', 'text']) {
+    test(`schema-1 upload shows the newer-pack notice from a ${format} error without offering installation`, async () => {
+        const app = harness(true);
+        const visit = app.instance.onResume();
+        app.reads[0].resolve({});
+        app.refresh[0].resolve({ State: 'NeverRun', Categories: [] });
+        await visit;
+        const file = app.elements['.artworkFile'];
+        file.files = [new File(['legacy'], 'old-pack.zip', { type: 'application/zip' })];
+        file.handlers.change.call(file, { stopPropagation() {} });
+        const upload = app.elements['.artworkVerifyStart'].click();
+        const message = 'This artwork pack uses schema 1, which is no longer supported. Please regenerate or download a newer pack using schemaVersion 2. Existing installed artwork is unchanged.';
+        app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'validating' });
+        app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').resolve({
+            __httpStatus: 400,
+            body: format === 'json' ? JSON.stringify({ ResponseStatus: { ErrorCode: 'NotSupportedException', Message: message } }) : message
+        });
+        await upload;
+        const notice = app.elements['.artworkUploadMessage'];
+        assert.equal(notice.textContent, 'Artwork upload failed: ' + message);
+        assert.equal(notice.attributes['data-error'], 'true');
+        assert.equal(notice.childNodes.length, 0);
+        assert.ok(!app.elements['.artworkConfirmDialog'].open);
+        assert.ok(!app.instance.artworkPending);
+        assert.equal(app.artwork.some(request => request.options.url.route === 'TuneIn/Artwork/Install'), false);
+        assert.equal(app.elements['.artworkUpload'].disabled, false);
+        assert.match(fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8'),
+            /class="artworkUploadMessage" role="status" aria-live="polite"/);
+        app.instance.onPause();
+    });
+}
+
+test('artwork selection is blocked if refresh status becomes unavailable', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', Categories: [] });
+    await visit;
+    app.instance.refreshAvailable = false;
+    const file = app.elements['.artworkFile'];
+    file.files = [new File(['test'], 'example.zip')];
+    file.handlers.change.call(file, { stopPropagation() {} });
+    assert.ok(!app.elements['.artworkVerifyDialog'].open);
+    assert.equal(app.artwork.length, 0);
+    assert.match(app.elements['.artworkUploadMessage'].textContent, /Unlock settings and wait/);
+    app.instance.onPause();
+});
+
+test('locked settings disable artwork selection and reject a stale file change', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SettingsSaved: true });
+    app.refresh[0].resolve({ State: 'NeverRun', Categories: [], SettingsLocked: true });
+    await visit;
+    assert.equal(app.elements['.artworkUpload'].disabled, true);
+    assert.equal(app.elements['.artworkFile'].disabled, true);
+    const file = app.elements['.artworkFile'];
+    file.files = [new File(['test'], 'example.zip')];
+    file.handlers.change.call(file, { stopPropagation() {} });
+    assert.ok(!app.elements['.artworkVerifyDialog'].open);
+    assert.equal(app.artwork.length, 0);
+    assert.match(app.elements['.artworkUploadMessage'].textContent, /Unlock settings/);
+    app.instance.onPause();
+});
+
+test('leaving during artwork verification closes it without uploading', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', Categories: [] });
+    await visit;
+    const file = app.elements['.artworkFile'];
+    file.files = [new File(['test'], 'example.zip')];
+    file.handlers.change.call(file, { stopPropagation() {} });
+    assert.equal(app.elements['.artworkVerifyDialog'].open, true);
+    app.instance.onPause();
+    assert.equal(app.elements['.artworkVerifyDialog'].open, false);
+    assert.equal(app.artwork.length, 0);
+});
+
 test('artwork dialogs remain actionable when settings are locked and approval uses a visible native checkbox', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     let fieldsetDepth = 0;
@@ -2667,7 +3751,7 @@ test('artwork dialogs remain actionable when settings are locked and approval us
     for (const match of html.matchAll(/<\/?fieldset\b[^>]*>|<dialog\b[^>]*>/g)) {
         if (match[0].startsWith('</fieldset')) fieldsetDepth--;
         else if (match[0].startsWith('<fieldset')) fieldsetDepth++;
-        else if (/class="artwork(?:Confirm|Refresh)Dialog"/.test(match[0])) {
+        else if (/class="tuneInRecoveryDialog artwork(?:Confirm|Refresh)Dialog"/.test(match[0])) {
             dialogs.push(match[0]);
             assert.equal(fieldsetDepth, 0, 'artwork dialogs must not inherit a disabled fieldset');
         }
@@ -2702,6 +3786,17 @@ test('artwork installation requires unscanned approval and Later never starts re
     assert.equal(app.elements['.artworkRefreshDialog'].open, false);
     assert.equal(app.refresh.filter(value => value.options.type === 'POST').length, 0);
     assert.match(app.elements['.artworkUploadMessage'].textContent, /No refresh was started/);
+    app.instance.onPause();
+});
+
+test('artwork installation is blocked if settings lock after verification', async () => {
+    const app = harness(true);
+    await prepareArtworkUpload(app, 'Clean');
+    app.instance.settingsLocked = true;
+    app.elements['.artworkInstall'].click();
+    assert.equal(app.elements['.artworkConfirmDialog'].open, true);
+    assert.match(app.elements['.artworkConfirmError'].textContent, /Unlock settings/);
+    assert.equal(app.artwork.some(value => value.options.url.route === 'TuneIn/Artwork/Install'), false);
     app.instance.onPause();
 });
 
@@ -2754,7 +3849,8 @@ test('upload completion after leaving the page discards staging and re-enables u
     await visit;
     const file = app.elements['.artworkFile'];
     file.files = [{ name: 'pack.zip', size: 12 }];
-    const upload = file.handlers.change.call(file, { stopPropagation() {} });
+    file.handlers.change.call(file, { stopPropagation() {} });
+    const upload = app.elements['.artworkVerifyStart'].click();
     app.instance.onPause();
     const revisit = app.instance.onResume();
     app.reads[1].resolve({});
@@ -2983,7 +4079,8 @@ for (const outcome of ['locked', 'save failed']) {
             assert.equal(app.locks.length, 0);
             assert.equal(toggle.disabled, true);
             assert.equal(app.elements['.settingsLockState'].textContent, 'Checking');
-            assert.match(app.elements['.status'].textContent, /saved and locked/);
+            assert.equal(app.elements['.status'].textContent, '');
+            assert.deepEqual(app.notices, ['saved']);
         }
         app.refresh[1].resolve({ SettingsLocked: outcome === 'locked' });
         await settle();
