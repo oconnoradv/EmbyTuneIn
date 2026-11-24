@@ -33,7 +33,7 @@ class Element {
     appendChild(child) { this.childNodes.push(child); child.parentNode = this; return child; }
     setAttribute(name, value) { this.attributes[name] = value; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
-    click() { if (this.handlers.click) return this.handlers.click.call(this); }
+    click() { if (!this.disabled && this.handlers.click) return this.handlers.click.call(this); }
     showModal() { this.open = true; }
     focus() { this.focused = true; }
     close() { this.open = false; if (this.handlers.close) this.handlers.close(); }
@@ -2660,24 +2660,46 @@ async function prepareArtworkUpload(app, scanStatus = 'Not scanned') {
     return status;
 }
 
+test('artwork dialogs remain actionable when settings are locked and approval uses a visible native checkbox', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    let fieldsetDepth = 0;
+    const dialogs = [];
+    for (const match of html.matchAll(/<\/?fieldset\b[^>]*>|<dialog\b[^>]*>/g)) {
+        if (match[0].startsWith('</fieldset')) fieldsetDepth--;
+        else if (match[0].startsWith('<fieldset')) fieldsetDepth++;
+        else if (/class="artwork(?:Confirm|Refresh)Dialog"/.test(match[0])) {
+            dialogs.push(match[0]);
+            assert.equal(fieldsetDepth, 0, 'artwork dialogs must not inherit a disabled fieldset');
+        }
+    }
+    assert.equal(dialogs.length, 2);
+    assert.match(html, /<label class="artworkUnscannedLabel" hidden>\s*<input type="checkbox" class="artworkApproveUnscanned"\s*\/>/);
+    assert.match(html, /\.artworkUnscannedLabel \.artworkApproveUnscanned\s*\{[^}]*appearance:\s*auto;[^}]*opacity:\s*1;/);
+});
+
 test('artwork installation requires unscanned approval and Later never starts refresh', async () => {
     const app = harness(true);
     const status = await prepareArtworkUpload(app);
     assert.equal(app.elements['.artworkConfirmDialog'].open, true);
     assert.match(app.elements['.artworkConfirmText'].textContent, /Sample.*genres.*2 images.*Not scanned/);
     assert.equal(app.elements['.artworkInstall'].disabled, true);
+    app.elements['.artworkInstall'].click();
+    assert.equal(app.artwork.some(value => value.options.url.route === 'TuneIn/Artwork/Install'), false);
     const approve = app.elements['.artworkApproveUnscanned'];
     approve.checked = true;
     approve.handlers.change.call(approve, { stopPropagation() {} });
-    const install = app.elements['.artworkInstall'].handlers.click();
+    const install = app.elements['.artworkInstall'].click();
+    assert.equal(app.elements['.globalFields'].disabled, true);
     const request = app.artwork.find(value => value.options.url.route === 'TuneIn/Artwork/Install');
     assert.equal(JSON.parse(request.options.data).ApproveUnscanned, true);
     request.resolve({ Scope: 'genres', AffectedCategories: ['music', 'language'] });
     await settle();
-    app.refresh[1].resolve(status);
+    app.refresh[1].resolve({ ...status, SettingsLocked: true });
     await install;
     assert.match(app.elements['.artworkRefreshText'].textContent, /Music, By Language/);
-    app.elements['.artworkRefreshLater'].handlers.click();
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    app.elements['.artworkRefreshLater'].click();
+    assert.equal(app.elements['.artworkRefreshDialog'].open, false);
     assert.equal(app.refresh.filter(value => value.options.type === 'POST').length, 0);
     assert.match(app.elements['.artworkUploadMessage'].textContent, /No refresh was started/);
     app.instance.onPause();
@@ -2686,13 +2708,15 @@ test('artwork installation requires unscanned approval and Later never starts re
 test('artwork refresh queues affected enabled categories including language for genres', async () => {
     const app = harness(true);
     const status = await prepareArtworkUpload(app, 'Clean');
-    const install = app.elements['.artworkInstall'].handlers.click();
+    const install = app.elements['.artworkInstall'].click();
     app.artwork.find(value => value.options.url.route === 'TuneIn/Artwork/Install')
         .resolve({ Scope: 'genres', AffectedCategories: ['music', 'language'] });
     await settle();
-    app.refresh[1].resolve(status);
+    app.refresh[1].resolve({ ...status, SettingsLocked: true });
     await install;
-    const refresh = app.elements['.artworkRefreshNow'].handlers.click();
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    const refresh = app.elements['.artworkRefreshNow'].click();
+    assert.equal(app.elements['.artworkRefreshDialog'].open, false);
     const starts = () => app.refresh.filter(value => value.options.type === 'POST');
     assert.equal(starts()[0].options.url.params.Category, 'music');
     starts()[0].resolve({ ...status, Busy: true, ActiveRequest: 'music', QueueSlotsAvailable: 2 });
