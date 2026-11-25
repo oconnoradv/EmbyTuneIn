@@ -68,16 +68,16 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 
 ### Future enhancement possibilities
 
-- [Localize the Control Panel (#10)](https://github.com/oconnoradv/EmbyTuneIn/issues/10)
-- [Establish reliable changed-token import identity (#11)](https://github.com/oconnoradv/EmbyTuneIn/issues/11)
-- [Distinguish valid pagination from scope escapes (#13)](https://github.com/oconnoradv/EmbyTuneIn/issues/13)
-- [Review incomplete-discovery policy for empty categories (#14)](https://github.com/oconnoradv/EmbyTuneIn/issues/14)
-- [Overlap discovery and import across categories (#15)](https://github.com/oconnoradv/EmbyTuneIn/issues/15)
-- [Investigate rejected By Location filters (#16)](https://github.com/oconnoradv/EmbyTuneIn/issues/16)
-- [Evaluate a per-streak rate-limit wait budget (#17)](https://github.com/oconnoradv/EmbyTuneIn/issues/17)
-- [Investigate playback cooldown test flakiness (#18)](https://github.com/oconnoradv/EmbyTuneIn/issues/18)
-- [Complete real-Emby accessibility and compatibility checks (#19)](https://github.com/oconnoradv/EmbyTuneIn/issues/19)
-- [Extend diagnostic packs to other modules (#20)](https://github.com/oconnoradv/EmbyTuneIn/issues/20)
+- Localize the Control Panel ([#10](https://github.com/oconnoradv/EmbyTuneIn/issues/10))
+- Establish reliable changed-token import identity ([#11](https://github.com/oconnoradv/EmbyTuneIn/issues/11))
+- Distinguish valid pagination from scope escapes ([#13](https://github.com/oconnoradv/EmbyTuneIn/issues/13))
+- Review incomplete-discovery policy for empty categories ([#14](https://github.com/oconnoradv/EmbyTuneIn/issues/14))
+- Overlap discovery and import across categories ([#15](https://github.com/oconnoradv/EmbyTuneIn/issues/15))
+- Investigate rejected By Location filters ([#16](https://github.com/oconnoradv/EmbyTuneIn/issues/16))
+- Evaluate a per-streak rate-limit wait budget ([#17](https://github.com/oconnoradv/EmbyTuneIn/issues/17))
+- Investigate playback cooldown test flakiness ([#18](https://github.com/oconnoradv/EmbyTuneIn/issues/18))
+- Complete real-Emby accessibility and compatibility checks ([#19](https://github.com/oconnoradv/EmbyTuneIn/issues/19))
+- Extend diagnostic packs to other modules ([#20](https://github.com/oconnoradv/EmbyTuneIn/issues/20))
 
 ## Install
 
