@@ -2847,7 +2847,7 @@ test('library refresh follows full-refresh order and marks only the current runn
 
 test('In Emby keeps last known values and timestamps when the settings screen reopens', async () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
-    assert.match(html, /\.tuneInStationCounts \[data-error="true"\][^{]*\{[^}]*background:\s*none;[^}]*text-decoration:\s*underline dotted/);
+    assert.match(html, /\.tuneInStationCounts \[data-error="true"\][^{]*\{[^}]*display:\s*inline-block;[^}]*border:\s*0;[^}]*background:\s*linear-gradient\(transparent 45%, color-mix\(in srgb, #ffe69b 40%, transparent\) 45%\)/);
     for (const inventory of [0, 7]) {
         const app = harness(true);
         const checkedAt = '2026-11-19T10:00:00Z';
@@ -2881,6 +2881,17 @@ test('In Emby keeps last known values and timestamps when the settings screen re
         assert.equal(value().attributes['data-error'], 'true');
         assert.match(value().attributes.title, /Last successful inventory check:/);
         assert.match(value().attributes.title, /inventory read failed/);
+        [...app.timers.values()][0].handler();
+        app.refresh[3].resolve({ ...status, Categories: [{ ...status.Categories[0],
+            StationCounts: { EmbyCountError: 'Emby inventory service unavailable' } }] });
+        await settle();
+        assert.equal(value().textContent, 'Unavailable');
+        assert.equal(value().attributes['data-error'], 'true');
+        [...app.timers.values()][0].handler();
+        app.refresh[4].resolve(status);
+        await settle();
+        assert.equal(value().textContent, String(inventory));
+        assert.equal(value().attributes['data-error'], 'false');
         app.instance.onPause();
         assert.equal(app.selectors.length, 0);
     }

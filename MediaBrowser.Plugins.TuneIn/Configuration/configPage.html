@@ -330,12 +330,11 @@
             color: #332900;
         }
         [data-controller="__plugin/tuneinjs"] .tuneInStationCounts [data-error="true"]:not(:empty):not([hidden]) {
+            display: inline-block;
             padding: 0;
             border: 0;
-            background: none;
+            background: linear-gradient(transparent 45%, color-mix(in srgb, #ffe69b 40%, transparent) 45%);
             color: inherit;
-            text-decoration: underline dotted;
-            text-underline-offset: .2em;
         }
         .tuneInSectionBox {
             min-inline-size: 0;

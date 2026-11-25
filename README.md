@@ -60,10 +60,6 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 - Establish reliable import identity when Emby changes nested-request cancellation
   tokens ([#11](https://github.com/oconnoradv/EmbyTuneIn/issues/11)). The
   experimental opt-in bridge is not a reliable identity and does not resolve this.
-- Option 2 diagnostic submission through an operator-controlled HTTPS service
-  and GitHub App, without requiring plugin users to sign into GitHub
-  ([#12](https://github.com/oconnoradv/EmbyTuneIn/issues/12)). Separate from
-  browser-assisted reporting; hosting, privacy and abuse controls need review.
 - Distinguish legitimate pagination transitions from genuine selected-node
   escapes, using representative source/target examples
   ([#13](https://github.com/oconnoradv/EmbyTuneIn/issues/13)). Five observed
@@ -103,10 +99,6 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 - Extend diagnostic packs to playback, artwork and dashboard modules
   ([#20](https://github.com/oconnoradv/EmbyTuneIn/issues/20)). Deferred; the first
   implementation covers discovery, refresh and imports only.
-
-The [Artwork](#artwork) section describes the implemented pack upload/verification
-workflow. Tracking an item above does not authorize changing its current safety
-policy.
 
 ## Install
 
@@ -508,6 +500,9 @@ the normal schedule. Manual artwork changes appear on the next scan or when
 checks are run on demand.
 
 ### Upload and install
+
+Artwork packs are verified before installation. Future enhancements do not
+change the current safety policy.
 
 In the administrator settings page, **Custom Artwork Packs** shows the name,
 image count and server folder for each scope. Scroll the table horizontally to
