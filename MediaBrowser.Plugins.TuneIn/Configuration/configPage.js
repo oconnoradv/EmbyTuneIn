@@ -343,7 +343,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     }
 
     function message(instance, text, configurationRequired, isError) {
-        var status = instance.view.querySelector('.status');
+        var status = instance.view.querySelector('.settingsMessage');
         feedbackMessage(status, text, isError !== false);
         status.setAttribute('data-configuration-required', String(!!configurationRequired));
     }
@@ -915,10 +915,6 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var write = writeSettingsLock(instance.lockRequested).then(function (locked) {
             if (epoch === instance.viewEpoch) {
                 instance.settingsLocked = locked;
-                if (!locked) {
-                    instance.view.querySelector('.browsingSummary').parentNode.open = true;
-                    expandFilteringGroups(instance);
-                }
             }
         }).catch(function () {
             if (epoch !== instance.viewEpoch) return;
@@ -1188,21 +1184,40 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     }
 
     function pollArtwork(instance, epoch) {
-        if (!instance.artworkBusy || epoch !== instance.viewEpoch) return;
+        if (!instance.artworkBusy || instance.artworkOperation || epoch !== instance.viewEpoch) return;
         ApiClient.ajax({ type: 'GET', dataType: 'json', url: ApiClient.getUrl('TuneIn/Artwork/Status') })
             .then(function (status) {
-                if (!instance.artworkBusy || epoch !== instance.viewEpoch) return;
+                if (!instance.artworkBusy || instance.artworkOperation || epoch !== instance.viewEpoch) return;
                 var state = status.State || status.state;
                 var labels = { uploading: 'Uploading artwork pack...', validating: 'Validating artwork pack...',
                     scanning: 'Scanning staged artwork...', installing: 'Installing artwork pack...' };
                 if (labels[state]) feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), labels[state]);
             }, function () {
-                if (instance.artworkBusy && epoch === instance.viewEpoch)
+                if (instance.artworkBusy && !instance.artworkOperation && epoch === instance.viewEpoch)
                     feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Waiting for artwork status...');
             }).then(function () {
-                if (instance.artworkBusy && epoch === instance.viewEpoch)
+                if (instance.artworkBusy && !instance.artworkOperation && epoch === instance.viewEpoch)
                     instance.artworkTimer = setTimeout(function () { pollArtwork(instance, epoch); }, 1500);
             });
+    }
+
+    function awaitArtworkResult(instance, operation, epoch) {
+        return ApiClient.ajax({ type: 'GET', dataType: 'json',
+            url: ApiClient.getUrl('TuneIn/Artwork/Status', { Operation: operation, t: Date.now() }) }).then(function (status) {
+            var state = status.State || status.state;
+            var result = status.Result || status.result;
+            if (state === 'error') throw new Error(status.Message || status.message || 'Artwork validation failed.');
+            if (state === 'awaiting confirmation' && result) return result;
+            if (state !== 'uploading' && state !== 'validating' && state !== 'scanning' && state !== 'awaiting confirmation')
+                throw new Error('Artwork processing status is unavailable. Upload the pack again.');
+            if (epoch === instance.viewEpoch) {
+                var labels = { uploading: 'Uploading artwork pack...', validating: 'Validating artwork pack...',
+                    scanning: 'Scanning staged artwork...', 'awaiting confirmation': 'Finishing artwork verification...' };
+                feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), labels[state]);
+            }
+            return new Promise(function (resolve) { setTimeout(resolve, 1500); })
+                .then(function () { return awaitArtworkResult(instance, operation, epoch); });
+        });
     }
 
     function uploadArtwork(instance, file) {
@@ -1232,6 +1247,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                     throw error;
                 });
             }).then(function (result) {
+            if (!result.Operation) return result;
+            instance.artworkOperation = result.Operation;
+            clearTimeout(instance.artworkTimer);
+            return awaitArtworkResult(instance, result.Operation, epoch);
+        }).then(function (result) {
             if (epoch !== instance.viewEpoch) {
                 return ApiClient.ajax({ type: 'POST', dataType: 'json', contentType: 'application/json',
                     url: ApiClient.getUrl('TuneIn/Artwork/Discard'), data: JSON.stringify({ Token: result.Token }) })
@@ -1260,6 +1280,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Artwork upload failed: ' + artworkError(error), true);
         }).then(function () {
             instance.artworkBusy = false;
+            instance.artworkOperation = null;
             clearTimeout(instance.artworkTimer);
             if (instance.refreshVisible) {
                 instance.view.querySelector('.artworkUpload').disabled = !!editingBlocked(instance);

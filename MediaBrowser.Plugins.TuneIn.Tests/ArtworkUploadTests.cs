@@ -735,6 +735,87 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public async Task BackgroundUploadSurvivesRequestCompletionAndRejectsConcurrentUpload()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "tunein-background-upload-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            using var validating = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            using var request = new CancellationTokenSource();
+            try
+            {
+                var coordinator = new TuneInArtworkUploadCoordinator(root, (_, token) =>
+                {
+                    validating.Set();
+                    if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("Test validation was not released.");
+                    token.ThrowIfCancellationRequested();
+                }, (_, __) => TuneInArtworkScanner.Result.NotScanned, action => action(), () => { });
+                using var archive = CreateArchive();
+                var started = await coordinator.Start(archive, request.Token);
+                Assert.True(validating.Wait(TimeSpan.FromSeconds(5)));
+                request.Cancel();
+                Assert.Equal("validating", coordinator.Status(started.Operation).State);
+                Assert.Throws<InvalidOperationException>(() => coordinator.Status("wrong-operation"));
+                using var competing = CreateArchive();
+                await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.Start(competing, CancellationToken.None));
+                Assert.Equal(0, competing.Position);
+                release.Set();
+                Assert.True(SpinWait.SpinUntil(() => coordinator.Status(started.Operation).Result != null, TimeSpan.FromSeconds(5)));
+                var pending = coordinator.Status(started.Operation).Result;
+                Assert.Equal("Not scanned", pending.ScanStatus);
+                await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.Install(pending.Token, false, CancellationToken.None));
+                await coordinator.Discard(pending.Token, CancellationToken.None);
+                Assert.Throws<InvalidOperationException>(() => coordinator.Status(started.Operation));
+                Assert.Empty(Directory.GetDirectories(root, ".tunein-upload-*"));
+            }
+            finally { release.Set(); Directory.Delete(root, true); }
+        }
+
+        [Fact]
+        public async Task BackgroundScannerFailureIsReportedWithoutInstallingOrLeavingStaging()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "tunein-background-failure-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var previous = Path.Combine(root, "categories");
+                Directory.CreateDirectory(previous);
+                File.WriteAllText(Path.Combine(previous, "talk.jpg"), "old");
+                var coordinator = new TuneInArtworkUploadCoordinator(root, (_, __) => { },
+                    (_, __) => throw new InvalidOperationException("Scanner failed"), action => action(), () => { });
+                using var archive = CreateArchive();
+                var started = await coordinator.Start(archive, CancellationToken.None);
+                Assert.True(SpinWait.SpinUntil(() =>
+                    coordinator.Status(started.Operation).State == "error" &&
+                    Directory.GetDirectories(root, ".tunein-upload-*").Length == 0, TimeSpan.FromSeconds(5)));
+                var status = coordinator.Status(started.Operation);
+                Assert.Contains("Scanner failed", status.Message);
+                Assert.Null(status.Result);
+                Assert.Equal("old", File.ReadAllText(Path.Combine(previous, "talk.jpg")));
+            }
+            finally { Directory.Delete(root, true); }
+        }
+
+        [Fact]
+        public async Task InterruptedUploadDoesNotStartBackgroundValidation()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "tunein-interrupted-upload-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            using var cancellation = new CancellationTokenSource();
+            try
+            {
+                var decoded = false;
+                var coordinator = new TuneInArtworkUploadCoordinator(root, (_, __) => decoded = true,
+                    (_, __) => TuneInArtworkScanner.Result.Clean, action => action(), () => { });
+                using var archive = new InterruptedUploadStream(cancellation);
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => coordinator.Start(archive, cancellation.Token));
+                Assert.False(decoded);
+                Assert.Empty(Directory.GetDirectories(root, ".tunein-upload-*"));
+            }
+            finally { Directory.Delete(root, true); }
+        }
+
+        [Fact]
         public async Task LockedSettingsRejectUploadWithoutReplacingStagedPack()
         {
             var root = Path.Combine(Path.GetTempPath(), "tunein-locked-upload-" + Guid.NewGuid().ToString("N"));
@@ -856,6 +937,19 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             }
             stream.Position = 0;
             return stream;
+        }
+
+        private sealed class InterruptedUploadStream : MemoryStream
+        {
+            private readonly CancellationTokenSource cancellation;
+            internal InterruptedUploadStream(CancellationTokenSource cancellation) : base(new byte[] { 1, 2, 3 })
+                => this.cancellation = cancellation;
+
+            public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken token)
+            {
+                cancellation.Cancel();
+                return Task.FromCanceled<int>(token);
+            }
         }
     }
 }

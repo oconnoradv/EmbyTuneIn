@@ -84,6 +84,10 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
         '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
         '.cleanupConfirm', '.cleanupCancel', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.cleanupScope', '.backupStart',
         '.backupStatus', '.cleanupBackupVerified', '.cleanupStationReference', '.cleanupStationFields', '.cleanupStationSearch', '.cleanupStationSearchStatus', '.cleanupStationResults', '#tuneInReportHint']) elements[name] = new Element();
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const notice = html.match(/<p class="status settingsChangeNotice"[^>]*>([^<]+)<\/p>/);
+    if (notice) elements['.settingsChangeNotice'].textContent = notice[1];
+    elements['.settingsMessage'] = elements['.status'];
     for (const [section, summary, open] of [
         ['.globalSection', '.globalSummary', true],
         ['.categoriesSection', '.categoriesSummary', true],
@@ -134,6 +138,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
         },
         querySelector(selector) {
             const category = /^\[data-category="(.+)"\]$/.exec(selector);
+            if (selector === '.status' && notice) return elements['.settingsChangeNotice'];
             if (selector === '.tuneInRecoveryDialog') {
                 return elements['.selectors'].descendants().find(item =>
                     (item.className || '').split(/\s+/).includes('tuneInRecoveryDialog'))
@@ -2051,6 +2056,11 @@ test('settings lock and accessible help stay in the pinned header, with version 
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     const header = html.match(/<div class="tuneInPinned"[\s\S]*?(?=<form>)/)[0];
     const controls = header.match(/<div class="tuneInLockControls">([\s\S]*?)<p id="tuneInLockStatus"/)[1];
+    assert.match(controls, /<p class="status settingsChangeNotice" role="status" aria-live="polite" hidden>[\s\S]*?<\/p>\s*<div class="tuneInLockActions">\s*<label class="tuneInLockToggle">/);
+    assert.equal((header.match(/class="status settingsChangeNotice"/g) || []).length, 1);
+    assert.match(header, /<p class="status settingsMessage" role="status" aria-live="polite"><\/p>/);
+    assert.match(html, /\.tuneInPinned > \.tuneInLockControls\s*\{[^}]*flex-wrap:\s*wrap/);
+    assert.match(html, /\.tuneInLockControls > \.settingsChangeNotice\s*\{[^}]*min-inline-size:\s*0/);
     assert.match(controls, /class="settingsLocked"/);
     assert.match(controls, /aria-labelledby="tuneInLockCaption" aria-describedby="tuneInLockStatus"/);
     assert.match(controls, /<summary aria-label="About the settings lock">\?<\/summary>/);
@@ -2303,6 +2313,8 @@ test('first baseline gates individual refresh and distinguishes an unregistered 
 
 test('completed setup stays hidden on unlock and shows an edit notice only after a settings change', async () => {
     const app = harness(true);
+    const noticeText = app.elements['.settingsChangeNotice'].textContent;
+    assert.match(noticeText, /^Unsaved settings changes\./);
     const visit = app.instance.onResume();
     app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, SettingsSaved: true, EnableTalk: true });
     const status = { State: 'Completed', SettingsLocked: true,
@@ -2332,10 +2344,12 @@ test('completed setup stays hidden on unlock and shows an edit notice only after
     assert.equal(app.elements['.readinessSavedCheck'].checked, false);
     assert.equal(app.elements['.tuneInReadiness'].hidden, true);
     assert.equal(app.elements['.settingsChangeNotice'].hidden, false);
+    assert.equal(app.elements['.settingsChangeNotice'].textContent, noticeText);
     app.formHandlers.submit({ preventDefault() {} });
     await settle();
     assert.equal(app.writes[0].config.ApiRequestIntervalSeconds, 4);
     assert.equal(app.elements['.settingsChangeNotice'].hidden, true);
+    assert.equal(app.elements['.settingsChangeNotice'].textContent, noticeText);
     assert.equal(app.elements['.tuneInReadiness'].hidden, true);
     assert.ok(app.refresh.every(request => request.options.type === 'GET'));
     app.instance.onPause();
@@ -3502,6 +3516,33 @@ test('Catalog Refresh clears stale overall success when status becomes unavailab
     assert.equal(app.elements['.tuneInRefresh'].attributes['data-outcome'], 'Partial');
 });
 
+test('unlocking and the following status poll preserve manual disclosure choices', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, SettingsSaved: true });
+    app.refresh[0].resolve({ SettingsLocked: true, Categories: [] });
+    await visit;
+    await settle();
+    const global = app.elements['.globalSection'];
+    const filtering = app.elements['.browsingSection'];
+    const categories = app.elements['.categoriesSection'];
+    const selections = app.elements['.stationSelectionsSection'];
+    global.open = false;
+    filtering.open = false;
+    categories.open = true;
+    selections.open = false;
+    const toggle = app.elements['.settingsLocked'];
+    toggle.checked = false;
+    const unlocking = toggle.handlers.change();
+    app.locks.at(-1).resolve({ Locked: false });
+    await unlocking;
+    assert.deepEqual([global.open, filtering.open, categories.open, selections.open], [false, false, true, false]);
+    app.refresh.at(-1).resolve({ SettingsLocked: false, Categories: [] });
+    await settle();
+    assert.deepEqual([global.open, filtering.open, categories.open, selections.open], [false, false, true, false]);
+    app.instance.onPause();
+});
+
 test('settings lock protects pending edits and saves without blocking catalog refresh', async () => {
     const app = harness(true);
     app.elements['.tuneInRefresh'].open = true;
@@ -3546,7 +3587,7 @@ test('settings lock protects pending edits and saves without blocking catalog re
     const unlocking = toggle.handlers.change();
     app.locks[1].resolve({ Locked: false });
     await unlocking;
-    assert.equal(app.elements['.browsingSection'].open, true);
+    assert.equal(app.elements['.browsingSection'].open, false);
     assert.equal(app.elements['.loginFields'].disabled, false);
     app.formHandlers.submit({ preventDefault() {} });
     assert.equal(app.writes[0].config.Username, 'unsaved');
@@ -3708,6 +3749,87 @@ async function prepareArtworkUpload(app, scanStatus = 'Not scanned') {
     await upload;
     return status;
 }
+
+test('artwork upload polls its background operation before offering installation', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', Categories: [] });
+    await visit;
+    const file = app.elements['.artworkFile'];
+    file.files = [new File(['test'], 'pack.zip', { type: 'application/zip' })];
+    file.handlers.change.call(file, { stopPropagation() {} });
+    const upload = app.elements['.artworkVerifyStart'].click();
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'uploading' });
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').resolve({ Operation: 'operation1' });
+    await settle();
+    const first = app.artwork.filter(request => request.options.url.params && request.options.url.params.Operation === 'operation1');
+    assert.equal(first.length, 1);
+    first[0].resolve({ State: 'validating' });
+    await settle();
+    assert.match(app.elements['.artworkUploadMessage'].textContent, /Validating/);
+    assert.notEqual(app.elements['.artworkConfirmDialog'].open, true);
+    [...app.timers.values()].find(timer => timer.delay === 1500).handler();
+    await settle();
+    const second = app.artwork.filter(request => request.options.url.params && request.options.url.params.Operation === 'operation1');
+    assert.equal(second.length, 2);
+    second[1].resolve({ State: 'awaiting confirmation', Result: {
+        Token: 'abc', Scope: 'locations', Name: 'Sample', ImageCount: 2032,
+        Destination: 'C:\\art\\locations', ScanStatus: 'Not scanned'
+    } });
+    await upload;
+    assert.equal(app.elements['.artworkConfirmDialog'].open, true);
+    assert.equal(app.elements['.artworkInstall'].disabled, true);
+    app.instance.onPause();
+});
+
+test('background artwork validation errors remain visible and do not offer installation', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', Categories: [] });
+    await visit;
+    const file = app.elements['.artworkFile'];
+    file.files = [new File(['test'], 'bad.zip', { type: 'application/zip' })];
+    file.handlers.change.call(file, { stopPropagation() {} });
+    const upload = app.elements['.artworkVerifyStart'].click();
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'uploading' });
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').resolve({ Operation: 'operation2' });
+    await settle();
+    app.artwork.find(request => request.options.url.params && request.options.url.params.Operation === 'operation2')
+        .resolve({ State: 'error', Message: 'Scanner failed.' });
+    await upload;
+    assert.match(app.elements['.artworkUploadMessage'].textContent, /Scanner failed/);
+    assert.notEqual(app.elements['.artworkConfirmDialog'].open, true);
+    assert.equal(app.elements['.artworkUpload'].disabled, false);
+    app.instance.onPause();
+});
+
+test('leaving during background validation discards the completed candidate', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', Categories: [] });
+    await visit;
+    const file = app.elements['.artworkFile'];
+    file.files = [new File(['test'], 'pack.zip', { type: 'application/zip' })];
+    file.handlers.change.call(file, { stopPropagation() {} });
+    const upload = app.elements['.artworkVerifyStart'].click();
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'uploading' });
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').resolve({ Operation: 'operation3' });
+    await settle();
+    const status = app.artwork.find(request => request.options.url.params && request.options.url.params.Operation === 'operation3');
+    app.instance.onPause();
+    status.resolve({ State: 'awaiting confirmation', Result: {
+        Token: 'abc', Scope: 'locations', Name: 'Sample', ImageCount: 1, ScanStatus: 'Clean'
+    } });
+    await settle();
+    const discard = app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Discard');
+    assert.equal(JSON.parse(discard.options.data).Token, 'abc');
+    discard.resolve({});
+    await upload;
+    assert.notEqual(app.elements['.artworkConfirmDialog'].open, true);
+});
 
 test('artwork selection can be cancelled before upload and reports plain-text validation errors', async () => {
     const app = harness(true);

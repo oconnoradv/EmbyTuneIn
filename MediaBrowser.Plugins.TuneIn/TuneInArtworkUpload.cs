@@ -20,7 +20,15 @@ namespace MediaBrowser.Plugins.TuneIn
 
     [Route("/TuneIn/Artwork/Status", "GET")]
     [Authenticated(Roles = "Admin")]
-    public sealed class GetTuneInArtworkUploadStatus { }
+    public sealed class GetTuneInArtworkUploadStatus
+    {
+        public string Operation { get; set; }
+    }
+
+    public sealed class TuneInArtworkUploadStarted
+    {
+        public string Operation { get; set; }
+    }
 
     [Route("/TuneIn/Artwork/Install", "POST")]
     [Authenticated(Roles = "Admin")]
@@ -41,6 +49,7 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         public string State { get; set; }
         public string Message { get; set; }
+        public TuneInArtworkUploadResult Result { get; set; }
     }
 
     public sealed class TuneInArtworkUploadResult
@@ -95,13 +104,13 @@ namespace MediaBrowser.Plugins.TuneIn
         public async Task<object> Post(UploadTuneInArtwork request)
         {
             EnsureAdmin();
-            return await coordinator.Prepare(request.RequestStream, Request.CancellationToken).ConfigureAwait(false);
+            return await coordinator.Start(request.RequestStream, Request.CancellationToken).ConfigureAwait(false);
         }
 
         public object Get(GetTuneInArtworkUploadStatus request)
         {
             EnsureAdmin();
-            return coordinator.Status();
+            return coordinator.Status(request.Operation);
         }
 
         public async Task<object> Post(InstallTuneInArtwork request)
@@ -133,6 +142,8 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
         private readonly object statusGate = new object();
         private TuneInArtworkUploadStatus status = new TuneInArtworkUploadStatus { State = "idle" };
+        private string operation;
+        private Task<TuneInArtworkUploadResult> operationTask;
         private Candidate candidate;
         private readonly Timer expiryTimer;
 
@@ -158,31 +169,78 @@ namespace MediaBrowser.Plugins.TuneIn
             expiryTimer = new Timer(ExpireCandidate, null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
         }
 
-        internal TuneInArtworkUploadStatus Status()
+        internal TuneInArtworkUploadStatus Status(string requestedOperation = null)
         {
-            lock (statusGate) return new TuneInArtworkUploadStatus { State = status.State, Message = status.Message };
+            lock (statusGate)
+            {
+                if (requestedOperation != null && requestedOperation != operation)
+                    throw new InvalidOperationException("The artwork upload is no longer available.");
+                var result = new TuneInArtworkUploadStatus { State = status.State, Message = status.Message };
+                if (requestedOperation != null && operationTask != null)
+                {
+                    if (operationTask.IsFaulted)
+                    {
+                        result.State = "error";
+                        result.Message = operationTask.Exception.GetBaseException().Message;
+                    }
+                    else if (operationTask.IsCanceled)
+                    {
+                        result.State = "error";
+                        result.Message = "Artwork processing was cancelled.";
+                    }
+                    else if (operationTask.Status == TaskStatus.RanToCompletion)
+                    {
+                        result.State = "awaiting confirmation";
+                        result.Result = operationTask.Result;
+                    }
+                    else if (result.State == "error")
+                    {
+                        result.State = "validating";
+                        result.Message = null;
+                    }
+                }
+                return result;
+            }
         }
 
         internal async Task<TuneInArtworkUploadResult> Prepare(Stream input, CancellationToken requestToken)
         {
+            var work = await Receive(input, requestToken, false).ConfigureAwait(false);
+            return await work.Task.ConfigureAwait(false);
+        }
+
+        internal async Task<TuneInArtworkUploadStarted> Start(Stream input, CancellationToken requestToken)
+        {
+            var work = await Receive(input, requestToken, true).ConfigureAwait(false);
+            return new TuneInArtworkUploadStarted { Operation = work.Operation };
+        }
+
+        private async Task<UploadWork> Receive(Stream input, CancellationToken requestToken, bool rejectBusy)
+        {
             if (input == null) throw new ArgumentException("Select an artwork ZIP.");
             ensureUploadAllowed();
-            await gate.WaitAsync(requestToken).ConfigureAwait(false);
+            if (rejectBusy)
+            {
+                if (!await gate.WaitAsync(0, requestToken).ConfigureAwait(false))
+                    throw new InvalidOperationException("Another artwork operation is in progress.");
+            }
+            else await gate.WaitAsync(requestToken).ConfigureAwait(false);
             string staging = null;
+            var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(45));
             try
             {
                 ensureUploadAllowed();
                 ClearCandidate();
+                lock (statusGate) { operation = null; operationTask = null; }
                 Directory.CreateDirectory(root);
                 staging = Path.Combine(root, ".tunein-upload-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(staging);
                 var archive = Path.Combine(staging, "upload.zip");
                 var content = Path.Combine(staging, "content");
                 Directory.CreateDirectory(content);
-                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(requestToken))
+                using (var receiveToken = CancellationTokenSource.CreateLinkedTokenSource(requestToken, timeout.Token))
                 {
-                    timeout.CancelAfter(TimeSpan.FromMinutes(45));
-                    var token = timeout.Token;
+                    var token = receiveToken.Token;
                     SetStatus("uploading");
                     using (var output = new FileStream(archive, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
                     {
@@ -196,24 +254,56 @@ namespace MediaBrowser.Plugins.TuneIn
                             await output.WriteAsync(buffer, 0, count, token).ConfigureAwait(false);
                         }
                     }
-                    SetStatus("validating");
-                    var manifest = TuneInArtworkArchive.ValidateAndExtract(archive, content, validateImage, token);
-                    File.Delete(archive);
-                    var staged = new Candidate { Token = Guid.NewGuid().ToString("N"), Staging = staging,
-                        Manifest = manifest, ManifestHash = HashFile(Path.Combine(content, "tunein-artwork.json")),
-                        Expires = DateTime.UtcNow.AddMinutes(30) };
-                    VerifyStaged(staged, content, token);
-                    SetStatus("scanning");
-                    var scanned = scan(content, token);
                     token.ThrowIfCancellationRequested();
-                    VerifyStaged(staged, content, token);
-                    staged.Scan = scanned;
-                    staged.Expires = DateTime.UtcNow.AddMinutes(30);
-                    candidate = staged;
-                    staging = null;
-                    SetStatus("awaiting confirmation");
-                    return Result(candidate);
                 }
+                var ownedStaging = staging;
+                UploadWork work;
+                lock (statusGate)
+                {
+                    var id = Guid.NewGuid().ToString("N");
+                    Task<TuneInArtworkUploadResult> task;
+                    using (ExecutionContext.SuppressFlow())
+                        task = Task.Run(() => Process(ownedStaging, archive, content, timeout));
+                    operation = id;
+                    operationTask = task;
+                    work = new UploadWork { Operation = id, Task = task };
+                    task.ContinueWith(failed => { var ignored = failed.Exception; },
+                        CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+                }
+                staging = null;
+                return work;
+            }
+            catch (Exception error)
+            {
+                SetStatus("error", error.Message);
+                try { if (staging != null && Directory.Exists(staging)) Directory.Delete(staging, true); }
+                finally { timeout.Dispose(); gate.Release(); }
+                throw;
+            }
+        }
+
+        private TuneInArtworkUploadResult Process(string staging, string archive, string content, CancellationTokenSource timeout)
+        {
+            try
+            {
+                var token = timeout.Token;
+                SetStatus("validating");
+                var manifest = TuneInArtworkArchive.ValidateAndExtract(archive, content, validateImage, token);
+                File.Delete(archive);
+                var staged = new Candidate { Token = Guid.NewGuid().ToString("N"), Staging = staging,
+                    Manifest = manifest, ManifestHash = HashFile(Path.Combine(content, "tunein-artwork.json")),
+                    Expires = DateTime.UtcNow.AddMinutes(30) };
+                VerifyStaged(staged, content, token);
+                SetStatus("scanning");
+                var scanned = scan(content, token);
+                token.ThrowIfCancellationRequested();
+                VerifyStaged(staged, content, token);
+                staged.Scan = scanned;
+                staged.Expires = DateTime.UtcNow.AddMinutes(30);
+                candidate = staged;
+                staging = null;
+                SetStatus("awaiting confirmation");
+                return Result(candidate);
             }
             catch (Exception error)
             {
@@ -223,7 +313,7 @@ namespace MediaBrowser.Plugins.TuneIn
             finally
             {
                 try { if (staging != null && Directory.Exists(staging)) Directory.Delete(staging, true); }
-                finally { gate.Release(); }
+                finally { timeout.Dispose(); gate.Release(); }
             }
         }
 
@@ -347,6 +437,7 @@ namespace MediaBrowser.Plugins.TuneIn
             if (candidate == null) return;
             if (Directory.Exists(candidate.Staging)) Directory.Delete(candidate.Staging, true);
             candidate = null;
+            lock (statusGate) { operation = null; operationTask = null; }
         }
 
         private void SetStatus(string state, string message = null)
@@ -391,6 +482,12 @@ namespace MediaBrowser.Plugins.TuneIn
             internal TuneInArtworkScanner.Result Scan;
             internal DateTime Expires;
             internal string ManifestHash;
+        }
+
+        private sealed class UploadWork
+        {
+            internal string Operation;
+            internal Task<TuneInArtworkUploadResult> Task;
         }
     }
 }

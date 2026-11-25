@@ -323,8 +323,15 @@
             display: flex;
             align-items: center;
             justify-content: flex-end;
+            flex-wrap: wrap;
             gap: .4em;
             min-inline-size: 0;
+        }
+        .tuneInLockActions {
+            display: flex;
+            align-items: center;
+            gap: .4em;
+            margin-inline-start: auto;
         }
         .globalSummary, .settingsLockCaption {
             overflow-wrap: anywhere;
@@ -400,6 +407,14 @@
             border-radius: .25em;
             background: #fff2a8;
             color: #332900;
+        }
+        .tuneInLockControls > .settingsChangeNotice {
+            flex: 1 1 20rem;
+            min-inline-size: 0;
+            margin: 0;
+            padding: .45em .65em;
+            font-size: .9em;
+            overflow-wrap: anywhere;
         }
         .tuneInCleanupWarning {
             border: 1px solid currentColor;
@@ -929,6 +944,8 @@
             <span class="tuneInHeroPanel" aria-hidden="true"></span>
         </div>
             <div class="tuneInLockControls">
+                <p class="status settingsChangeNotice" role="status" aria-live="polite" hidden>Unsaved settings changes. Save to apply them. Changes to the catalog require a Catalog Refresh after saving; saving does not start a refresh.</p>
+                <div class="tuneInLockActions">
                 <label class="tuneInLockToggle">
                     <span class="settingsLockCaption" id="tuneInLockCaption">Settings</span>
                     <input type="checkbox" role="switch" class="settingsLocked" aria-labelledby="tuneInLockCaption" aria-describedby="tuneInLockStatus" disabled />
@@ -939,10 +956,10 @@
                     <summary aria-label="About the settings lock">?</summary>
                     <div class="tuneInArtworkTooltip">Manually unlock to edit saved settings, including optional checks. Saving, catalog refreshes, cleanup, Backup Emby and artwork installation lock settings on the server. Settings stay locked afterward; unlocking and edits are blocked while work is active.</div>
                 </details>
+                </div>
             </div>
             <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
-            <p class="status" role="status" aria-live="polite"></p>
-            <p class="status settingsChangeNotice" role="status" aria-live="polite" hidden>Unsaved settings changes. Save to apply them. Changes to the catalog require a Catalog Refresh after saving; saving does not start a refresh.</p>
+            <p class="status settingsMessage" role="status" aria-live="polite"></p>
             <p class="status stationDeletionNotice" role="status" aria-live="polite" hidden></p>
             <p class="status catalogRefreshPrompt" role="status" hidden></p>
         </div>

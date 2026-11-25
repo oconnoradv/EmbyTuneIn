@@ -482,14 +482,19 @@ see long paths on narrower screens. Unlock settings before uploading;
 the server rejects uploads and installation while they are locked. Installation
 locks settings again. Select **Upload Artwork Pack**
 and choose a ZIP from the computer running the browser. Confirm **Verify pack**
-to upload it. The server validates
-the entire archive and scans the staged files when a supported scanner is
-available. Review its name, scope, image count, scan status and replacement
+to upload it. Once the ZIP has been received, the upload request returns and
+the server validates the entire archive and scans the staged files in the
+background; the page polls for progress and the confirmation. This avoids
+holding the upload response open during lengthy validation behind a reverse
+proxy. Proxies must still allow the ZIP's size and upload duration, and their
+individual status requests must reach the server. Review the pack's name,
+scope, image count, scan status and replacement
 warning, then confirm installation or cancel. Installation replaces the entire
 existing scope, not just matching images. Uploads and installation are
 serialized; an active TuneIn refresh or cleanup prevents activation. A failed
 validation or replacement preserves the previous installation. Confirmation
-expires after 30 minutes.
+expires after 30 minutes. If the page is left while validation runs, it attempts
+to discard the completed staging; otherwise staging expires automatically.
 
 After installation, choose **Refresh now** or **Later**. No refresh begins
 without that consent. **Refresh now** opens Catalog Refresh and moves keyboard
