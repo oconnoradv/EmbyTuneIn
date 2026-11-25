@@ -12,9 +12,9 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 > copy dependency DLLs into Emby's plugin folder.
 
 > [!WARNING]
-> RC4 source is available for offline testing; RC4 has not been published as
-> a GitHub release. Earlier local RC4 packages do not include every change in
-> this source. Build the revision you intend to test. Back up Emby, including
+> [RC4](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.4)
+> is a prerelease. Manual testing has been completed except for discovery-time
+> imports, which will be tested after publication. Back up Emby, including
 > library metadata and TuneIn configuration, before testing.
 >
 > Discovery-time imports are experimental and off by default. Their optional
@@ -41,75 +41,50 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 
 ## Features
 
-- **Configured browsing:** choose categories and saved selections in a
-  lockable, theme-aware Control Panel. Navigation IDs are signed.
-- **Resilient refreshes:** refresh one category or all of them, manually or on
-  a schedule, with pacing, checkpoints, bounded retries and partial imports.
-- **Status and diagnostics:** per-category outcomes, station counts, live
-  progress, administrator-only refresh reports and reviewed shareable diagnostic
-  packs with browser-assisted GitHub reporting.
-- **Library maintenance:** preview and clean one station, one category or the
-  whole TuneIn library.
-- **Playback:** a validated relay by default, including TuneIn's separate
-  introductions and stalled-stream handling, with optional direct HLS playback.
+- **Configured browsing:** choose categories, genres, languages, locations,
+  topics and favorites; browsing and playback respect saved selections.
+- **Control Panel:** lockable settings, setup guidance, grouped advanced
+  options and an included settings guide.
+- **Catalog refreshes:** refresh a category or all enabled categories, manually
+  or on individual schedules. Favorites are processed first after interrupted work.
+- **Refresh resilience:** request pacing, rate-limit handling, checkpoints,
+  bounded retries, retained stations, partial results and import recovery.
+- **Experimental early imports:** optionally publish during discovery with
+  explicit risk acknowledgement; off by default. See
+  [risks and prerequisites](#discovery-time-imports-experimental).
+- **Status and diagnostics:** live progress, per-category results and station
+  counts, a private refresh log, and reviewable diagnostic packs with
+  browser-assisted GitHub reporting.
+- **Library maintenance:** preview and clean one station, a category or the
+  whole TuneIn library, with an Emby backup action.
+- **Playback:** server-loopback relay, stream and playlist alternatives,
+  introductions and stalled-stream handling; direct HLS is optional.
 - **Artwork:** built-in default category artwork, plus optional category, music
   genre, language and location packs from
-  [EmbyTuneInArt](https://github.com/oconnoradv/EmbyTuneInArt).
+  [EmbyTuneInArt](https://github.com/oconnoradv/EmbyTuneInArt), with upload
+  validation and installation controls.
+- **Security:** signed navigation IDs and public-address checks for relayed
+  streams; see [Security](#security) for limitations.
 
 ### Future enhancement possibilities
 
-- Control Panel localization that follows the user's Emby language
-  ([#10](https://github.com/oconnoradv/EmbyTuneIn/issues/10)).
-- Establish reliable import identity when Emby changes nested-request cancellation
-  tokens ([#11](https://github.com/oconnoradv/EmbyTuneIn/issues/11)). The
-  experimental opt-in bridge is not a reliable identity and does not resolve this.
-- Distinguish legitimate pagination transitions from genuine selected-node
-  escapes, using representative source/target examples
-  ([#13](https://github.com/oconnoradv/EmbyTuneIn/issues/13)). Five observed
-  podcast continuations are supported with the unchanged `p:topic` filter:
-  `g3403` to `c100001371`, `g3422` to `c100000625`, `g3428` to `c100000892`,
-  `g3429` to `c100000887` and `g3430` to `c100000886`.
-  Unverified transitions remain incomplete. Genre
-  continuation links can retain an unchanged language-only filter, not just station/show
-  filters, in both selected-language and All modes. Known aliases still cannot
-  be used by a different genre; other transitions remain evidence-gated.
-  Incomplete-discovery protection remains enabled.
-- Review whether an empty category needs an explicit incomplete-discovery policy
-  exception beyond the existing exclusions option
-  ([#14](https://github.com/oconnoradv/EmbyTuneIn/issues/14)). The basic partial
-  import behavior is implemented; any cleanup/protection bypass needs a
-  demonstrated unmet need and separate policy approval.
-- With a compatible baseline, overlap importing a completed category with
-  discovery of the next category, while keeping imports serialized and
-  preserving snapshot isolation, verification and interruption recovery
-  ([#15](https://github.com/oconnoradv/EmbyTuneIn/issues/15)). Deferred.
-- Investigate rejected By Location filter values and support only verified
-  legitimate formats ([#16](https://github.com/oconnoradv/EmbyTuneIn/issues/16)).
-  Known NUL-encoded hash alphabet markers are recovered, including regional
-  `:country` indexes. Duplicate filters, arbitrary suffixes and literal
-  backslash escape sequences remain rejected.
-- Evaluate an optional resettable HTTP 429 streak wait budget
-  ([#17](https://github.com/oconnoradv/EmbyTuneIn/issues/17)). A policy proposal,
-  not a current defect; existing per-refresh budget behavior remains unchanged.
-- Investigate historically reported playback cooldown test flakiness if a
-  failure can be reproduced under busy parallel execution
-  ([#18](https://github.com/oconnoradv/EmbyTuneIn/issues/18)). Latest repeated runs
-  passed; no speculative playback change is planned.
-- Complete remaining real-Emby keyboard, screen-reader, touch, theme and
-  host-compatibility checks
-  ([#19](https://github.com/oconnoradv/EmbyTuneIn/issues/19)). Record practical
-  findings and limitations without claiming WCAG conformance.
-- Extend diagnostic packs to playback, artwork and dashboard modules
-  ([#20](https://github.com/oconnoradv/EmbyTuneIn/issues/20)). Deferred; the first
-  implementation covers discovery, refresh and imports only.
+- [Localize the Control Panel (#10)](https://github.com/oconnoradv/EmbyTuneIn/issues/10)
+- [Establish reliable changed-token import identity (#11)](https://github.com/oconnoradv/EmbyTuneIn/issues/11)
+- [Distinguish valid pagination from scope escapes (#13)](https://github.com/oconnoradv/EmbyTuneIn/issues/13)
+- [Review incomplete-discovery policy for empty categories (#14)](https://github.com/oconnoradv/EmbyTuneIn/issues/14)
+- [Overlap discovery and import across categories (#15)](https://github.com/oconnoradv/EmbyTuneIn/issues/15)
+- [Investigate rejected By Location filters (#16)](https://github.com/oconnoradv/EmbyTuneIn/issues/16)
+- [Evaluate a per-streak rate-limit wait budget (#17)](https://github.com/oconnoradv/EmbyTuneIn/issues/17)
+- [Investigate playback cooldown test flakiness (#18)](https://github.com/oconnoradv/EmbyTuneIn/issues/18)
+- [Complete real-Emby accessibility and compatibility checks (#19)](https://github.com/oconnoradv/EmbyTuneIn/issues/19)
+- [Extend diagnostic packs to other modules (#20)](https://github.com/oconnoradv/EmbyTuneIn/issues/20)
 
 ## Install
 
-Build the source revision you intend to install using [Build and test](#build-and-test).
-The Release DLL is written to
+Download the [RC4 prerelease](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.4),
+or build the source revision you intend to install using [Build and test](#build-and-test).
+A locally built Release DLL is written to
 `MediaBrowser.Plugins.TuneIn\bin\Release\netstandard2.0\MediaBrowser.Plugins.TuneIn.dll`.
-These instructions describe the current source, not a separately published
-release or download package.
 
 1. Stop Emby. Back up the plugin DLL, the TuneIn configuration,
    `TuneIn.refresh.xml` (with its `.discovery` and `.recovery` sidecars) and
@@ -383,7 +358,14 @@ overridden.
 TuneIn **More Stations** and **More Shows** pages are followed and their
 stations are listed directly in the linking folder. Unexpected jumps to other
 categories are skipped and reported as partial. Pages under a language retain
-the selected language filter.
+the selected language filter. Five observed podcast continuations with an
+unchanged `p:topic` filter are supported; unverified transitions remain
+incomplete. Genre continuations also support unchanged language-only filters,
+but known aliases cannot be used by a different genre.
+
+Known NUL-encoded By Location hash alphabet markers, including regional
+`:country` indexes, are recovered. Duplicate filters, arbitrary suffixes and
+literal backslash escape sequences remain rejected.
 
 ## Status and diagnostics
 
@@ -527,7 +509,7 @@ matching cards are installed. Optional packs from
 [EmbyTuneInArt](https://github.com/oconnoradv/EmbyTuneInArt) replace or
 supplement the built-in artwork. Obtain or create a pack that meets the
 [canonical schema 2 format](#canonical-artwork-pack-format-schema-2) below.
-Legacy packs cannot be uploaded.
+Legacy v1 packs cannot be uploaded and are not supported.
 
 ### Automatic artwork checks
 
