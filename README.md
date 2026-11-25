@@ -20,7 +20,8 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 > Discovery-time imports are experimental and off by default. Their optional
 > changed-token bridge can misidentify unrelated work; real-server testing of
 > changed-token behavior remains outstanding. See
-> [Advanced Settings](#configure-browsing) for the risks and prerequisites.
+> [Discovery-time imports](#discovery-time-imports-experimental) for the risks
+> and prerequisites.
 
 ## Contents
 
@@ -51,7 +52,9 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
   whole TuneIn library.
 - **Playback:** a validated relay by default, including TuneIn's separate
   introductions and stalled-stream handling, with optional direct HLS playback.
-- **Artwork:** bundled category artwork and optional category, music genre, language and location artwork packs.
+- **Artwork:** built-in default category artwork, plus optional category, music
+  genre, language and location packs from
+  [EmbyTuneInArt](https://github.com/oconnoradv/EmbyTuneInArt).
 
 ### Future enhancement possibilities
 
@@ -117,10 +120,14 @@ release or download package.
 3. Start Emby and reload the dashboard. If settings look stale, clear the
    client's cached page data.
 
+### Verify the installed version
+
 Beside **Global TuneIn Settings**, the Control Panel shows the running DLL's
 assembly version. A short source commit is also shown when the build's
 informational version contains one. Compare this with the DLL you installed;
 an unexpected version can indicate that Emby is still loading an older copy.
+
+### Upgrades and rollback
 
 Keep the navigation signing key in the configuration private and keep it
 across upgrades; replacing it invalidates existing item IDs. To roll back,
@@ -163,6 +170,8 @@ separate from configuration errors. The plugin starts the channel import
 itself; running Emby's **Refresh Internet Channels** scheduled task first is
 not required.
 
+### Choose categories and stations
+
 | Category | Configuration |
 | --- | --- |
 | Music, By Language, By Location | **All**, or **Selected only** with saved choices |
@@ -184,6 +193,9 @@ not required.
   in the left column and **Add** choices (up to 100 per selector); saved
   choices appear in the right column. To remove choices, select
   **Select Items for Delete**, check them, and select **Delete Selected Items**.
+
+### Settings lock and navigation
+
 - **Settings lock:** the switch in the sticky control-panel header shows
   **Locked** (green) or **Unlocked** (red). Once settings have been saved,
   opening or reloading the control panel locks them; initial setup remains
@@ -206,6 +218,9 @@ not required.
   fit within 45% of the viewport height. Longer notices and short or zoomed
   viewports use normal page scrolling instead, without a separate header scrollbar.
   The plugin version appears beside Global TuneIn Settings.
+
+### Browsing scope and upgrades
+
 - By Language follows TuneIn's Music, Talk and Sports groups for each
   language, narrowed to your selected Music genres when set.
 - Browsing and playback enforce the saved scopes. Changing a scope
@@ -220,7 +235,9 @@ not required.
 - **Import valid results when catalog entries are skipped** allows
   [partial results](#partial-results). On by default.
 
-**Advanced Settings** (collapsed):
+### Advanced settings
+
+**Advanced Settings** is collapsed by default.
 
 Settings are grouped by discovery, request pacing, import behavior, and
 playback and diagnostics. Select **Settings guide** beside the section heading
@@ -246,26 +263,37 @@ Defaults apply to new configurations; existing saved values are not replaced.
 | Enable catalog identity diagnostics | on/off | off |
 | Allow direct HLS playback | on/off | off |
 
-Automatic artwork check scheduling is described under [Artwork](#artwork).
-It controls only artwork-pack metadata and image-hash scans; authentication,
-settings and operation locks, channel registration, refresh readiness and
-artwork upload validation remain live and are not bypassed.
+#### Discovery limits
 
 Existing discovery deadlines or station limits outside these ranges must be
 corrected before refreshing or saving. They are not silently changed.
+Reaching the station count or depth limit produces a **Limited** result that
+can still be imported.
+
+#### Discovery-time imports (experimental)
 
 By default, staged imports require the exact import cancellation token. If Emby
 changes it for a nested request, verification can fail and recovery is required.
-**Import during category discovery** is off by default. Enabling it requires an
-acknowledgement and also enables an experimental changed-token bridge for staged
-imports. Early imports also require **Import Valid Results when catalog entries
-are skipped**. If it is off, the acknowledgement offers to enable both; this
-also affects ordinary refreshes, which may import partial results when entries
-are skipped. Save settings to apply the choice. Turning that prerequisite off later
-stops early imports, but the bridge remains enabled until discovery imports are
-turned off. Existing installations with the option enabled must acknowledge the
-new risks before the bridge can be used. The plugin records and logs successful
-acceptance; disabling the option requires acknowledgement again when re-enabled.
+
+**Requirements and acknowledgement**
+
+**Import during category discovery** is off by default. To enable it:
+
+1. Accept the risk notice. Saving this option also enables the experimental
+   changed-token bridge for staged imports. Existing installations with the
+   option enabled must accept the new risks before the bridge can be used.
+2. Enable **Import Valid Results when catalog entries are skipped**. If it is
+   off, the notice offers to enable both options. This also permits partial
+   results during ordinary refreshes.
+3. Save settings. The plugin records and logs the acceptance.
+
+Turning off partial imports later stops early imports, but the bridge remains
+enabled until discovery imports are turned off. Disabling and re-enabling
+discovery imports requires acknowledgement again.
+
+**Risks and testing**
+
+**Back up Emby, including library metadata and TuneIn configuration, before testing.**
 
 The bridge uses inherited execution context, not a reliable import identity:
 unrelated TuneIn work inheriting that context can read staged entries and make
@@ -275,31 +303,41 @@ references may be affected even after rebuilding TuneIn. Emby writes library
 changes to its database; corruption has not been demonstrated, but database
 and broader server compatibility are unverified. Additional import passes can
 increase shared server load. The bridge may still fail if context is not carried.
-**Back up Emby, including library metadata and TuneIn configuration, before testing.**
 Limited isolated Emby checks used the original token and did not verify
 changed-token behavior; real-server verification remains outstanding.
 
-Reaching the station count or depth limit produces a **Limited** result that
-can still be imported. Identity diagnostics add aggregate catalog comparisons
-and unserved-folder details to logs and reports; enable them only while
-troubleshooting. See [Security](#security) before enabling direct HLS
-playback.
+#### Catalog identity diagnostics
+
+**Catalog identity diagnostics** add aggregate catalog comparisons and
+unserved-folder details to logs and reports. Enable them only while
+troubleshooting.
+
+#### Direct HLS playback
+
+See [Security](#security) before enabling **Allow direct HLS playback**.
 
 ## Refresh the catalog
 
 In **Catalog Refresh**, select **Refresh** beside a category or
 **Refresh all enabled categories**. Opening the panel only reads status.
 
-- With a compatible saved baseline, refresh-all imports each changed completed
-  category before discovering the next one. Without that baseline, the shared
-  import waits for the selected categories to be discovered. Import and discovery
-  do not run in parallel. A compatible single-category refresh imports only that
-  category. Optionally, discovery-time imports can publish earlier
-  when partial imports are enabled, pausing discovery during each import. After the first
-  pass, another requires both the configured elapsed time and the greater of
-  the configured entry count or percentage growth. The per-category pass limit
-  and pacing are retained across interruption retries. These imports retain
-  saved entries and remain subject to import verification and recovery.
+### How imports run
+
+With a compatible saved baseline, refresh-all imports each changed completed
+category before discovering the next one. Without that baseline, the shared
+import waits for the selected categories to be discovered. Import and discovery
+do not run in parallel. A compatible single-category refresh imports only that
+category.
+
+Optional discovery-time imports can publish earlier when partial imports are
+enabled, pausing discovery during each import. After the first pass, another
+requires both the configured elapsed time and the greater of the configured
+entry count or percentage growth. The per-category pass limit and pacing are
+retained across interruption retries. These imports retain saved entries and
+remain subject to import verification and recovery.
+
+### Ordering and retained stations
+
 - **Refresh all** processes interrupted work first, followed by enabled
   categories in this order: My Favorites, Local Radio, Music, By Language,
   By Location, Talk, Sports and Podcasts.
@@ -311,6 +349,9 @@ In **Catalog Refresh**, select **Refresh** beside a category or
   missing from a discovery is not deleted; removing a saved filter does
   remove entries outside the new scope.
 - Unchanged catalogs skip import unless reconciliation is needed.
+
+### Queue and recovery
+
 - One refresh runs at a time, with up to two waiting. **Cancel refresh**
   stops the run and clears the queue.
 - Emby imports are not transactional. After an interrupted import, the next
@@ -350,6 +391,8 @@ Section and row colors show the outcome (see
 [Control Panel colors](#control-panel-colors)). Live metrics show elapsed
 time, progress, pages fetched and, during import, folders served.
 
+### Station counts
+
 | Count | Meaning |
 | --- | --- |
 | Available (filtered) | Distinct stations found by the latest discovery |
@@ -360,6 +403,8 @@ Hover a count for its check time. Failed inventory checks show **last known**.
 The comparison is unavailable when discovery is partial or limited, the inventory
 cannot be checked, or no comparable discovery is available. It does not imply
 that a station should be deleted.
+
+### Refresh details and private log
 
 **Refresh details and private log**, below the category list, contains provider
 requests, cache replays, rate-limit retries, checkpoint resumes and skipped
@@ -395,6 +440,8 @@ dashboard capture remain deferred.
    If your browser blocks it, use the reviewed GitHub draft link shown below
    the button; this normal link opens in a new tab without an opener or referrer.
 
+#### Pack contents and privacy
+
 Packs use a versioned, allowlisted structure: plugin/host assembly versions,
 UTC run times, outcome/phase/error codes, numeric/boolean discovery and import
 settings, request/retry/timeout counts, import refresh depth/restriction and
@@ -410,6 +457,8 @@ coordinates, favorites, stream URLs, private labels/paths, raw exceptions,
 provider responses and complete configuration are not copied. Public catalog
 IDs can still reveal regions/interests: review before sharing, and do not treat
 redaction as guaranteed anonymity.
+
+#### Storage and deletion
 
 Saved packs live in `PluginConfigurationsPath\TuneInDiagnostics`: at most
 **5 packs**, **256 KiB each**, **1 MiB total**. They expire after **7 days**;
@@ -474,17 +523,21 @@ installed. The top-level TuneIn library item always uses bundled artwork with
 the **Powered by TuneIn** mark. Refreshing a category updates its artwork.
 
 Music genre, language and location folders use their category artwork unless
-matching cards are installed. Obtain or create a pack that meets the
+matching cards are installed. Optional packs from
+[EmbyTuneInArt](https://github.com/oconnoradv/EmbyTuneInArt) replace or
+supplement the built-in artwork. Obtain or create a pack that meets the
 [canonical schema 2 format](#canonical-artwork-pack-format-schema-2) below.
 Legacy packs cannot be uploaded.
 
 ### Automatic artwork checks
 
 Expand the collapsed **Custom Artwork Packs** section to manage packs. The
-**Upload Artwork Pack** and **Run Checks Now** buttons sit together, with the
-**Skip automatic artwork pack status checks** option directly below and an information
-icon. Activate it to show the explanation. The setting controls only automatic scans of artwork
-pack manifests and image hashes.
+**Upload Artwork Pack** and **Run Checks Now** buttons sit together, with
+**Skip automatic artwork pack status checks** and its information icon directly
+below. Activate the icon for details. The option controls only automatic scans
+of artwork pack manifests and image hashes. Authentication, settings and
+operation locks, channel registration, refresh readiness and artwork upload
+validation remain live and are not bypassed.
 After settings are saved and a category refresh succeeds without partial or
 limited results, the option becomes available. Existing installations need one
 new successful refresh because older checkpoints cannot prove completion.
@@ -504,6 +557,8 @@ checks are run on demand.
 Artwork packs are verified before installation. Future enhancements do not
 change the current safety policy.
 
+#### Prepare and verify
+
 In the administrator settings page, **Custom Artwork Packs** shows the name,
 image count and server folder for each scope. Scroll the table horizontally to
 see long paths on narrower screens. Unlock settings before uploading;
@@ -515,14 +570,19 @@ the server validates the entire archive and scans the staged files in the
 background; the page polls for progress and the confirmation. This avoids
 holding the upload response open during lengthy validation behind a reverse
 proxy. Proxies must still allow the ZIP's size and upload duration, and their
-individual status requests must reach the server. Review the pack's name,
-scope, image count, scan status and replacement
-warning, then confirm installation or cancel. Installation replaces the entire
+individual status requests must reach the server.
+
+#### Confirm installation
+
+Review the pack's name, scope, image count, scan status and replacement warning,
+then confirm installation or cancel. Installation replaces the entire
 existing scope, not just matching images. Uploads and installation are
 serialized; an active TuneIn refresh or cleanup prevents activation. A failed
 validation or replacement preserves the previous installation. Confirmation
 expires after 30 minutes. If the page is left while validation runs, it attempts
 to discard the completed staging; otherwise staging expires automatically.
+
+#### Refresh affected categories
 
 After installation, choose **Refresh now** or **Later**. No refresh begins
 without that consent. **Refresh now** opens Catalog Refresh and moves keyboard
@@ -536,6 +596,8 @@ even if a refresh cannot start.
 
 ### Canonical artwork pack format (schema 2)
 
+#### Archive contents
+
 The ZIP must contain a root `tunein-artwork.json` and the images explicitly
 listed in it. Packs may also include `LICENSE.txt`, `Noto-OFL.txt`,
 `README.txt`, `FLAGS-SOURCES.txt` and `flag-sources.json`; these must be nonempty
@@ -548,6 +610,8 @@ case-colliding entries, links, traversal, absolute paths and network references
 are rejected. Files must be JPEG (`.jpg`) or PNG (`.png`) with a lowercase
 extension. Scripts, executables, shortcuts, HTML, SVG, nested archives and
 other content are not accepted.
+
+#### Manifest
 
 Every scope and theme uses the same strict UTF-8 manifest, without a BOM.
 Its exact required root fields are `schemaVersion` (integer, exactly 2),
@@ -587,6 +651,8 @@ with this manifest:
 }
 ```
 
+#### Scopes and image IDs
+
 The scope is exactly one of `categories`, `genres`, `languages`, or `locations`.
 Category IDs are `local`, `music`, `language`, `location`, `talk`, `sports`,
 `podcast`, and `presets`. Genre IDs are `c` or `g` followed by a nonzero digit
@@ -596,12 +662,16 @@ with the same numeric rule. Each filename is its exact ID plus `.jpg` or
 and themes are 1–128 characters, trimmed, without controls, path separators, colons, `@`
 or `www.`.
 
+#### Size limits and validation
+
 Limits are 768 MiB uploaded, 2 GiB expanded, 4 MiB manifest, 20,000 records,
 16 MiB per image, 4,096 pixels per dimension and 16,777,216 pixels total.
 The server's configured FFmpeg must decode each image; each decode is limited
 to 30 seconds, scanning to 30 minutes, and the overall upload/processing to
 45 minutes. Validation checks structure, hashes and decodability, but does not
 guarantee images are malware-free.
+
+#### Antivirus scanning
 
 The server checks Microsoft Defender on Windows or `clamscan` in supported
 standard installation locations; it does not install software, elevate
@@ -617,6 +687,8 @@ block installation. If neither supported scanner is installed, the pack is
 marked **Not scanned** and requires explicit approval before installation.
 The browser's antivirus is not used.
 
+#### Troubleshooting validation
+
 If validation fails, check the manifest, exact filenames and hashes, ZIP
 format, limits and server FFmpeg configuration. For scanner errors check its
 availability, permissions, health and privacy settings on the Emby server.
@@ -626,6 +698,8 @@ simply renaming the ZIP is not sufficient. Do not remove required license or
 provenance files to bypass validation.
 
 ### Manual installation
+
+#### Legacy pack migration
 
 Schema 1 and extended legacy packs are deprecated and cannot be uploaded.
 Schema-1 uploads display a newer-pack notice, including older extended or
@@ -641,6 +715,8 @@ but is unsupported until replaced with a canonical pack.
 Back up any custom cards before migration. Installing a new pack requires
 explicit confirmation and replaces the entire selected scope using the existing
 recovery safeguards. No automatic migration or release-pack regeneration occurs.
+
+#### Installation directories
 
 For manual installation, extract a canonical pack into the corresponding server directory:
 `<Emby data>\plugins\configurations\TuneInArtwork\categories`, `genres`,
@@ -742,6 +818,8 @@ Tests that replace process-wide artwork directories belong to the
 `Artwork globals` nonparallel collection, so other artwork readers cannot
 observe their temporary paths. Other test collections retain normal parallel
 execution.
+
+### Live-server and accessibility checks
 
 Automated tests don't prove live Emby behavior. Before release, test on a
 backed-up server: settings and selectors, full and single-category refreshes,
