@@ -3718,7 +3718,15 @@ test('scoped artwork packs show detected names, counts and paths safely', async 
     assert.match(html, /docs\/samples\/cartoon\.jpg/);
 });
 
-async function prepareArtworkUpload(app, scanStatus = 'Not scanned') {
+function dispatchFormControlEvent(app, control, type) {
+    let stopped = false;
+    const event = { target: control, stopPropagation() { stopped = true; } };
+    const handler = control.handlers[type];
+    if (handler) handler.call(control, event);
+    if (!stopped) app.formHandlers[type](event);
+}
+
+async function prepareArtworkUpload(app, scanStatus = 'Not scanned', config = {}) {
     const categories = [
         { Category: 'music', Name: 'Music', State: 'Imported' },
         { Category: 'language', Name: 'By Language', State: 'Imported' },
@@ -3727,12 +3735,13 @@ async function prepareArtworkUpload(app, scanStatus = 'Not scanned') {
     const status = { State: 'Completed', Categories: categories, HasCompleteBaseline: true,
         ChannelRegistered: true, QueueSlotsAvailable: 2, QueuedRequests: [] };
     const visit = app.instance.onResume();
-    app.reads[0].resolve({});
+    app.reads[0].resolve(config);
     app.refresh[0].resolve(status);
     await visit;
     const file = app.elements['.artworkFile'];
     file.files = [new File([new Uint8Array([80, 75, 3, 4])], 'pack.zip', { type: 'application/zip' })];
-    file.handlers.change.call(file, { stopPropagation() {} });
+    dispatchFormControlEvent(app, file, 'input');
+    dispatchFormControlEvent(app, file, 'change');
     assert.equal(app.elements['.artworkVerifyDialog'].open, true);
     assert.match(app.elements['.artworkVerifyText'].textContent, /pack\.zip/);
     assert.equal(app.artwork.some(request => request.options.url.route === 'TuneIn/Artwork/Upload'), false);
@@ -3863,6 +3872,24 @@ test('artwork selection can be cancelled before upload and reports plain-text va
     app.instance.onPause();
 });
 
+test('cancelling artwork verification does not create an unsaved settings warning', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, SettingsSaved: true });
+    app.refresh[0].resolve({ State: 'Completed', Categories: [], HasCompleteBaseline: true, ChannelRegistered: true });
+    await visit;
+    const file = app.elements['.artworkFile'];
+    file.files = [new File(['test'], 'example.zip')];
+    dispatchFormControlEvent(app, file, 'input');
+    dispatchFormControlEvent(app, file, 'change');
+    app.elements['.artworkVerifyCancel'].click();
+    assert.equal(app.instance.setupDirty, false);
+    assert.equal(app.elements['.settingsChangeNotice'].hidden, true);
+    assert.equal(app.writes.length, 0);
+    assert.equal(app.artwork.length, 0);
+    app.instance.onPause();
+});
+
 for (const format of ['json', 'text']) {
     test(`schema-1 upload shows the newer-pack notice from a ${format} error without offering installation`, async () => {
         const app = harness(true);
@@ -3987,7 +4014,8 @@ test('artwork installation requires unscanned approval and Later never starts re
     assert.equal(app.artwork.some(value => value.options.url.route === 'TuneIn/Artwork/Install'), false);
     const approve = app.elements['.artworkApproveUnscanned'];
     approve.checked = true;
-    approve.handlers.change.call(approve, { stopPropagation() {} });
+    dispatchFormControlEvent(app, approve, 'input');
+    dispatchFormControlEvent(app, approve, 'change');
     const install = app.elements['.artworkInstall'].click();
     assert.equal(app.elements['.globalFields'].disabled, true);
     const request = app.artwork.find(value => value.options.url.route === 'TuneIn/Artwork/Install');
@@ -4005,6 +4033,49 @@ test('artwork installation requires unscanned approval and Later never starts re
     app.instance.onPause();
 });
 
+for (const choice of ['Now', 'Later']) {
+    for (const hasSettingsEdit of [false, true]) {
+        test(`artwork refresh ${choice} ${hasSettingsEdit ? 'preserves genuine unsaved settings' : 'does not mark settings dirty'}`, async () => {
+            const app = harness(true);
+            const status = await prepareArtworkUpload(app, 'Not scanned',
+                { SchemaVersion: 1, ConfigurationCompleted: true, SettingsSaved: true, EnableTalk: true });
+            assert.equal(app.instance.setupDirty, false);
+            assert.equal(app.elements['.settingsChangeNotice'].hidden, true);
+            if (hasSettingsEdit) {
+                app.requestInterval.value = '4';
+                dispatchFormControlEvent(app, app.requestInterval, 'input');
+            }
+            const approve = app.elements['.artworkApproveUnscanned'];
+            approve.checked = true;
+            dispatchFormControlEvent(app, approve, 'input');
+            dispatchFormControlEvent(app, approve, 'change');
+            assert.equal(app.instance.setupDirty, hasSettingsEdit);
+            assert.equal(app.elements['.settingsChangeNotice'].hidden, !hasSettingsEdit);
+            const install = app.elements['.artworkInstall'].click();
+            app.artwork.find(value => value.options.url.route === 'TuneIn/Artwork/Install')
+                .resolve({ Scope: 'genres', AffectedCategories: ['music'] });
+            await settle();
+            app.refresh[1].resolve({ ...status, SettingsLocked: true });
+            await install;
+            assert.equal(app.elements['.artworkRefreshDialog'].open, true);
+            assert.equal(app.instance.setupDirty, hasSettingsEdit);
+            assert.equal(app.elements['.settingsChangeNotice'].hidden, !hasSettingsEdit);
+            const refresh = app.elements['.artworkRefresh' + choice].click();
+            const starts = app.refresh.filter(value => value.options.type === 'POST');
+            if (choice === 'Now') {
+                assert.equal(starts.length, 1);
+                starts[0].resolve({ ...status, SettingsLocked: true, Busy: true, ActiveRequest: 'music' });
+                await refresh;
+            } else assert.equal(starts.length, 0);
+            assert.equal(app.instance.setupDirty, hasSettingsEdit);
+            assert.equal(app.elements['.settingsChangeNotice'].hidden, !hasSettingsEdit);
+            assert.equal(app.writes.length, 0);
+            if (hasSettingsEdit) assert.equal(app.requestInterval.value, '4');
+            app.instance.onPause();
+        });
+    }
+}
+
 test('artwork installation is blocked if settings lock after verification', async () => {
     const app = harness(true);
     await prepareArtworkUpload(app, 'Clean');
@@ -4013,6 +4084,55 @@ test('artwork installation is blocked if settings lock after verification', asyn
     assert.equal(app.elements['.artworkConfirmDialog'].open, true);
     assert.match(app.elements['.artworkConfirmError'].textContent, /Unlock settings/);
     assert.equal(app.artwork.some(value => value.options.url.route === 'TuneIn/Artwork/Install'), false);
+    app.instance.onPause();
+});
+
+test('artwork installation defers status polling and ignores an earlier failed poll', async () => {
+    const app = harness(true);
+    const status = await prepareArtworkUpload(app, 'Clean');
+    const initialTimer = [...app.timers.values()].find(item => item.delay === 10000);
+    assert.ok(initialTimer);
+    initialTimer.handler();
+    const stale = app.refresh[1];
+    assert.equal(stale.options.type, 'GET');
+    const install = app.elements['.artworkInstall'].click();
+    stale.reject(new Error('stale status failure'));
+    await settle();
+    await settle();
+    assert.notEqual(app.elements['.settingsLockStatus'].attributes['data-error'], 'true');
+    assert.equal(app.refresh.length, 2);
+    const timer = [...app.timers.values()].find(item => item.delay === 10000);
+    assert.ok(timer);
+    timer.handler();
+    await settle();
+    assert.equal(app.refresh.length, 2);
+    app.artwork.find(value => value.options.url.route === 'TuneIn/Artwork/Install')
+        .resolve({ Scope: 'genres', AffectedCategories: ['music'] });
+    await settle();
+    app.refresh[2].resolve({ ...status, SettingsLocked: true });
+    await install;
+    assert.equal(app.elements['.artworkRefreshDialog'].open, true);
+    assert.notEqual(app.elements['.settingsLockStatus'].attributes['data-error'], 'true');
+    app.instance.onPause();
+});
+
+test('artwork installation still reports and retries a post-install status failure', async () => {
+    const app = harness(true);
+    await prepareArtworkUpload(app, 'Clean');
+    const install = app.elements['.artworkInstall'].click();
+    app.artwork.find(value => value.options.url.route === 'TuneIn/Artwork/Install')
+        .resolve({ Scope: 'genres', AffectedCategories: ['music'] });
+    await settle();
+    app.refresh[1].reject(new Error('status unavailable'));
+    await install;
+    assert.equal(app.elements['.artworkRefreshDialog'].open, true);
+    assert.match(app.elements['.artworkRefreshText'].textContent, /Could not load affected categories/);
+    assert.equal(app.elements['.artworkRefreshText'].attributes['data-error'], 'true');
+    assert.equal(app.refresh[2].options.type, 'GET');
+    app.refresh[2].reject(new Error('still unavailable'));
+    await settle();
+    await settle();
+    assert.match(app.elements['.settingsLockStatus'].textContent, /Could not read the settings lock/);
     app.instance.onPause();
 });
 

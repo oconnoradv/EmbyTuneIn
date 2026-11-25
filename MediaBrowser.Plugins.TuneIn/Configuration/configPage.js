@@ -1321,6 +1321,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.view.querySelector('.artworkConfirmDialog').close();
         instance.artworkBusy = true;
         instance.artworkInstalling = true;
+        instance.refreshGeneration = (instance.refreshGeneration || 0) + 1;
         refreshControls(instance, instance.refreshAvailable);
         var statusConfirmed = false;
         instance.view.querySelector('.artworkUpload').disabled = true;
@@ -2045,7 +2046,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (epoch !== instance.viewEpoch || !instance.refreshVisible) return;
         clearTimeout(instance.refreshTimer);
         readBackup(instance, false);
-        if (instance.refreshAction || instance.lockChanging || instance.cleanupAction || instance.optionalSaving)
+        if (instance.refreshAction || instance.lockChanging || instance.cleanupAction || instance.optionalSaving || instance.artworkInstalling)
             return scheduleStatus(instance, epoch);
         if (instance.refreshPoll) return instance.refreshPoll;
         var generation = instance.refreshGeneration || 0;
@@ -2391,6 +2392,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         view.querySelector('.artworkUpload').addEventListener('click', function () {
             if (!instance.artworkBusy && !editingBlocked(instance)) view.querySelector('.artworkFile').click();
         });
+        view.querySelector('.artworkFile').addEventListener('input', function (event) { event.stopPropagation(); });
         view.querySelector('.artworkFile').addEventListener('change', function (event) {
             event.stopPropagation();
             var file = this.files && this.files[0];
@@ -2421,6 +2423,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         }
         view.querySelector('.artworkVerifyCancel').addEventListener('click', cancelArtworkVerification);
         view.querySelector('.artworkVerifyDialog').addEventListener('cancel', cancelArtworkVerification);
+        view.querySelector('.artworkApproveUnscanned').addEventListener('input', function (event) { event.stopPropagation(); });
         view.querySelector('.artworkApproveUnscanned').addEventListener('change', function (event) {
             event.stopPropagation();
             view.querySelector('.artworkInstall').disabled = !this.checked;
