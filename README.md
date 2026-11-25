@@ -12,10 +12,10 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 > copy dependency DLLs into Emby's plugin folder.
 
 > [!WARNING]
-> [RC4](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.4)
-> is a prerelease. Manual testing has been completed except for discovery-time
-> imports, which will be tested after publication. Back up Emby, including
-> library metadata and TuneIn configuration, before testing.
+> The RC4 prerelease has been withdrawn and is not currently available as a
+> GitHub release. Manual testing has been completed except for discovery-time
+> imports. Back up Emby, including library metadata and TuneIn configuration,
+> before testing.
 >
 > Discovery-time imports are experimental and off by default. Their optional
 > changed-token bridge can misidentify unrelated work; real-server testing of
@@ -81,8 +81,7 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 
 ## Install
 
-Download the [RC4 prerelease](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.4),
-or build the source revision you intend to install using [Build and test](#build-and-test).
+Build the source revision you intend to install using [Build and test](#build-and-test).
 A locally built Release DLL is written to
 `MediaBrowser.Plugins.TuneIn\bin\Release\netstandard2.0\MediaBrowser.Plugins.TuneIn.dll`.
 
