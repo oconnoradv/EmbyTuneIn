@@ -246,7 +246,7 @@
             }
         }
         [data-controller="__plugin/tuneinjs"] {
-            scroll-padding-block-start: var(--tunein-header-height, 0px);
+            scroll-padding-block-start: calc(var(--tunein-header-height, 0px) + .25rem);
         }
         [data-controller="__plugin/tuneinjs"] > .scrollSlider {
             /* Keep positioned Emby controls in the slider's scrolling coordinate space. */

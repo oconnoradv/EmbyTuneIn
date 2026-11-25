@@ -36,7 +36,8 @@ class Element {
     addEventListener(name, handler) { this.handlers[name] = handler; }
     click() { if (!this.disabled && this.handlers.click) return this.handlers.click.call(this); }
     showModal() { this.open = true; }
-    focus() { this.focused = true; }
+    focus() { this.focused = true; if (this.ownerDocument) this.ownerDocument.activeElement = this; }
+    scrollIntoView(options) { this.scrollOptions = options; this.scrollCount = (this.scrollCount || 0) + 1; }
     close() { this.open = false; if (this.handlers.close) this.handlers.close(); }
     descendants() { return this.childNodes.flatMap(child => [child, ...child.descendants()]); }
 }
@@ -234,6 +235,13 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
     BaseView.prototype.onResume = function (options) { calls.push(['resume', options]); };
     BaseView.prototype.onPause = function (options) { calls.push(['pause', options]); };
     BaseView.prototype.onBeginResume = function () { return 'native transition'; };
+    const document = { createElement(tag) {
+        const element = new Element(tag);
+        element.ownerDocument = document;
+        if (tag === 'a') element.click = () => downloads.push({ href: element.href, filename: element.download });
+        return element;
+    }, documentElement: viewport, activeElement: null };
+    Object.values(elements).forEach(element => { element.ownerDocument = document; });
     vm.runInNewContext(fs.readFileSync(path.join(configDir, 'configPage.js'), 'utf8'), {
         define(dependencies, factory) {
             assert.equal(dependencies[0], 'baseView');
@@ -247,11 +255,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
                 ? { ok: false, status: result.__httpStatus, text: () => Promise.resolve(result.body) }
                 : { ok: true, status: 200, json: () => Promise.resolve(result) });
         },
-        document: { createElement(tag) {
-            const element = new Element(tag);
-            if (tag === 'a') element.click = () => downloads.push({ href: element.href, filename: element.download });
-            return element;
-        }, documentElement: viewport },
+        document,
         ResizeObserver: class {
             constructor(callback) { this.callback = callback; resizeObservers.push(this); }
             observe(element) { this.element = element; }
@@ -2067,7 +2071,7 @@ test('header never creates an internal scroller when help or zoom exceeds its bo
     assert.match(header, /overflow: visible/);
     assert.doesNotMatch(header, /max-block-size|overflow-[xy]|overscroll-behavior/);
     assert.match(html, /\.tuneInPinned\[data-pinned="true"\] \{\s*position: sticky/);
-    assert.match(html, /scroll-padding-block-start: var\(--tunein-header-height, 0px\)/);
+    assert.match(html, /scroll-padding-block-start: calc\(var\(--tunein-header-height, 0px\) \+ \.25rem\)/);
 });
 
 test('header unpins long notices and short viewports, then resumes without stale layout observers', () => {
@@ -3902,6 +3906,8 @@ test('artwork refresh queues affected enabled categories including language for 
     assert.equal(app.elements['.globalFields'].disabled, true);
     const refresh = app.elements['.artworkRefreshNow'].click();
     assert.equal(app.elements['.artworkRefreshDialog'].open, false);
+    assert.equal(app.elements['.refreshSummary'].focused, true);
+    assert.equal(app.elements['.refreshSummary'].scrollOptions.block, 'start');
     const starts = () => app.refresh.filter(value => value.options.type === 'POST');
     assert.equal(starts()[0].options.url.params.Category, 'music');
     starts()[0].resolve({ ...status, Busy: true, ActiveRequest: 'music', QueueSlotsAvailable: 2 });
@@ -3911,6 +3917,7 @@ test('artwork refresh queues affected enabled categories including language for 
     await refresh;
     assert.match(app.elements['.artworkUploadMessage'].textContent, /started or queued/);
     assert.equal(starts().length, 2);
+    assert.equal(app.elements['.refreshSummary'].scrollCount, 2);
     app.instance.onPause();
 });
 
@@ -3924,10 +3931,32 @@ test('artwork refresh reports every affected category that could not start', asy
     app.refresh[1].resolve(status);
     await install;
     const refresh = app.elements['.artworkRefreshNow'].handlers.click();
+    app.elements['.maintenanceSummary'].focus();
     app.refresh.find(value => value.options.type === 'POST').reject(new Error('unavailable'));
     await refresh;
     assert.match(app.elements['.artworkUploadMessage'].textContent, /Pack installed.*Music, By Language/);
+    assert.match(app.elements['.refreshError'].textContent, /Pack installed.*Music, By Language/);
+    assert.equal(app.elements['.refreshError'].attributes['data-error'], 'true');
+    assert.equal(app.elements['.refreshSummary'].scrollCount, 1);
     assert.equal(app.refresh.filter(value => value.options.type === 'POST').length, 1);
+    app.instance.onPause();
+});
+
+test('artwork refresh moves to visible baseline requirements without bypassing the first-refresh gate', async () => {
+    const app = harness(true);
+    const status = await prepareArtworkUpload(app, 'Clean');
+    const install = app.elements['.artworkInstall'].click();
+    app.artwork.find(value => value.options.url.route === 'TuneIn/Artwork/Install')
+        .resolve({ Scope: 'genres', AffectedCategories: ['music', 'language'] });
+    await settle();
+    app.refresh[1].resolve({ ...status, SettingsLocked: true, HasCompleteBaseline: false });
+    await install;
+    app.elements['.artworkRefreshNow'].click();
+    assert.equal(app.instance.refreshSection.open, true);
+    assert.equal(app.elements['.refreshSummary'].focused, true);
+    assert.match(app.elements['.refreshError'].textContent, /Music, By Language.*Refresh all enabled categories.*baseline/);
+    assert.equal(app.refresh.filter(value => value.options.type === 'POST').length, 0);
+    assert.equal(app.instance.settingsLocked, true);
     app.instance.onPause();
 });
 

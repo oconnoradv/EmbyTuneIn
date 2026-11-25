@@ -1357,27 +1357,41 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.refreshSection.open = true;
         renderCategoryRefresh(instance, instance.refreshStatus);
         refreshControls(instance, instance.refreshAvailable);
+        var summary = instance.view.querySelector('.refreshSummary');
+        function reveal() {
+            if (instance.headerResize) instance.headerResize();
+            summary.scrollIntoView({ block: 'start' });
+        }
+        summary.focus();
+        reveal();
         function remaining(index) {
             return affected.slice(index).map(function (key) { return refreshName(instance.refreshStatus || {}, key); }).join(', ');
+        }
+        function failed(index) {
+            var text = 'Pack installed, but refresh could not start for: ' + remaining(index) + '.';
+            var note = instance.view.querySelector('.refreshCategoryNote').textContent;
+            if (note) text += ' ' + note;
+            feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), text, true);
+            feedbackMessage(instance.view.querySelector('.refreshError'), text, true);
+            if (document.activeElement === summary) reveal();
         }
         function next(index) {
             if (epoch !== instance.viewEpoch) return;
             if (index >= affected.length) {
                 feedbackMessage(instance.view.querySelector('.artworkUploadMessage'), 'Pack installed; affected category refreshes started or queued.');
+                if (document.activeElement === summary) reveal();
                 return;
             }
             var key = affected[index];
             var action = doRefresh(instance, 'Start', key);
             if (!action) {
-                feedbackMessage(instance.view.querySelector('.artworkUploadMessage'),
-                    'Pack installed, but refresh could not start for: ' + remaining(index) + '. Check Catalog Refresh.', true);
+                failed(index);
                 return;
             }
             return action.then(function (status) {
                 if (epoch !== instance.viewEpoch) return;
                 if (!status || status.RecoveryChoiceRequired) {
-                    feedbackMessage(instance.view.querySelector('.artworkUploadMessage'),
-                        'Pack installed, but refresh could not start for: ' + remaining(index) + '. Check Catalog Refresh.', true);
+                    failed(index);
                     return;
                 }
                 return next(index + 1);

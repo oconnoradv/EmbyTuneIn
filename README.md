@@ -487,7 +487,9 @@ validation or replacement preserves the previous installation. Confirmation
 expires after 30 minutes.
 
 After installation, choose **Refresh now** or **Later**. No refresh begins
-without that consent. The prompt lists affected enabled categories: genres
+without that consent. **Refresh now** opens Catalog Refresh and moves keyboard
+focus and the viewport there; blocked or failed starts are reported there and
+in the artwork section. The prompt lists affected enabled categories: genres
 affect both Music and Language, language cards affect Language, location cards
 affect Location, and category cards affect their corresponding categories.
 Refreshes use the existing controls and may be refused if work, readiness,
