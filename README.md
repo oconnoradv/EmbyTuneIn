@@ -56,8 +56,11 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
   browser-assisted reporting; hosting, privacy and abuse controls need review.
 - Distinguish legitimate pagination transitions from genuine selected-node
   escapes, using representative source/target examples
-  ([#13](https://github.com/oconnoradv/EmbyTuneIn/issues/13)). Do not suppress
-  incomplete-discovery protection without evidence.
+  ([#13](https://github.com/oconnoradv/EmbyTuneIn/issues/13)). Genre continuation
+  links can retain an unchanged language-only filter, not just station/show
+  filters, in both selected-language and All modes. Known aliases still cannot
+  be used by a different genre; other transitions remain evidence-gated.
+  Incomplete-discovery protection remains enabled.
 - Review whether an empty category needs an explicit incomplete-discovery policy
   exception beyond the existing exclusions option
   ([#14](https://github.com/oconnoradv/EmbyTuneIn/issues/14)). The basic partial
@@ -69,7 +72,9 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
   ([#15](https://github.com/oconnoradv/EmbyTuneIn/issues/15)). Deferred.
 - Investigate rejected By Location filter values and support only verified
   legitimate formats ([#16](https://github.com/oconnoradv/EmbyTuneIn/issues/16)).
-  Concrete failing values are still needed.
+  Known NUL-encoded hash alphabet markers are recovered, including regional
+  `:country` indexes. Duplicate filters, arbitrary suffixes and literal
+  backslash escape sequences remain rejected.
 - Evaluate an optional resettable HTTP 429 streak wait budget
   ([#17](https://github.com/oconnoradv/EmbyTuneIn/issues/17)). A policy proposal,
   not a current defect; existing per-refresh budget behavior remains unchanged.

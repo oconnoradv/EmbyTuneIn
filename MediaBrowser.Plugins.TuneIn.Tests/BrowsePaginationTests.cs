@@ -58,6 +58,13 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("http://opml.radiotime.com/Tune.ashx?filter=s:~#")]
         [InlineData("http://opml.radiotime.com/Browse.ashx?offset=26&id=c57941&filter=s:~#:country")]
         [InlineData("http://opml.radiotime.com/Browse.ashx?offset=26&id=r100016&filter=s:~#:country&c=music")]
+        [InlineData("https://opml.radiotime.com/Browse.ashx?id=c57941&filter=s:~%00:country")]
+        [InlineData("https://opml.radiotime.com/Tune.ashx?id=r100016&filter=s:~%00:country")]
+        [InlineData("https://opml.radiotime.com/Browse.ashx?id=r100016&filter=s:~%00:country&filter=s:~A:country")]
+        [InlineData("https://opml.radiotime.com/Browse.ashx?id=r100016&filter=s:~%00:country:extra")]
+        [InlineData("https://opml.radiotime.com/Browse.ashx?id=r100016&filter=s:~%00%00:country")]
+        [InlineData("https://opml.radiotime.com/Browse.ashx?id=r100016&filter=s:~%5Cu0000:country")]
+        [InlineData("https://opml.radiotime.com/Browse.ashx?id=r100016&filter=s:~%00:country#section")]
         public void UnusableLinksAreNotFollowed(string url)
         {
             Assert.Throws<InvalidDataException>(() => DirectoryRequest.ParseLink(url));
@@ -68,6 +75,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("s:~#", "s:~#")]
         [InlineData("s:~A:country", "s:~A:country")]
         [InlineData("s:~%23%3Acountry", "s:~#:country")]
+        [InlineData("s:~%00:country", "s:~#:country")]
+        [InlineData("p:~%00:country", "p:~#:country")]
         public async Task LocationFollowsProviderNameIndex(string filter, string expected)
         {
             var request = await BrowseProviderLink("https://opml.radiotime.com/Browse.ashx?offset=26&id=r100016&filter=" + filter, true);
@@ -113,6 +122,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("g2801", "offset=26&id=c100002519&filter=s")]
         [InlineData("g2801", "offset=26&id=c100002500&filter=g1")]
         [InlineData("g2801", "offset=26&id=g2758&filter=s")]
+        [InlineData("g2801", "offset=26&id=c57938&filter=s")]
         public async Task LegacyGenrePaginationDoesNotFollowUnrelatedIdsOrNonPageLinks(string genre, string query)
         {
             var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableMusic = true };
@@ -162,19 +172,33 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("g4150", "offset=26&id=g4152&filter=s", false)]
         [InlineData("g4150", "offset=0&id=c100002522&filter=s", false)]
         [InlineData("g4150", "offset=26&id=c100002522&filter=s:popular", false)]
-        public async Task LanguageGenrePaginationKeepsItsLanguageScope(string genre, string query, bool allowed)
+        [InlineData("g54", "offset=26&id=c57938&filter=l1", true, "l1", "nextStations")]
+        [InlineData("g54", "offset=6&id=c57938&filter=l1", true, "l1", "nextShows")]
+        [InlineData("g54", "offset=26&id=c57935&filter=l1", false, "l1")]
+        [InlineData("g54", "id=c57938&filter=l1", false, "l1")]
+        [InlineData("g4150", "offset=26&id=c100002522&filter=l1", true, "l1")]
+        [InlineData("g4150", "offset=6&id=c100002522&filter=l1", true, "l1", "nextShows")]
+        [InlineData("g4150", "offset=26&id=c57938&filter=l1", false, "l1")]
+        [InlineData("g4150", "offset=26&id=c100002522&filter=l1&c=music", false, "l1")]
+        [InlineData("g4150", "offset=26&id=c100002522&filter=l1", true, "l1", "nextStations", false)]
+        [InlineData("g4150", "offset=6&id=c100002522&filter=l1", true, "l1", "nextShows", false)]
+        [InlineData("g4150", "offset=26&id=c100002522&filter=l2", false, "l1", "nextStations", false)]
+        [InlineData("g54", "offset=26&id=c57938&filter=l2", false, "l1", "nextStations", false)]
+        public async Task LanguageGenrePaginationKeepsItsLanguageScope(string genre, string query, bool allowed,
+            string language = "l122", string key = "nextStations", bool selected = true)
         {
-            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnableLanguage = true };
-            config.Languages.Add(new CatalogSelection { Id = "l122", Enabled = true });
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true,
+                EnableLanguage = true, LanguageMode = selected ? "selected" : "all" };
+            config.Languages.Add(new CatalogSelection { Id = language, Enabled = true });
             var calls = 0;
             string requestedFilter = null;
             var directory = new TuneInDirectory(() => config, (request, token) =>
             {
                 requestedFilter = request.Parameters.GetValueOrDefault("filter");
                 var xml = !request.Parameters.ContainsKey("id")
-                    ? "<opml><body><outline type='link' text='Spanish' URL='https://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=l122'/></body></opml>"
+                    ? "<opml><body><outline type='link' text='Selected language' URL='https://opml.radiotime.com/Browse.ashx?c=lang&amp;filter=" + language + "'/></body></opml>"
                     : calls++ == 0
-                    ? "<opml><body><outline type='link' key='nextStations' text='More' URL='https://opml.radiotime.com/Browse.ashx?"
+                    ? "<opml><body><outline type='link' key='" + key + "' text='More' URL='https://opml.radiotime.com/Browse.ashx?"
                         + query.Replace("&", "&amp;") + "'/></body></opml>"
                     : "<opml><body/></opml>";
                 return Task.FromResult(XDocument.Parse(xml));
@@ -182,8 +206,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var snapshot = directory.Snapshot();
             var parent = new NavigationEntry
             {
-                Category = "language", SelectionId = "l122", ContentCategory = "music",
-                Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=" + genre + "&filter=l122")
+                Category = "language", SelectionId = selected ? language : null, ContentCategory = "music",
+                Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=" + genre + "&filter=" + language)
             };
             var channel = new TuneInChannel(directory);
             var items = (await channel.GetChannelItems(new InternalChannelItemQuery
@@ -194,7 +218,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var child = directory.Resolve(snapshot, Assert.Single(items).Id);
             Assert.True(TuneInBrowsing.IsForwardPage(snapshot, parent, child));
             await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = items[0].Id }, CancellationToken.None);
-            Assert.Equal(query.Contains("filter=p") ? "p:l122" : "s:l122", requestedFilter);
+            Assert.Equal(query.Contains("filter=p") ? "p:" + language
+                : query.Contains("filter=s") ? "s:" + language : language, requestedFilter);
         }
 
         private static async Task<string> BrowseProviderLink(string url, bool location = false,

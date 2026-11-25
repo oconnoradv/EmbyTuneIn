@@ -386,15 +386,17 @@ namespace MediaBrowser.Plugins.TuneIn
             }
 
             var query = HttpUtility.ParseQueryString(uri.Query);
-            // TuneIn encodes the hash alphabet marker as one trailing NUL in some catalog links.
+            var region = ConfigurationSnapshot.ValidId(query["id"], "location") && query.GetValues("id")?.Length == 1;
+            // Some hash alphabet links use NUL, including regional :country indexes.
             var encodedFilter = query["filter"];
-            if (encodedFilter != null && encodedFilter.Length == 4 && encodedFilter[3] == '\0'
+            if (encodedFilter != null && encodedFilter.Length >= 4 && encodedFilter[3] == '\0'
                 && query.GetValues("filter")?.Length == 1
                 && (encodedFilter.StartsWith("s:~", StringComparison.Ordinal)
-                    || encodedFilter.StartsWith("p:~", StringComparison.Ordinal)))
-                query["filter"] = encodedFilter.Substring(0, 3) + "#";
+                    || encodedFilter.StartsWith("p:~", StringComparison.Ordinal))
+                && (encodedFilter.Length == 4 || uri.AbsolutePath == "/Browse.ashx"
+                    && region && encodedFilter.Substring(4) == ":country"))
+                query["filter"] = encodedFilter.Substring(0, 3) + "#" + encodedFilter.Substring(4);
             var last = HttpUtility.UrlDecode(uri.Query.Substring(uri.Query.LastIndexOf('&') + 1).TrimStart('?'));
-            var region = ConfigurationSnapshot.ValidId(query["id"], "location") && query.GetValues("id")?.Length == 1;
             var alphabetHash = uri.AbsolutePath == "/Browse.ashx"
                 && (uri.Fragment == "#" || region && uri.Fragment == "#:country")
                 && (last == "filter=s:~" || last == "filter=p:~") && query.GetValues("filter")?.Length == 1;

@@ -286,20 +286,26 @@ namespace MediaBrowser.Plugins.TuneIn
             if (from == null || current.Parameters.ContainsKey("c") || next.Parameters.ContainsKey("c")
                 || !int.TryParse(next.Parameters.GetValueOrDefault("offset"), out var offset) || offset <= 0)
                 return false;
+            var filter = next.Parameters.GetValueOrDefault("filter");
+            var currentFilter = current.Parameters.GetValueOrDefault("filter");
+            if (entry.Category == "language" && ConfigurationSnapshot.ValidId(currentFilter, "language")
+                && ConfigurationSnapshot.ValidId(filter, "language") && filter != currentFilter)
+                return false;
             if (CanonicalPaginationIds.TryGetValue(from, out var canonical)) return canonical == to;
             // TuneIn pages a genre's More Stations/Shows under that genre's own category ID; refuse IDs owned by another genre.
-            var filter = next.Parameters.GetValueOrDefault("filter");
             var languageSuffix = entry.Category == "language" && entry.SelectionId != null ? ":" + entry.SelectionId : "";
             return Regex.IsMatch(from, @"\Ag[1-9][0-9]{0,9}\z") && to != null
                 && Regex.IsMatch(to, @"\Ac[1-9][0-9]{0,9}\z") && !CanonicalPaginationIds.ContainsValue(to)
-                && (filter == "s" + languageSuffix || filter == "p" + languageSuffix);
+                && (filter == "s" + languageSuffix || filter == "p" + languageSuffix
+                    || entry.Category == "language" && ConfigurationSnapshot.ValidId(filter, "language")
+                        && filter == currentFilter);
         }
 
         // Known canonical category IDs for legacy genre IDs in Music, Talk and Sports, including when By Language reaches
         // them. Other genres may page to their own unlisted category ID, but never to one listed here for another genre.
         private static readonly Dictionary<string, string> CanonicalPaginationIds = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["g3"] = "c57935", ["g19"] = "c57951", ["g22"] = "c57954", ["g71"] = "c100002515",
+            ["g3"] = "c57935", ["g19"] = "c57951", ["g22"] = "c57954", ["g54"] = "c57938", ["g71"] = "c100002515",
             ["g214"] = "c100000971", ["g217"] = "c100001374", ["g260"] = "c100001376", ["g307"] = "c100002786",
             ["g308"] = "c100002785", ["g312"] = "c100002782", ["g313"] = "c100005369", ["g322"] = "c100000899",
             ["g323"] = "c100000211", ["g326"] = "c100002783", ["g373"] = "c100002519", ["g2698"] = "c100002520",
