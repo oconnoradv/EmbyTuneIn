@@ -38,8 +38,8 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
   packs with browser-assisted GitHub reporting.
 - **Library maintenance:** preview and clean one station, one category or the
   whole TuneIn library.
-- **Playback:** a validated relay for every station, including TuneIn's
-  separate introductions, with stalled-stream handling.
+- **Playback:** a validated relay by default, including TuneIn's separate
+  introductions and stalled-stream handling, with optional direct HLS playback.
 - **Artwork:** bundled category artwork and optional category, music genre, language and location artwork packs.
 
 ### Future enhancement possibilities
@@ -91,10 +91,11 @@ policy.
 
 ## Install
 
-Download the
-[music refresh resilience RC2](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.2).
-The assembly version is **1.2.8.0**. `build-info.json` identifies the source
-commit and `SHA256SUMS.txt` verifies the files.
+Build the source revision you intend to install using [Build and test](#build-and-test).
+The Release DLL is written to
+`MediaBrowser.Plugins.TuneIn\bin\Release\netstandard2.0\MediaBrowser.Plugins.TuneIn.dll`.
+These instructions describe the current source, not a separately published
+release or download package.
 
 1. Stop Emby. Back up the plugin DLL, the TuneIn configuration,
    `TuneIn.refresh.xml` (with its `.discovery` and `.recovery` sidecars) and
@@ -105,38 +106,17 @@ commit and `SHA256SUMS.txt` verifies the files.
 3. Start Emby and reload the dashboard. If settings look stale, clear the
    client's cached page data.
 
-The top right of the Control Panel shows the running build, for example
-**TuneIn plugin v1.2.8.0 (abcdef0)**. An older commit there means Emby is
-still loading an older DLL.
+Beside **Global TuneIn Settings**, the Control Panel shows the running DLL's
+assembly version. A short source commit is also shown when the build's
+informational version contains one. Compare this with the DLL you installed;
+an unexpected version can indicate that Emby is still loading an older copy.
 
 Keep the navigation signing key in the configuration private and keep it
 across upgrades; replacing it invalidates existing item IDs. To roll back,
 restore the previous DLL, configuration and refresh state together.
 
-### RC2 fixes
-
-This republished RC2 keeps an unset Max Station Count blank and saves it as
-`null`. Catalog browsing also recovers NUL-encoded `#` filters and ignores
-TuneIn playback links instead of reporting them as malformed catalog links.
-Staged imports are now bound to the Emby refresh token, so concurrent scheduled
-channel refreshes and browsing cannot read from or interfere with a
-category-scoped import. The fix was confirmed on a clean Emby server.
-Artwork pack manifests now accept up to 4 MiB, allowing the published
-Futuristic location pack to be identified without changing the pack.
-
-This RC2 refresh also adds an optional setting under **Artwork** to defer
-automatic artwork manifest and image-hash scans. It becomes available after a
-newly recorded successful refresh; existing checkpoints do not count as
-evidence. Artwork upload checks and all catalog refresh safety gates remain
-unchanged.
-
-This build also restores authoritative settings locking. Preference changes
-respect the manual lock, saved settings are locked without a second browser
-request, and refresh/maintenance work keeps settings locked after completion.
-Artwork-check results cannot overwrite live lock or activity status.
-
-After upgrading, run a full TuneIn refresh to replace any channel items saved
-with stale configuration-bound IDs. If a category refresh runs while Emby's
+After upgrading from a build with different item-ID rules, run a full TuneIn
+refresh to replace stale channel items. If a category refresh runs while Emby's
 **Refresh Internet Channels** task is active, retry it after that task finishes.
 
 ## Configure browsing
@@ -197,7 +177,7 @@ not required.
   **Locked** (green) or **Unlocked** (red). Once settings have been saved,
   opening or reloading the control panel locks them; initial setup remains
   editable before the first save. Saving locks settings again; unlocking opens
-  TuneIn Station Filtering. The adjacent **?** explains the lock.
+  TuneIn Station Filtering. The adjacent information icon explains the lock.
   Optional-check preferences also require
   manual unlocking and cannot change the lock themselves. Catalog refreshes
   (including scheduled refreshes), cleanup, **Backup Emby**, and artwork
@@ -211,8 +191,9 @@ not required.
   Saving changed filtering settings opens **Catalog Refresh**.
   **TuneIn Library Refresh** stays expanded inside it; only the outer
   Catalog Refresh section can be collapsed.
-- The control-panel header and notices remain visible while scrolling. On
-  smaller screens, scroll within that area to read longer notices.
+- The control-panel header and notices remain visible while scrolling when they
+  fit within 45% of the viewport height. Longer notices and short or zoomed
+  viewports use normal page scrolling instead, without a separate header scrollbar.
   The plugin version appears beside Global TuneIn Settings.
 - By Language follows TuneIn's Music, Talk and Sports groups for each
   language, narrowed to your selected Music genres when set.
@@ -261,19 +242,14 @@ artwork upload validation remain live and are not bypassed.
 Existing discovery deadlines or station limits outside these ranges must be
 corrected before refreshing or saving. They are not silently changed.
 
-Staged imports require Emby to use the import's cancellation token for every
-folder request. If Emby uses a different token for nested requests, verification
-fails and recovery is required; this can also prevent discovery-time imports.
-Emby 4.10.2.0 rejects a separate import-scoped channel, so that approach cannot
-safely distinguish nested imports from concurrent browsing. In isolated tests
-with in-memory library dependencies, Emby 4.10.2.0 preserved the token across
-an asynchronous nested traversal and verified TuneIn staged imports both with
-and without a category restriction. In a separate isolated Emby 4.10.2.0
-server, limited Talk and newly enabled Sports refreshes performed discovery-time
-imports, completed strict listing verification, and retained the existing Talk
-stations. These tests do not establish token propagation across all execution
-paths or versions;
-broader real-server integration remains unverified.
+Staged imports are isolated by the import's cancellation token so concurrent
+browsing and unrelated channel refreshes cannot read the staged tree. Emby must
+preserve that token for every nested folder request. If it does not, strict
+verification fails and recovery is required; this can also prevent
+discovery-time imports. Limited isolated Emby checks have verified token
+propagation and retained stations, but do not establish compatibility across
+all execution paths or server versions. Broader real-server integration remains
+unverified; there is no AsyncLocal compatibility switch.
 
 Reaching the station count or depth limit produces a **Limited** result that
 can still be imported. Identity diagnostics add aggregate catalog comparisons
@@ -442,16 +418,14 @@ refreshes, local capture or download. This property does not change catalog IDs.
 | Orange | **Advanced Settings** (always); partial refreshes and partial or incomplete category rows |
 | Red | Refresh errors and failed or timed-out category rows; **Unlocked** label |
 | Amber | **Refreshing** and **Maintenance is active** badges (pulsing unless reduced motion is on); configuration-required, deletion and cleanup notices |
-| Yellow | First-run prompt to open **Catalog Refresh** |
+| Yellow | First-run Catalog Refresh prompt, unsaved-settings reminders, validation and error notices |
 | Theme surface | Expanded sections and settings not yet saved |
 
 ## Clean up the library
 
 **Maintenance → Clean Up Library Folders** removes TuneIn entries from Emby.
 Cleanup can't be undone. **Backup Emby** starts the **Emby Server Backup**
-task, which needs the
-[Backup & Restore plugin](https://emby.media/support/articles/Backup-Using-Plugin.html);
-wait for it to succeed.
+task, which needs Emby's **Backup & Restore** plugin; wait for it to succeed.
 
 1. Choose **All categories**, one category, or **One station entry** (search
    by name, or paste an Emby item ID or URL).
@@ -470,8 +444,9 @@ installed. The top-level TuneIn library item always uses bundled artwork with
 the **Powered by TuneIn** mark. Refreshing a category updates its artwork.
 
 Music genre, language and location folders use their category artwork unless
-matching cards are installed. Packs are published in
-[EmbyTuneInArt](https://github.com/oconnoradv/EmbyTuneInArt/releases).
+matching cards are installed. Obtain or create a pack that meets the
+[canonical schema 2 format](#canonical-artwork-pack-format-schema-2) below.
+Legacy packs cannot be uploaded.
 
 ### Automatic artwork checks
 
@@ -522,7 +497,7 @@ even if a refresh cannot start.
 ### Canonical artwork pack format (schema 2)
 
 The ZIP must contain a root `tunein-artwork.json` and the images explicitly
-listed in it. Published packs may also include `LICENSE.txt`, `Noto-OFL.txt`,
+listed in it. Packs may also include `LICENSE.txt`, `Noto-OFL.txt`,
 `README.txt`, `FLAGS-SOURCES.txt` and `flag-sources.json`; these must be nonempty
 UTF-8 text, at most 1 MiB each, and are scanned, checked for changes and installed
 with the pack. Flag provenance JSON is retained as informational text, not
@@ -541,9 +516,9 @@ Its exact required root fields are `schemaVersion` (integer, exactly 2),
 `id`, `file` and `sha256`. There are no optional manifest fields, null values,
 scope-specific shapes or legacy fallbacks. Unknown and duplicate fields fail.
 Descriptions, source details and flag attribution belong in the retained
-notices, not extended manifest properties. The generator always includes
-license, font and README notices, and includes the flag provenance files for
-language artwork. The plugin allows these five exact supplementary names;
+notices, not extended manifest properties. Pack authors must preserve the
+applicable license, font and source attribution in those allowed supplements.
+The plugin allows these five exact supplementary names;
 it never follows URLs or treats provenance as executable instructions.
 
 `packId` is a case-preserving ASCII slug matching
@@ -553,8 +528,9 @@ plugin version, and installation does not impose version ordering. Custom
 pack IDs and versions are retained for every scope, including categories.
 `imageCount` must equal the number of records and the exact ZIP image inventory.
 Each SHA256 is the 64 hexadecimal digits of the actual image bytes. For
-example, copy this repository's `Images/tunein-talk.png` to `talk.png` in the
-ZIP with this manifest:
+example, copy this repository's
+`MediaBrowser.Plugins.TuneIn\Images\tunein-talk.png` to `talk.png` in the ZIP
+with this manifest:
 
 ```json
 {
@@ -604,8 +580,8 @@ The browser's antivirus is not used.
 If validation fails, check the manifest, exact filenames and hashes, ZIP
 format, limits and server FFmpeg configuration. For scanner errors check its
 availability, permissions, health and privacy settings on the Emby server.
-Check the server logs for details. Packs with other metadata or files need an
-updated compatible loader or regeneration that meets this upload format;
+Check the server logs for details. Packs with other metadata or files need
+regeneration that meets this canonical schema 2 upload format;
 simply renaming the ZIP is not sufficient. Do not remove required license or
 provenance files to bypass validation.
 
@@ -639,9 +615,9 @@ client after the refresh if its tiles still show stale artwork or dimensions.
 
 ## Playback
 
-Every station plays through the plugin's server-loopback relay at
-`/TuneIn/Playback/{item}/{attempt}`; Emby never receives a station URL
-directly.
+By default, stations play through the plugin's server-loopback relay at
+`/TuneIn/Playback/{item}/{attempt}` rather than giving Emby the station URL.
+The explicit **Allow direct HLS playback** option is an exception.
 
 - **Introductions:** for TuneIn's recognized introduction
   (`tunein-ondemand.cdnstream1.com/multi_bump_sonic_pre_pre.mp3`), the relay
@@ -660,7 +636,7 @@ directly.
 
 ## Security
 
-- **Connections:** every playback connection is resolved, checked and pinned
+- **Relay connections:** each upstream connection is resolved, checked and pinned
   to a public internet address. Loopback, private, link-local, multicast,
   reserved, documentation and embedded private (IPv4-mapped, 6to4) addresses
   are refused. This also covers redirects and DNS rebinding. No proxy is used.
@@ -704,7 +680,7 @@ directly.
 - **Restarts** never start a refresh. Only a manual request or a due schedule
   starts work; queued requests are not restored.
 - **Import recovery replays the full category.** Emby's
-  [`IChannelManager.RefreshChannelContent`](https://dev.emby.media/reference/pluginapi/MediaBrowser.Controller.Channels.IChannelManager.html)
+  `IChannelManager.RefreshChannelContent`
   gives no per-folder commit acknowledgement, so imports can't resume halfway.
 - Large refreshes can need substantial memory and disk: checkpoints up to
   900 MiB and saved catalog state up to 1 GiB.
@@ -719,6 +695,8 @@ node --test MediaBrowser.Plugins.TuneIn.Tests\configPage.test.cjs
 
 Tests need the .NET 8 SDK and Node.js. Set `TUNEIN_TEST_FFMPEG` to an FFmpeg
 executable to include the real decoder tests; they are skipped otherwise.
+Assembly and file versions come from the project or explicit build properties;
+a locally versioned DLL does not imply a corresponding published release.
 
 Tests that replace process-wide artwork directories belong to the
 `Artwork globals` nonparallel collection, so other artwork readers cannot
@@ -740,8 +718,8 @@ touch and theme checks remain tracked in
 
 Based on [MediaBrowser/TuneIn](https://github.com/MediaBrowser/TuneIn) and
 distributed under [LICENSE.md](LICENSE.md).
-See [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt). Release ZIPs include
-these documents and the DLL embeds them; keep them when redistributing.
+See [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt). The DLL embeds both
+documents; include the documents alongside it when redistributing.
 
-Earlier builds bundled an unused legacy copy of HtmlAgilityPack (Ms-PL). It has
-been removed; the plugin reads TuneIn's OPML/XML responses directly.
+The plugin reads TuneIn's OPML/XML responses directly and does not bundle
+HtmlAgilityPack.
