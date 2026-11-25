@@ -42,7 +42,7 @@ class Element {
     descendants() { return this.childNodes.flatMap(child => [child, ...child.descendants()]); }
 }
 
-function harness(manualStatus = false, manualSave = false, manualBackup = false, manualOpen = false, manualDiagnostics = false) {
+function harness(manualStatus = false, manualSave = false, manualBackup = false, manualOpen = false, manualDiagnostics = false, manualAcknowledgement = false) {
     const handlers = {};
     const formHandlers = {};
     const username = new Element('input');
@@ -60,6 +60,8 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.allowDirectHlsPlayback', '.enableDiscoveryProgressiveImport', '.progressivePacing', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.advancedFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.settingsChangeNotice', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
+        '.discoveryRiskDialog', '.discoveryRiskAccepted', '.discoveryRiskConfirm', '.discoveryRiskCancel', '.discoveryRiskUpgradeNotice', '.discoveryRiskPartialRequirement',
+        '.tuneInAdvancedGuideLink', '.tuneInAdvancedGuide', '.tuneInAdvancedGuideClose',
         '.optionalChecksRun', '.optionalChecksStatus', '.optionalChecksMessage',
         '.optionalChecksUnlockHint', '.skipOptionalChecks',
         '.tuneInReadiness', '.readinessFiltering', '.readinessCategory', '.readinessRequirements',
@@ -214,6 +216,10 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
                 diagnostics.push({ options, ...request });
                 if (!manualDiagnostics && options.url.route === 'TuneIn/Diagnostics')
                     request.resolve({ CaptureAvailable: false, LatestRefresh: null, Packs: [], Repository: null });
+            }
+            else if (options.url.route === 'TuneIn/DiscoveryImport/Acknowledge') {
+                selectors.push({ options, ...request });
+                if (!manualAcknowledgement) request.resolve({ Token: 'test-risk-token' });
             }
             else if (options.url.route === 'TuneIn/OptionalChecks/Preference') optionalChecks.push({ options, ...request });
             else if (options.url.route.startsWith('TuneIn/Artwork/')) artwork.push({ options, ...request });
@@ -1275,14 +1281,44 @@ test('advanced settings start collapsed and group the controls in order', () => 
     const start = html.indexOf('<details class="tuneInAdvancedSettings">');
     assert.ok(start >= 0);
     const advanced = html.slice(start, html.indexOf('</fieldset>', start));
-    assert.match(advanced, /<summary>Advanced Settings<\/summary>/);
+    assert.match(advanced, /<summary><span>Advanced Settings<\/span> <a href="#tuneInAdvancedGuide" class="tuneInAdvancedGuideLink">Settings guide<\/a><\/summary>/);
     const groups = ['Discovery limits', 'Request pacing &amp; retry', 'Import behavior', 'Playback &amp; diagnostics'];
     assert.ok(groups.every((group, i) => advanced.indexOf(`<summary>${group}</summary>`) >= 0
         && (i === 0 || advanced.indexOf(`<summary>${groups[i - 1]}</summary>`) < advanced.indexOf(`<summary>${group}</summary>`))));
+    for (const group of groups)
+        assert.ok(advanced.includes(`<details>\n                            <summary>${group}</summary>`) ||
+            advanced.includes(`<details>\r\n                            <summary>${group}</summary>`), `${group} should start collapsed`);
     assert.ok(advanced.indexOf('id="tuneInDiscoveryDeadline"') < advanced.indexOf('id="tuneInApiInterval"'));
     assert.ok(advanced.indexOf('id="tuneInApiInterval"') < advanced.indexOf('id="tuneInImportDeadline"'));
     assert.ok(advanced.indexOf('id="tuneInImportDeadline"') < advanced.indexOf('class="enableCatalogIdentityDiagnostics"'));
     assert.match(advanced, /Off by default/);
+});
+
+test('advanced settings guide opens without toggling settings and returns focus', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    let prevented = false, stopped = false;
+    app.elements['.tuneInAdvancedGuideLink'].handlers.click({
+        preventDefault() { prevented = true; }, stopPropagation() { stopped = true; }
+    });
+    assert.equal(prevented && stopped, true);
+    assert.equal(app.elements['.tuneInAdvancedGuide'].open, true);
+    app.elements['.tuneInAdvancedGuideClose'].click();
+    assert.equal(app.elements['.tuneInAdvancedGuide'].open, false);
+    assert.equal(app.elements['.tuneInAdvancedGuideLink'].focused, true);
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const guide = html.match(/<dialog id="tuneInAdvancedGuide"[\s\S]*?<\/dialog>/)[0];
+    assert.match(guide, /<dt>Import deadline<\/dt>\s*<dd>[\s\S]*?<strong class="tuneInImportDeadlineWarning">If it expires, the refresh stops; a manual retry starts the transfer from the beginning\.<\/strong><\/dd>/);
+    assert.match(guide, /<dt>Import during category discovery<\/dt>\s*<dd>[^]*?<p class="tuneInDiscoveryBackupWarning"><strong>Back up Emby, including library metadata and TuneIn configuration, before testing\.<\/strong><\/p>\s*<\/dd>/);
+    assert.match(html, /\.tuneInAdvancedGuide dd \.tuneInDiscoveryBackupWarning\s*\{\s*margin-inline-start:\s*1\.25em/);
+    for (const name of ['Max Station Count', 'Traversal depth limit', 'Discovery deadline',
+        'API request interval', 'Maximum rate-limit wait per refresh', 'Consecutive HTTP 429 retries',
+        'Import deadline', 'Import during category discovery', 'First pass after entries',
+        'Minimum new entries between passes', 'Minimum growth between passes', 'Minimum time between passes',
+        'Maximum discovery-time passes per category', 'Enable catalog identity diagnostics', 'Allow direct HLS playback'])
+        assert.ok(guide.includes(`<dt>${name}</dt>`), name);
 });
 
 test('discovery import pacing is opt-in, editable, and validated', async () => {
@@ -1297,7 +1333,21 @@ test('discovery import pacing is opt-in, editable, and validated', async () => {
     assert.equal(first.value, 50);
     assert.equal(first.disabled, true);
     enabled.checked = true;
-    enabled.handlers.change();
+    enabled.handlers.change.call(enabled);
+    assert.equal(enabled.checked, false);
+    assert.equal(app.elements['.discoveryRiskDialog'].open, true);
+    assert.equal(app.elements['.discoveryRiskConfirm'].disabled, true);
+    assert.equal(app.elements['.discoveryRiskPartialRequirement'].hidden, true);
+    assert.equal(app.elements['.discoveryRiskConfirm'].textContent, 'Accept and continue');
+    assert.equal(app.elements['.discoveryRiskDialog'].attributes['aria-describedby'], 'discoveryRiskDescription');
+    app.elements['.discoveryRiskCancel'].click();
+    assert.equal(enabled.checked, false);
+    enabled.checked = true;
+    enabled.handlers.change.call(enabled);
+    const acknowledgement = app.elements['.discoveryRiskAccepted'];
+    acknowledgement.checked = true;
+    acknowledgement.handlers.change.call(acknowledgement);
+    app.elements['.discoveryRiskConfirm'].click();
     assert.equal(app.elements['.progressivePacing'].hidden, false);
     assert.equal(first.disabled, false);
     first.value = '0';
@@ -1305,9 +1355,79 @@ test('discovery import pacing is opt-in, editable, and validated', async () => {
     assert.equal(app.writes.length, 0);
     first.value = '60';
     app.formHandlers.submit({ preventDefault() {} });
+    await settle();
     assert.equal(app.writes[0].config.EnableDiscoveryProgressiveImport, true);
+    assert.equal(app.selectors.filter(item => item.options.url.route === 'TuneIn/DiscoveryImport/Acknowledge').length, 1);
     assert.equal(app.writes[0].config.ProgressiveFirstEntries, 60);
     assert.equal(app.writes[0].config.ProgressiveMinimumNewEntries, 500);
+});
+
+test('discovery import offers its disabled prerequisite without changing settings on cancel', async () => {
+    const app = harness(false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ AllowPartialCatalogImport: false });
+    await visit;
+    const toggle = app.elements['.enableDiscoveryProgressiveImport'];
+    const partial = app.elements['.allowPartialCatalogImport'];
+    const accepted = app.elements['.discoveryRiskAccepted'];
+    const confirm = app.elements['.discoveryRiskConfirm'];
+    function openNotice() {
+        toggle.checked = true;
+        toggle.handlers.change.call(toggle);
+    }
+    openNotice();
+    assert.equal(app.elements['.discoveryRiskPartialRequirement'].hidden, false);
+    assert.equal(confirm.textContent, 'Accept and enable both');
+    assert.equal(app.elements['.discoveryRiskDialog'].attributes['aria-describedby'], 'discoveryRiskDescription discoveryRiskPartialRequirement');
+    assert.equal(confirm.disabled, true);
+    app.elements['.discoveryRiskCancel'].click();
+    assert.equal(toggle.checked, false);
+    assert.equal(partial.checked, false);
+    assert.equal(app.writes.length, 0);
+
+    openNotice();
+    accepted.checked = true;
+    accepted.handlers.change.call(accepted);
+    confirm.click();
+    assert.equal(toggle.checked, true);
+    assert.equal(partial.checked, true);
+    assert.equal(app.writes.length, 0);
+    app.formHandlers.submit({ preventDefault() {} });
+    await settle();
+    assert.equal(app.writes[0].config.EnableDiscoveryProgressiveImport, true);
+    assert.equal(app.writes[0].config.AllowPartialCatalogImport, true);
+    app.writes[0].reject(new Error('save failed'));
+    await settle();
+    assert.match(app.elements['.status'].textContent, /not saved/i);
+});
+
+test('failed discovery risk acknowledgement prevents saving', async () => {
+    const app = harness(false, false, false, false, false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    const toggle = app.elements['.enableDiscoveryProgressiveImport'];
+    toggle.checked = true;
+    toggle.handlers.change.call(toggle);
+    const accepted = app.elements['.discoveryRiskAccepted'];
+    accepted.checked = true;
+    accepted.handlers.change.call(accepted);
+    app.elements['.discoveryRiskConfirm'].click();
+    app.formHandlers.submit({ preventDefault() {} });
+    const request = app.selectors.find(item => item.options.url.route === 'TuneIn/DiscoveryImport/Acknowledge');
+    request.reject(new Error('unavailable'));
+    await settle();
+    assert.equal(app.writes.length, 0);
+    assert.match(app.elements['.status'].textContent, /not saved/i);
+});
+
+test('previously enabled discovery imports require a fresh acknowledgement', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ EnableDiscoveryProgressiveImport: true });
+    await visit;
+    assert.equal(app.elements['.enableDiscoveryProgressiveImport'].checked, false);
+    assert.equal(app.elements['.discoveryRiskUpgradeNotice'].hidden, false);
 });
 
 test('artwork scan actions and preference are grouped beside artwork pack controls with help', () => {
@@ -1410,6 +1530,14 @@ test('invalid advanced fields open their containing disclosures', () => {
     assert.equal(group.open, true);
 });
 
+test('cleanup categories follow the channel order', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const select = html.match(/<select[^>]*id="tuneInCleanupScope"[^>]*>([\s\S]*?)<\/select>/);
+    assert.ok(select);
+    const values = [...select[1].matchAll(/<option value="([^"]*)"/g)].map(match => match[1]);
+    assert.deepEqual(values, ['', 'station', 'all', 'presets', 'local', 'music', 'language', 'location', 'talk', 'sports', 'podcast']);
+});
+
 test('static admin controls have unique IDs and valid accessible description references', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);
@@ -1423,7 +1551,7 @@ test('static admin controls have unique IDs and valid accessible description ref
     assert.match(html, /Privacy warning: Diagnostic folder labels may be private/);
     assert.match(html, /Warning: Emby fetches direct HLS streams without/);
     assert.match(html, /class="enableDiscoveryProgressiveImport" aria-describedby="tuneInDiscoveryImportWarning tuneInDiscoveryImportHint"/);
-    assert.match(html, /<p id="tuneInDiscoveryImportWarning"[^>]*>If Emby changes the import token[^<]*recovery is required/);
+    assert.match(html, /<p id="tuneInDiscoveryImportWarning"[^>]*>Experimental:[^<]*isolation risks/);
 });
 
 test('help icons share one visual design and sit alongside field labels', () => {
@@ -1444,9 +1572,30 @@ test('help icons share one visual design and sit alongside field labels', () => 
         'Distinct stations at the last category refresh']) {
         assert.match(html, new RegExp(`<p class="fieldDescription">${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     }
+    assert.match(html, /<details>\s*<summary>Usability Guidance<\/summary>\s*<p class="fieldDescription">Choose a refresh interval next to a category,[\s\S]*?first complete manual baseline\.<\/p>\s*<p class="fieldDescription">Distinct stations at the last category refresh\.[\s\S]*?failed inventory checks\.<\/p>\s*<\/details>\s*<p class="refreshCategoryNote"/);
     const advanced = html.match(/\.tuneInAdvancedSettings\s*\{([^}]+)\}/)[1];
     assert.match(advanced, /background:\s*color-mix\(in srgb, #d9822b 14%, hsl\(var\(--background-hue/);
     assert.doesNotMatch(advanced, /\[open\]/);
+});
+
+test('refresh keeps status and actions visible before collapsed details and shareable diagnostics', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const start = html.indexOf('<details class="tuneInSection tuneInNeutralPanel tuneInRefresh">');
+    const categories = html.indexOf('<section class="tuneInSectionBox tuneInLibraryRefresh"', start);
+    const details = html.indexOf('<details class="tuneInSectionBox tuneInRefreshDetails">', categories);
+    const shareable = html.indexOf('<details class="tuneInSectionBox tuneInDiagnostics">', details);
+    assert.ok(start >= 0 && categories > start && details > categories && shareable > details);
+    const primary = html.slice(start, categories);
+    for (const control of ['refreshStatus', 'refreshElapsed', 'refreshWork', 'refreshLastProgress',
+        'refreshStart', 'refreshCancel', 'refreshQueueNote', 'refreshError'])
+        assert.ok(primary.includes(control), control);
+    const secondary = html.slice(details, shareable);
+    for (const control of ['refreshImportContents', 'refreshPendingFolders', 'refreshDiagnosticsText',
+        'refreshLogButton', 'refreshLogMessage', 'tuneInReportHint', 'refreshFailureLog'])
+        assert.ok(secondary.includes(control), control);
+    assert.match(secondary, /<summary>Refresh details and private log<\/summary>/);
+    assert.match(html.slice(shareable), /<summary>TuneIn plugin support \(GitHub\)<\/summary>/);
+    assert.match(html.slice(shareable), /not official TuneIn support/);
 });
 
 test('artwork tooltips use the host theme for both foreground and background', () => {
@@ -2697,6 +2846,8 @@ test('library refresh follows full-refresh order and marks only the current runn
 });
 
 test('In Emby keeps last known values and timestamps when the settings screen reopens', async () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /\.tuneInStationCounts \[data-error="true"\][^{]*\{[^}]*background:\s*none;[^}]*text-decoration:\s*underline dotted/);
     for (const inventory of [0, 7]) {
         const app = harness(true);
         const checkedAt = '2026-11-19T10:00:00Z';

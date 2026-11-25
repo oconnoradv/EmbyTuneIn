@@ -222,6 +222,52 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 : query.Contains("filter=s") ? "s:" + language : language, requestedFilter);
         }
 
+        [Theory]
+        [InlineData("g3403", "c100001371", "26", "p:topic", true)]
+        [InlineData("g3422", "c100000625", "26", "p:topic", true)]
+        [InlineData("g3428", "c100000892", "26", "p:topic", true)]
+        [InlineData("g3429", "c100000887", "26", "p:topic", true)]
+        [InlineData("g3430", "c100000886", "26", "p:topic", true)]
+        [InlineData("g3429", "c100000886", "26", "p:topic", false)]
+        [InlineData("g3428", "c100000625", "26", "p:topic", false)]
+        [InlineData("g3430", "c100000887", "26", "p:topic", false)]
+        [InlineData("g3431", "c100000886", "26", "p:topic", false)]
+        [InlineData("g3430", "c100000886", "0", "p:topic", false)]
+        [InlineData("g3430", "c100000886", "26", "p", false)]
+        [InlineData("g3429", "c100000887", "26", "s", true, "s")]
+        [InlineData("g3429", "c100000887", "26", "p", true, "p")]
+        public async Task PodcastPaginationAcceptsOnlyTheObservedTopicTransition(
+            string source, string destination, string offset, string filter, bool allowed, string currentFilter = "p:topic")
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnablePodcasts = true };
+            var calls = 0;
+            var directory = new TuneInDirectory(() => config, (request, token) =>
+            {
+                calls++;
+                var body = calls == 1
+                    ? $"<outline type='link' key='nextShows' text='More' URL='https://opml.radiotime.com/Browse.ashx?offset={offset}&amp;id={destination}&amp;filter={filter}'/>"
+                    : "";
+                return Task.FromResult(XDocument.Parse("<opml><body>" + body + "</body></opml>"));
+            });
+            var snapshot = directory.Snapshot();
+            var parent = new NavigationEntry
+            {
+                Category = "podcast",
+                Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=" + source + "&filter=" + currentFilter)
+            };
+            var channel = new TuneInChannel(directory);
+            var items = (await channel.GetChannelItems(new InternalChannelItemQuery
+            {
+                FolderId = directory.Register(snapshot, parent)
+            }, CancellationToken.None)).Items;
+            if (!allowed) { Assert.Empty(items); return; }
+            var child = directory.Resolve(snapshot, Assert.Single(items).Id);
+            Assert.True(TuneInBrowsing.IsForwardPage(snapshot, parent, child));
+            Assert.False(TuneInBrowsing.IsForwardPage(snapshot, child, child));
+            await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = items[0].Id }, CancellationToken.None);
+            Assert.Equal(2, calls);
+        }
+
         private static async Task<string> BrowseProviderLink(string url, bool location = false,
             string musicId = "c57941", string key = "nextStations")
         {

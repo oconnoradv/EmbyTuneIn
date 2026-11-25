@@ -15,6 +15,7 @@ namespace MediaBrowser.Plugins.TuneIn
     /// </summary>
     public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IHasThumbImage
     {
+        internal const int DiscoveryImportRiskVersion = 1;
         private readonly object configurationGate = new object();
         
         public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
@@ -78,19 +79,71 @@ namespace MediaBrowser.Plugins.TuneIn
                 value.NavigationSecret = Configuration.NavigationSecret;
                 value.HasStartedCatalogRefresh = Configuration.HasStartedCatalogRefresh;
                 value.SkipOptionalStartupChecks = Configuration.SkipOptionalStartupChecks;
-                TuneInRefreshService.UpdateConfiguration(() => SettingsLock.SaveConfiguration(() =>
+                TuneInRefreshService.UpdateConfiguration(() =>
                 {
-                    var previousSaved = value.SettingsSaved;
-                    value.SettingsSaved = true;
-                    try { base.UpdateConfiguration(value); }
-                    catch
+                    var accepted = ApplyDiscoveryRiskAcceptance(Configuration, value, DateTime.UtcNow);
+                    SettingsLock.SaveConfiguration(() =>
                     {
-                        value.SettingsSaved = previousSaved;
-                        throw;
-                    }
-                    TuneInPlayback.CancelChangedScopes();
-                }));
+                        var previousSaved = value.SettingsSaved;
+                        value.SettingsSaved = true;
+                        try { base.UpdateConfiguration(value); }
+                        catch
+                        {
+                            value.SettingsSaved = previousSaved;
+                            throw;
+                        }
+                        discoveryRiskToken = null;
+                        if (accepted) TuneInRefreshService.LogDiscoveryRiskAcceptance();
+                        TuneInPlayback.CancelChangedScopes();
+                    });
+                });
             }
+        }
+
+        private string discoveryRiskToken;
+        private DateTime discoveryRiskTokenExpiresUtc;
+
+        internal string AcknowledgeDiscoveryRisk(int version, bool accepted, TuneInRefresh refresh)
+        {
+            if (!accepted || version != DiscoveryImportRiskVersion)
+                throw new InvalidOperationException("Accept the current experimental discovery import risk notice.");
+            lock (configurationGate)
+            {
+                string token = null;
+                refresh.WithIdleSettings(() => SettingsLock.WithUnlockedSettings(() =>
+                {
+                    token = Guid.NewGuid().ToString("N");
+                    discoveryRiskToken = token;
+                    discoveryRiskTokenExpiresUtc = DateTime.UtcNow.AddMinutes(10);
+                }));
+                return token;
+            }
+        }
+
+        private bool ApplyDiscoveryRiskAcceptance(PluginConfiguration previous, PluginConfiguration value, DateTime now)
+        {
+            var token = value.DiscoveryImportRiskToken;
+            value.DiscoveryImportRiskToken = null;
+            var alreadyAccepted = previous.EnableDiscoveryProgressiveImport
+                && previous.DiscoveryImportRiskVersion == DiscoveryImportRiskVersion
+                && previous.DiscoveryImportRiskAcceptedUtc.HasValue;
+            if (!value.EnableDiscoveryProgressiveImport)
+            {
+                value.DiscoveryImportRiskVersion = 0;
+                value.DiscoveryImportRiskAcceptedUtc = null;
+                return false;
+            }
+            if (alreadyAccepted)
+            {
+                value.DiscoveryImportRiskVersion = previous.DiscoveryImportRiskVersion;
+                value.DiscoveryImportRiskAcceptedUtc = previous.DiscoveryImportRiskAcceptedUtc;
+                return false;
+            }
+            if (string.IsNullOrEmpty(token) || token != discoveryRiskToken || now >= discoveryRiskTokenExpiresUtc)
+                throw new InvalidOperationException("Accept the experimental discovery import risk notice before enabling it.");
+            value.DiscoveryImportRiskVersion = DiscoveryImportRiskVersion;
+            value.DiscoveryImportRiskAcceptedUtc = now;
+            return true;
         }
 
         internal void MarkCatalogRefreshStarted()

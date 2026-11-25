@@ -26,11 +26,58 @@
             margin-block: 1em;
         }
         .tuneInAdvancedSettings > summary {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0 .4em;
             cursor: pointer;
             font-weight: 600;
+            min-block-size: 44px;
+            list-style: none;
+        }
+        .tuneInAdvancedSettings > summary::-webkit-details-marker {
+            display: none;
+        }
+        .tuneInAdvancedSettings > summary::before {
+            content: '\25b6';
+            font-size: .75em;
+        }
+        .tuneInAdvancedSettings[open] > summary::before {
+            content: '\25bc';
         }
         .tuneInAdvancedSettings[open] > summary {
             margin-block-end: 1em;
+        }
+        .tuneInAdvancedGuideLink {
+            display: inline-flex;
+            align-items: center;
+            min-block-size: 44px;
+            margin-inline-start: auto;
+            font-weight: normal;
+            line-height: normal;
+        }
+        .tuneInRecoveryDialog.tuneInAdvancedGuide {
+            box-sizing: border-box;
+            inline-size: 68rem;
+            max-inline-size: calc(100vw - 3rem);
+            max-block-size: calc(100vh - 3rem);
+            overflow-y: auto;
+            overflow-wrap: anywhere;
+        }
+        .tuneInAdvancedGuide dt {
+            font-weight: 600;
+            margin-block-start: 1em;
+        }
+        .tuneInAdvancedGuide dd {
+            margin-inline-start: 0;
+        }
+        .tuneInAdvancedGuide .tuneInImportDeadlineWarning {
+            padding: .1em .3em;
+            border-radius: .2em;
+            background: color-mix(in srgb, #d9822b 25%, transparent);
+        }
+        .tuneInAdvancedGuide dd .tuneInDiscoveryBackupWarning {
+            margin-inline-start: 1.25em;
         }
         .tuneInLoginRow > div {
             min-width: 0;
@@ -282,6 +329,14 @@
             background: #fff2a8;
             color: #332900;
         }
+        [data-controller="__plugin/tuneinjs"] .tuneInStationCounts [data-error="true"]:not(:empty):not([hidden]) {
+            padding: 0;
+            border: 0;
+            background: none;
+            color: inherit;
+            text-decoration: underline dotted;
+            text-underline-offset: .2em;
+        }
         .tuneInSectionBox {
             min-inline-size: 0;
             border: 1px solid currentColor;
@@ -467,6 +522,14 @@
             border-inline-start: .25em solid #d64545;
             border-radius: .25em;
             background: color-mix(in srgb, #d64545 12%, transparent);
+        }
+        .tuneInDiscoveryBackupWarning {
+            border: 2px solid #d64545;
+            padding: .8em 1em;
+        }
+        .discoveryRiskDialog {
+            max-block-size: calc(100vh - 3rem);
+            overflow-y: auto;
         }
         .tuneInRefresh .refreshMetrics {
             display: grid;
@@ -1081,9 +1144,9 @@
                     </details>
                 <fieldset class="globalFields advancedFields" disabled aria-label="Advanced TuneIn Settings">
                     <details class="tuneInAdvancedSettings">
-                        <summary>Advanced Settings</summary>
+                        <summary><span>Advanced Settings</span> <a href="#tuneInAdvancedGuide" class="tuneInAdvancedGuideLink">Settings guide</a></summary>
                         <p class="fieldDescription">Advanced options affect discovery, imports, playback and diagnostics. Change them only when needed.</p>
-                        <details open>
+                        <details>
                             <summary>Discovery limits</summary>
                         <div class="inputContainer">
                             <label for="tuneInMaxStationCount">Max Station Count:</label>
@@ -1150,7 +1213,8 @@
                             <p id="tuneInDiscoveryImportHint" class="fieldDescription">Off by default. Requires Import Valid Results when catalog entries are skipped. Imports retain existing entries and must pass the same completion checks; discovery and import can take longer.</p>
                         </details>
                         </div>
-                        <p id="tuneInDiscoveryImportWarning" class="fieldDescription">If Emby changes the import token for nested folders, verification fails and recovery is required. Full server compatibility is not yet verified.</p>
+                        <p id="tuneInDiscoveryImportWarning" class="fieldDescription">Experimental: enabling this option also enables a changed-token bridge with isolation risks. Full server compatibility is not yet verified.</p>
+                        <p class="discoveryRiskUpgradeNotice fieldDescription" role="status" hidden>This option was previously enabled without the new acknowledgement. The bridge remains off. Accept the notice to keep the option enabled; saving it unchecked turns it off.</p>
                         <div class="progressivePacing" hidden>
                             <div class="tuneInFieldHeading"><span>Discovery import pacing</span>
                             <details class="tuneInHelp"><summary aria-label="Help: discovery import pacing">?</summary>
@@ -1203,6 +1267,76 @@
                     </details>
                 </fieldset>
             </details>
+                <dialog class="tuneInRecoveryDialog discoveryRiskDialog" aria-labelledby="discoveryRiskTitle" aria-describedby="discoveryRiskDescription">
+                    <h3 id="discoveryRiskTitle">Experimental discovery imports</h3>
+                    <p id="discoveryRiskDescription">Discovery-time imports may make stations available sooner. The experimental bridge cannot reliably distinguish every import request from unrelated TuneIn work.</p>
+                    <p id="discoveryRiskPartialRequirement" class="discoveryRiskPartialRequirement" hidden>Early imports also require “Import Valid Results when catalog entries are skipped,” which is currently off. Accepting will enable both settings. This also allows ordinary refreshes to import valid results when entries are skipped; skipped entries can include whole branches and results remain Partial.</p>
+                    <ul>
+                        <li>TuneIn entries may be incomplete, incorrect or exposed to another TuneIn request. Verification might not detect every problem; failed imports may require recovery.</li>
+                        <li>Playlists, favorites, listening history or other references may be affected and may not be restored by rebuilding the TuneIn library.</li>
+                        <li>Emby writes library changes to its database. No database corruption has been demonstrated, but server compatibility is unverified. Extra imports may slow other activity.</li>
+                        <li>The bridge may still fail when Emby does not carry its async context. Disabling this option restores exact-token routing for later imports.</li>
+                    </ul>
+                    <p class="tuneInDiscoveryBackupWarning"><strong>Back up Emby, including library metadata and TuneIn configuration, before testing.</strong></p>
+                    <p>Changes take effect only after you save settings. The plugin records and logs successful acceptance.</p>
+                    <label class="emby-checkbox-label"><input type="checkbox" is="emby-checkbox" class="discoveryRiskAccepted" /><span>I understand these risks and want to enable experimental discovery-time imports.</span></label>
+                    <div class="tuneInRecoveryActions">
+                        <button is="emby-button" type="button" class="raised button-submit discoveryRiskCancel" autofocus>Cancel</button>
+                        <button is="emby-button" type="button" class="raised button-submit discoveryRiskConfirm" disabled>Accept and continue</button>
+                    </div>
+                </dialog>
+                <dialog id="tuneInAdvancedGuide" class="tuneInRecoveryDialog tuneInAdvancedGuide" aria-labelledby="tuneInAdvancedGuideTitle">
+                    <article>
+                        <h2 id="tuneInAdvancedGuideTitle">Advanced settings guide</h2>
+                        <p>These settings control how TuneIn finds stations, adds them to Emby and plays them. The defaults suit most libraries. Change one at a time when you have a reason, then save; settings do not start a refresh by themselves. Existing saved values are not replaced by new defaults.</p>
+                        <h3>Discovery limits</h3>
+                        <dl>
+                            <dt>Max Station Count</dt>
+                            <dd>Limits how many different stations are newly found in each main category. Repeated appearances of the same station count once. The default is 500; leave it blank for no limit. A higher number can find more stations but takes longer. Existing allowed stations can remain, so the final total may be higher.</dd>
+                            <dt>Traversal depth limit</dt>
+                            <dd>Limits how many folder levels the plugin follows while looking for stations, starting at zero for the main category. The default is 10. Increase it if stations are missing deep in folders; larger values may take longer. Previously saved deeper folders can remain.</dd>
+                            <dt>Discovery deadline</dt>
+                            <dd>Sets how long the search for stations may run, not counting the time spent adding them to Emby. The default is 12 hours. If time runs out, the refresh stops; start it again manually. Saved search progress may be reused.</dd>
+                        </dl>
+                        <p>Reaching the station or folder limit produces a Limited result rather than a complete search. Allowed existing entries can be retained.</p>
+                        <h3>Request pacing &amp; retry</h3>
+                        <dl>
+                            <dt>API request interval</dt>
+                            <dd>Sets the minimum pause between requests to TuneIn. The default is 3 seconds. A longer pause reduces request frequency but makes searches slower.</dd>
+                            <dt>Maximum rate-limit wait per refresh</dt>
+                            <dd>When TuneIn asks the plugin to slow down, this limits the total time the refresh spends waiting for permission to try again. The default is 15 minutes. A longer wait may let a refresh recover but also delays its completion.</dd>
+                            <dt>Consecutive HTTP 429 retries</dt>
+                            <dd>How many times to retry in a row when TuneIn says too many requests have been made. The default is 6; zero means no retries. TuneIn's requested pauses and the total wait limit still apply.</dd>
+                        </dl>
+                        <h3>Import behavior</h3>
+                        <dl>
+                            <dt>Import deadline</dt>
+                            <dd>Sets how long each transfer of discovered entries into Emby may take, including preparation and checks. The default is 24 hours. <strong class="tuneInImportDeadlineWarning">If it expires, the refresh stops; a manual retry starts the transfer from the beginning.</strong></dd>
+                            <dt>Import during category discovery</dt>
+                            <dd>Off by default. This experimental option can make stations appear before the search finishes, but extra transfers can slow the refresh. Early imports require “Import Valid Results when catalog entries are skipped” and the safety acknowledgement. If that setting is off, the notice offers to enable both; accepting also allows ordinary refreshes to import valid results when entries are skipped. Skipped entries can include whole branches and results remain Partial. Save settings to apply the choice. If you later turn Import Valid Results off, early imports stop, but the acknowledged experimental bridge remains enabled until you turn off discovery imports. Its experimental method for handling changing Emby requests can mistake other TuneIn requests for the transfer and miss incomplete results. TuneIn items and references such as playlists, favorites and history may be affected. Database and server compatibility are unverified.
+                                <p class="tuneInDiscoveryBackupWarning"><strong>Back up Emby, including library metadata and TuneIn configuration, before testing.</strong></p>
+                            </dd>
+                            <dt>First pass after entries</dt>
+                            <dd>Waits until at least this many entries have been found before the first early transfer. Default: 50.</dd>
+                            <dt>Minimum new entries between passes</dt>
+                            <dd>After an early transfer, waits for at least this many additional entries before another. Default: 500.</dd>
+                            <dt>Minimum growth between passes</dt>
+                            <dd>Also requires the new entries to reach this percentage of the previous transfer's entry count. Default: 25%. Both this and the new-entry minimum must be met.</dd>
+                            <dt>Minimum time between passes</dt>
+                            <dd>Also requires this much time to pass after the preceding transfer. Default: 45 seconds. Increasing it reduces repeated work.</dd>
+                            <dt>Maximum discovery-time passes per category</dt>
+                            <dd>Limits the number of early transfers for each main category. Default: 100. The normal final transfer is separate.</dd>
+                        </dl>
+                        <h3>Playback &amp; diagnostics</h3>
+                        <dl>
+                            <dt>Enable catalog identity diagnostics</dt>
+                            <dd>Off by default. Adds extra information to help investigate unexpectedly recreated stations or slow refreshes. It uses additional resources and folder names can be private, so review reports before sharing and turn it off afterward.</dd>
+                            <dt>Allow direct HLS playback</dt>
+                            <dd>Off by default. Allows Emby to play some stations whose stream format cannot go through the plugin's usual relay. Emby fetches those streams without the relay's public-address checks. Enable it only if needed and you trust your network.</dd>
+                        </dl>
+                    </article>
+                    <button is="emby-button" type="button" class="raised button-submit tuneInAdvancedGuideClose">Close guide</button>
+                </dialog>
                 <dialog class="tuneInRecoveryDialog artworkVerifyDialog" aria-labelledby="artworkVerifyTitle" aria-describedby="artworkVerifyText">
                     <h3 id="artworkVerifyTitle">Verify artwork pack</h3>
                     <p id="artworkVerifyText" class="artworkVerifyText"></p>
@@ -1254,36 +1388,51 @@
         <details class="tuneInSection tuneInNeutralPanel tuneInRefresh">
             <summary class="refreshSummary"><span>Catalog Refresh</span> <span class="tuneInActivity refreshIndicator" role="status" hidden>Refreshing</span><span class="refreshSummaryState"></span><span class="refreshSummaryDetails"></span><span class="refreshOverall"></span></summary>
             <p>Checks the saved TuneIn categories and updates the Emby library when needed.</p>
-            <p class="fieldDescription">Refresh all resumes interrupted work first, then enabled categories in this order: My Favorites, Local Radio, Music, By Language, By Location, Talk, Sports and Podcasts.</p>
                 <p class="refreshStatus" role="status">Reading refresh status...</p>
                 <dl class="refreshMetrics" aria-label="Current refresh metrics">
                     <div><dt>Elapsed</dt><dd class="refreshElapsed">-</dd></div>
                     <div><dt>Current work</dt><dd class="refreshWork">-</dd></div>
                     <div><dt>Last progress</dt><dd class="refreshLastProgress">-</dd></div>
                 </dl>
+                <div class="tuneInRefreshActions">
+                    <button is="emby-button" type="button" class="raised button-submit refreshStart" disabled>Refresh all enabled categories</button>
+                    <button is="emby-button" type="button" class="raised button-submit refreshCancel" disabled>Cancel refresh</button>
+                </div>
+                <p class="refreshQueueNote" role="status" hidden></p>
+                <p class="refreshError" role="alert"></p>
+            <section class="tuneInSectionBox tuneInLibraryRefresh" aria-labelledby="tuneInLibraryRefreshTitle">
+                <h3 class="libraryRefreshTitle" id="tuneInLibraryRefreshTitle">TuneIn Library Refresh</h3>
+                    <details>
+                        <summary>Usability Guidance</summary>
+                        <p class="fieldDescription">Choose a refresh interval next to a category, then select Save above. Off keeps that category manual only. Schedules start after the first complete manual baseline.</p>
+                        <p class="fieldDescription">Distinct stations at the last category refresh. Available uses saved filters; Partial is a lower bound. In Emby checks the library and can show pre-import counts during discovery. On the first refresh, the shared import follows discovery; optional discovery-time imports may publish earlier. Not in latest discovery is unavailable for partial discoveries or failed inventory checks.</p>
+                    </details>
+                <p class="refreshCategoryNote" role="status"></p>
+                <ul class="tuneInRefreshCategories" aria-label="Category refresh status"></ul>
+            </section>
+            <details class="tuneInSectionBox tuneInRefreshDetails">
+                <summary>Refresh details and private log</summary>
+                <p class="fieldDescription">Refresh all resumes interrupted work first, then enabled categories in this order: My Favorites, Local Radio, Music, By Language, By Location, Talk, Sports and Podcasts.</p>
                 <p class="refreshImportContents" hidden></p>
                 <details class="refreshPendingFolders" hidden>
                     <summary>Unserved folder details</summary>
                     <p class="fieldDescription">Advanced diagnostics: up to 50 folders per snapshot. Counts are direct listing contents, not confirmed database writes. Folder labels may be private; review before sharing. A folder not yet requested is not necessarily incomplete or faulty.</p>
                     <pre class="refreshPendingFolderText" tabindex="0" aria-label="Unserved import folder details"></pre>
                 </details>
-                <div class="tuneInRefreshActions">
-                    <button is="emby-button" type="button" class="raised button-submit refreshStart" disabled>Refresh all enabled categories</button>
-                    <button is="emby-button" type="button" class="raised button-submit refreshCancel" disabled>Cancel refresh</button>
-                    <button is="emby-button" type="button" class="raised button-submit refreshLogButton" disabled>Retrieve refresh log</button>
-                </div>
-                <p class="refreshQueueNote" role="status" hidden></p>
-                <p class="refreshError" role="alert"></p>
                 <p class="refreshDiagnosticsText" hidden></p>
+                <button is="emby-button" type="button" class="raised button-submit refreshLogButton" disabled>Retrieve refresh log</button>
                 <p class="refreshLogMessage" role="status"></p>
                 <p id="tuneInReportHint" class="fieldDescription" hidden>Reports (up to 64 KB) can contain private server details. Review before sharing. A new refresh or server restart clears the report.</p>
                 <pre class="refreshFailureLog" aria-label="Latest refresh diagnostic report" aria-describedby="tuneInReportHint" tabindex="0" hidden></pre>
+            </details>
             <details class="tuneInSectionBox tuneInDiagnostics">
-                <summary>Shareable diagnostics</summary>
+                <summary>TuneIn plugin support (GitHub)</summary>
+                <p>Create a diagnostic pack to help troubleshoot the TuneIn plugin. Review it before sharing; <strong>nothing is uploaded automatically.</strong></p>
                 <p class="fieldDescription">Discovery, catalog refresh and imports only; playback, artwork and dashboard diagnostics are not included. Capture does not restart or stop a refresh or change settings. The private refresh log above remains separate.</p>
-                <p><strong>Nothing is uploaded automatically.</strong> Review before sharing. Public catalog IDs can reveal regions or interests; redaction cannot guarantee anonymity.</p>
+                <p>Public catalog IDs can reveal regions or interests; redaction cannot guarantee anonymity. This reporting flow is for the Emby TuneIn plugin, not official TuneIn support.</p>
                 <div>
                     <div class="diagnosticsHeading"><h3>1. Capture locally</h3><details class="tuneInHelp"><summary aria-label="Help: diagnostic pack contents">?</summary><div>Includes versions, run times and result codes, allowlisted settings, aggregate counts and bounded rejection examples. It excludes full configuration, raw exceptions, complete provider responses and the private server log.</div></details></div>
+                    <p>Capture a diagnostic pack on this server.</p>
                     <p class="diagnosticsLatest" role="status">Reading latest refresh...</p>
                     <p class="fieldDescription">Only the latest available refresh can be captured. Active runs are point-in-time snapshots; saved packs survive subsequent refreshes and server restarts.</p>
                     <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="diagnosticsPublic" aria-describedby="diagnosticsPublicHint" /> <span>Include public TuneIn navigation IDs and supported filter/pagination values</span></label>
@@ -1292,6 +1441,7 @@
                 </div>
                 <div>
                     <div class="diagnosticsHeading"><h3>2. Review and download</h3><details class="tuneInHelp"><summary aria-label="Help: diagnostic pack retention and deletion">?</summary><div>At most 5 packs, 256 KiB each and 1 MiB total. Packs expire after 7 days and are removed on the next diagnostics operation; oldest packs are also removed as needed to enforce storage limits. Deletion does not remove downloaded or shared copies.</div></details></div>
+                    <p>Review and download the pack. It may contain information about your listening interests or location.</p>
                     <p class="fieldDescription">Local retention: up to 5 packs, 256 KiB each and 1 MiB total. Packs expire after 7 days and are removed on the next diagnostics operation.</p>
                     <label for="diagnosticsPacks">Saved diagnostic pack</label>
                     <select is="emby-select" id="diagnosticsPacks" class="diagnosticsPacks" disabled><option value="">Select a saved pack</option></select>
@@ -1307,8 +1457,8 @@
                     </div>
                 </div>
                 <div>
-                    <h3>3. Report on GitHub (optional)</h3>
-                    <p>Resolved repository: <strong class="diagnosticsRepository">Unavailable</strong>. Sign in on GitHub, attach the downloaded pack and submit the issue yourself.</p>
+                    <h3>3. Report an issue on GitHub (optional)</h3>
+                    <p>Resolved repository: <strong class="diagnosticsRepository">Unavailable</strong>. Sign in on GitHub, review the issue draft, attach the downloaded pack and submit it yourself.</p>
                     <details class="diagnosticsDraftDetails" hidden><summary>GitHub issue draft preview</summary>
                         <p>Title</p><pre class="diagnosticsDraftTitle" tabindex="0"></pre>
                         <p>Body</p><pre class="diagnosticsDraftBody" tabindex="0"></pre>
@@ -1328,13 +1478,6 @@
                     </div>
                 </dialog>
             </details>
-            <section class="tuneInSectionBox tuneInLibraryRefresh" aria-labelledby="tuneInLibraryRefreshTitle">
-                <h3 class="libraryRefreshTitle" id="tuneInLibraryRefreshTitle">TuneIn Library Refresh</h3>
-                    <p class="fieldDescription">Choose a refresh interval next to a category, then select Save above. Off keeps that category manual only. Schedules start after the first complete manual baseline.</p>
-                    <p class="fieldDescription">Distinct stations at the last category refresh. Available uses saved filters; Partial is a lower bound. In Emby checks the library and can show pre-import counts during discovery. On the first refresh, the shared import follows discovery; optional discovery-time imports may publish earlier. Not in latest discovery is unavailable for partial discoveries or failed inventory checks.</p>
-                <p class="refreshCategoryNote" role="status"></p>
-                <ul class="tuneInRefreshCategories" aria-label="Category refresh status"></ul>
-            </section>
             <dialog class="tuneInRecoveryDialog tuneInRefreshRecoveryDialog" aria-labelledby="tuneInRecoveryTitle" aria-describedby="tuneInRecoveryText">
                 <h3 id="tuneInRecoveryTitle">Choose which refresh runs first</h3>
                 <p id="tuneInRecoveryText" class="refreshRecoveryText"></p>
@@ -1366,6 +1509,7 @@
                     <option value="">Choose a category</option>
                     <option value="station">One station entry</option>
                     <option value="all">All categories</option>
+                    <option value="presets">My Favorites</option>
                     <option value="local">Local Radio</option>
                     <option value="music">Music</option>
                     <option value="language">By Language</option>
@@ -1373,7 +1517,6 @@
                     <option value="talk">Talk</option>
                     <option value="sports">Sports</option>
                     <option value="podcast">Podcasts</option>
-                    <option value="presets">My Favorites</option>
                 </select>
                 <div class="cleanupStationFields inputContainer" hidden>
                     <div class="tuneInFieldHeading">

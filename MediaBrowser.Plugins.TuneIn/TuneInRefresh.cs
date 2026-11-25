@@ -137,8 +137,7 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         private const int ChannelImportVersion = 2;
         private static readonly TimeSpan DiscoveryCheckpointInterval = TimeSpan.FromMinutes(5);
-        private static readonly string[] RefreshCategoryOrder =
-            { "presets", "local", "music", "language", "location", "talk", "sports", "podcast" };
+        private static readonly string[] RefreshCategoryOrder = ConfigurationSnapshot.CategoryKeys;
         internal const int InterruptionRetryLimit = 3;
         private const string ImportDeadlineActivity = "Import deadline reached; waiting for active work to stop";
         private const int FailureReportLimit = 64 * 1024;
@@ -153,6 +152,9 @@ namespace MediaBrowser.Plugins.TuneIn
             Task<ChannelItemResult>> getItems;
         private readonly Func<TuneInChannel, TuneInStagedImport, string, CancellationToken, Task> import;
         private readonly ILogger logger;
+        internal void LogDiscoveryRiskAcceptance() =>
+            logger?.Info("TuneIn administrator accepted experimental discovery import risk notice version {0}.",
+                Plugin.DiscoveryImportRiskVersion);
         private readonly Action<TuneInChannel, string, CancellationToken> updateArtwork;
         private readonly Func<TuneInChannel, string, CancellationToken, int?> countStations;
         private readonly Func<TuneInChannel, string, CancellationToken, HashSet<string>> stationIds;
@@ -746,6 +748,21 @@ namespace MediaBrowser.Plugins.TuneIn
                     throw new InvalidOperationException("The TuneIn settings lock cannot change while refresh work is active or draining.");
                 cleanupPlan = null;
                 return update();
+            }
+            finally { Monitor.Exit(gate); }
+        }
+
+        internal void WithIdleSettings(Action action)
+        {
+            if (action == null) throw new ArgumentNullException(nameof(action));
+            if (!Monitor.TryEnter(gate))
+                throw new InvalidOperationException("TuneIn settings are busy. Check status before continuing.");
+            try
+            {
+                EnsureNoCleanup();
+                if (disposed || work != null && !work.IsCompleted)
+                    throw new InvalidOperationException("TuneIn settings cannot change while refresh work is active or draining.");
+                action();
             }
             finally { Monitor.Exit(gate); }
         }

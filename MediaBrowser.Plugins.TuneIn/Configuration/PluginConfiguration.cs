@@ -37,6 +37,9 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public bool HideRegionalGenres { get; set; } = true;
         public bool AllowPartialCatalogImport { get; set; } = true;
         public bool EnableDiscoveryProgressiveImport { get; set; }
+        public int DiscoveryImportRiskVersion { get; set; }
+        public DateTime? DiscoveryImportRiskAcceptedUtc { get; set; }
+        public string DiscoveryImportRiskToken { get; set; }
         public int ProgressiveFirstEntries { get; set; } = 50;
         public int ProgressiveMinimumNewEntries { get; set; } = 500;
         public int ProgressiveMinimumGrowthPercent { get; set; } = 25;

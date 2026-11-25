@@ -29,6 +29,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly IServerApplicationHost serverHost;
         private readonly ILibraryManager library;
         private ActiveImport activeImport;
+        private readonly AsyncLocal<ActiveImport> importContext = new AsyncLocal<ActiveImport>();
         private readonly object catalogueGate = new object();
         private string browseKey;
         private TuneInCatalogueSession browseCache;
@@ -62,9 +63,9 @@ namespace MediaBrowser.Plugins.TuneIn
             directory.CheckCurrent(snapshot, cancellationToken);
             if (snapshot.Ready && !string.IsNullOrEmpty(query.FolderId))
                 directory.Resolve(snapshot, query.FolderId);
-            // Only the import token can consume staged data; other requests must remain isolated.
             var active = Volatile.Read(ref activeImport);
-            if (active != null && active.Token == cancellationToken)
+            if (active != null && (active.Token == cancellationToken
+                || active.AllowChangedToken && ReferenceEquals(active, importContext.Value)))
                 return Task.FromResult(active.Staged.Read(query.FolderId, cancellationToken));
 
             if (snapshot.Ready && !string.IsNullOrEmpty(query.FolderId))
@@ -95,32 +96,49 @@ namespace MediaBrowser.Plugins.TuneIn
         internal ChannelItemInfo GetCategoryRoot(ConfigurationSnapshot snapshot, string category) =>
             new TuneInBrowsing(directory, GetDefaultImages, FolderImage).CategoryRoot(snapshot, category);
 
-        internal async Task ImportAsync(TuneInStagedImport staged, CancellationToken token, Func<Task> import)
+        internal bool DiscoveryBridgeEnabled()
+        {
+            var settings = directory.Snapshot().Value;
+            return settings.EnableDiscoveryProgressiveImport
+                && settings.DiscoveryImportRiskVersion == Plugin.DiscoveryImportRiskVersion
+                && settings.DiscoveryImportRiskAcceptedUtc.HasValue;
+        }
+
+        internal async Task ImportAsync(TuneInStagedImport staged, CancellationToken token, Func<Task> import,
+            bool allowChangedToken = false)
         {
             if (staged == null || import == null) throw new ArgumentNullException(staged == null ? nameof(staged) : nameof(import));
             // The token identifies the import traversal, so it must be unique to this import.
             if (!token.CanBeCanceled) throw new ArgumentException("A TuneIn import requires its own cancellation token.", nameof(token));
-            var active = new ActiveImport(staged, token);
+            var active = new ActiveImport(staged, token, allowChangedToken);
             if (Interlocked.CompareExchange(ref activeImport, active, null) != null)
                 throw new InvalidOperationException("A TuneIn channel import is already active.");
+            var previous = importContext.Value;
+            if (allowChangedToken) importContext.Value = active;
             try
             {
                 await import().ConfigureAwait(false);
                 staged.Verify();
             }
-            finally { Interlocked.CompareExchange(ref activeImport, null, active); }
+            finally
+            {
+                Interlocked.CompareExchange(ref activeImport, null, active);
+                if (allowChangedToken) importContext.Value = previous;
+            }
         }
 
         private sealed class ActiveImport
         {
-            internal ActiveImport(TuneInStagedImport staged, CancellationToken token)
+            internal ActiveImport(TuneInStagedImport staged, CancellationToken token, bool allowChangedToken)
             {
                 Staged = staged;
                 Token = token;
+                AllowChangedToken = allowChangedToken;
             }
 
             internal TuneInStagedImport Staged { get; }
             internal CancellationToken Token { get; }
+            internal bool AllowChangedToken { get; }
         }
 
         internal HashSet<string> CategoryStationIds(string folderId, CancellationToken token)
@@ -399,7 +417,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         public String GetDefaultImages(String name)
         {
-            var category = new[] { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" }
+            var category = ConfigurationSnapshot.CategoryKeys
                 .FirstOrDefault(value => TuneInBrowsing.CategoryName(value) == name);
             if (category == null || serverHost == null) return "";
             return CategoryArtworkUrl(category);

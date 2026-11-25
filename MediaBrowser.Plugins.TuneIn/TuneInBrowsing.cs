@@ -291,6 +291,9 @@ namespace MediaBrowser.Plugins.TuneIn
             if (entry.Category == "language" && ConfigurationSnapshot.ValidId(currentFilter, "language")
                 && ConfigurationSnapshot.ValidId(filter, "language") && filter != currentFilter)
                 return false;
+            if (entry.Category == "podcast" && (currentFilter == "p:topic" || filter == "p:topic")
+                && PodcastPaginationIds.TryGetValue(from, out var podcastCategory))
+                return to == podcastCategory && currentFilter == "p:topic" && filter == currentFilter;
             if (CanonicalPaginationIds.TryGetValue(from, out var canonical)) return canonical == to;
             // TuneIn pages a genre's More Stations/Shows under that genre's own category ID; refuse IDs owned by another genre.
             var languageSuffix = entry.Category == "language" && entry.SelectionId != null ? ":" + entry.SelectionId : "";
@@ -300,6 +303,13 @@ namespace MediaBrowser.Plugins.TuneIn
                     || entry.Category == "language" && ConfigurationSnapshot.ValidId(filter, "language")
                         && filter == currentFilter);
         }
+
+        // Observed TuneIn podcast topic continuations; unknown topic transitions remain incomplete.
+        private static readonly Dictionary<string, string> PodcastPaginationIds = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["g3403"] = "c100001371", ["g3422"] = "c100000625", ["g3428"] = "c100000892",
+            ["g3429"] = "c100000887", ["g3430"] = "c100000886"
+        };
 
         // Known canonical category IDs for legacy genre IDs in Music, Talk and Sports, including when By Language reaches
         // them. Other genres may page to their own unlisted category ID, but never to one listed here for another genre.

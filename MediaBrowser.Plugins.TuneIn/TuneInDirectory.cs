@@ -20,7 +20,7 @@ namespace MediaBrowser.Plugins.TuneIn
     {
         private static readonly XmlSerializer Serializer = new XmlSerializer(typeof(PluginConfiguration));
         private static readonly XmlSerializer ScopeSerializer = CreateScopeSerializer();
-        private static readonly string[] CategoryKeys = { "local", "music", "language", "location", "talk", "sports", "podcast", "presets" };
+        internal static readonly string[] CategoryKeys = { "presets", "local", "music", "language", "location", "talk", "sports", "podcast" };
         private static readonly string[] SelectionCategories = { "local", "music", "language", "location" };
         private static readonly int[] ScheduleHours = { 6, 12, 24, 168, 720 };
         public PluginConfiguration Value { get; }

@@ -30,6 +30,19 @@ namespace MediaBrowser.Plugins.TuneIn
         public bool? Skip { get; set; }
     }
 
+    [Route("/TuneIn/DiscoveryImport/Acknowledge", "POST")]
+    [Authenticated(Roles = "Admin")]
+    public sealed class AcknowledgeTuneInDiscoveryRisk : IReturn<TuneInDiscoveryRiskToken>
+    {
+        public int Version { get; set; }
+        public bool Accepted { get; set; }
+    }
+
+    public sealed class TuneInDiscoveryRiskToken
+    {
+        public string Token { get; set; }
+    }
+
     public sealed class TuneInOptionalChecksPreference
     {
         public bool SkipOptionalStartupChecks { get; set; }
@@ -152,6 +165,15 @@ namespace MediaBrowser.Plugins.TuneIn
             if (!request.Skip.HasValue) throw new ArgumentException("Specify whether to skip optional startup checks.");
             Plugin.Instance.SetOptionalStartupChecks(request.Skip.Value, refresh);
             return new TuneInOptionalChecksPreference { SkipOptionalStartupChecks = request.Skip.Value };
+        }
+
+        public object Post(AcknowledgeTuneInDiscoveryRisk request)
+        {
+            EnsureAdmin();
+            return new TuneInDiscoveryRiskToken
+            {
+                Token = Plugin.Instance.AcknowledgeDiscoveryRisk(request.Version, request.Accepted, refresh)
+            };
         }
 
         public TuneInRefreshFailureLog Get(GetTuneInRefreshFailureLog request)
@@ -277,7 +299,13 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static Task ImportChannel(IChannelManager manager, TuneInChannel channel,
             TuneInStagedImport staged, string restrictTopLevelFolderId, CancellationToken token) =>
             channel.ImportAsync(staged, token, () =>
-                manager.RefreshChannelContent(channel, staged.ImportRefreshLevel, restrictTopLevelFolderId, token));
+                manager.RefreshChannelContent(channel, staged.ImportRefreshLevel, restrictTopLevelFolderId, token),
+                allowChangedToken: channel.DiscoveryBridgeEnabled());
+
+        internal static void LogDiscoveryRiskAcceptance()
+        {
+            lock (SharedGate) shared?.LogDiscoveryRiskAcceptance();
+        }
 
         internal static TuneInRefresh GetShared(IHttpClient client, IApplicationHost host, IApplicationPaths paths,
             IChannelManager manager, ILogManager logManager, ILibraryManager library, ITaskManager tasks)

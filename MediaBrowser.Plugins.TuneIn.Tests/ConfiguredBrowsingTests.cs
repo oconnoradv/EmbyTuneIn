@@ -120,7 +120,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var before = directory.Snapshot();
             var legacyOverrides = new System.Xml.Serialization.XmlAttributeOverrides();
             foreach (var member in new[] { "RefreshSchedules", "ApiRequestIntervalSeconds", "MaximumRateLimitWaitMinutes", "MaximumConsecutiveRateLimitRetries", "DiscoveryDeadlineHours", "ImportDeadlineHours", "MaxStationCount", "TraversalDepthLimit", "EnableCatalogIdentityDiagnostics", "AllowDirectHlsPlayback", "HideRegionalGenres",
-                "AllowPartialCatalogImport", "EnableDiscoveryProgressiveImport", "ProgressiveFirstEntries",
+                "AllowPartialCatalogImport", "EnableDiscoveryProgressiveImport", "DiscoveryImportRiskVersion",
+                "DiscoveryImportRiskAcceptedUtc", "DiscoveryImportRiskToken", "ProgressiveFirstEntries",
                 "ProgressiveMinimumNewEntries", "ProgressiveMinimumGrowthPercent", "ProgressiveMinimumIntervalSeconds",
                 "ProgressiveMaximumPasses", "HasStartedCatalogRefresh", "SkipOptionalStartupChecks",
                 "SettingsSaved", "TalkMode", "TalkIds", "SportsMode", "SportsIds", "PodcastsMode", "PodcastIds" })
@@ -748,6 +749,59 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public void DiscoveryRiskAcceptanceRequiresFreshServerTokenAndUnlockedSettings()
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"tunein-discovery-consent-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var paths = new Mock<MediaBrowser.Common.Configuration.IApplicationPaths>();
+                paths.SetupGet(value => value.DataPath).Returns(root);
+                paths.SetupGet(value => value.PluginConfigurationsPath).Returns(root);
+                var serializer = new Mock<MediaBrowser.Model.Serialization.IXmlSerializer>();
+                var saved = new PluginConfiguration { EnableDiscoveryProgressiveImport = true };
+                serializer.SetReturnsDefault<object>(saved);
+                serializer.SetReturnsDefault<PluginConfiguration>(saved);
+                var plugin = new Plugin(paths.Object, serializer.Object);
+                typeof(MediaBrowser.Common.Plugins.BasePlugin).GetProperty("AssemblyFilePath").SetValue(plugin, typeof(Plugin).Assembly.Location);
+                plugin.SetStartupInfo(_ => { });
+                var directory = new TuneInDirectory(() => plugin.Configuration, (_, __) => throw new InvalidOperationException());
+                var store = new TuneInRefreshStore(Path.Combine(root, "refresh.xml"));
+                using var refresh = new TuneInRefresh(directory, store, () => null,
+                    (_, __, ___, ____, _____) => throw new InvalidOperationException(),
+                    (_, __, ___, ____) => throw new InvalidOperationException(), null);
+                Assert.False(new TuneInChannel(directory, null, null).DiscoveryBridgeEnabled());
+                var forged = new PluginConfiguration
+                {
+                    EnableDiscoveryProgressiveImport = true,
+                    DiscoveryImportRiskVersion = Plugin.DiscoveryImportRiskVersion,
+                    DiscoveryImportRiskAcceptedUtc = DateTime.UtcNow
+                };
+                Assert.Throws<InvalidOperationException>(() => plugin.UpdateConfiguration(forged));
+                Assert.Throws<InvalidOperationException>(() => plugin.AcknowledgeDiscoveryRisk(1, false, refresh));
+                plugin.SettingsLock.Set(true);
+                Assert.Throws<InvalidOperationException>(() => plugin.AcknowledgeDiscoveryRisk(1, true, refresh));
+                plugin.SettingsLock.Set(false);
+                store.WriteRecovery(new TuneInRefreshRecovery { ConfigurationKey = directory.Snapshot().Key });
+                var token = plugin.AcknowledgeDiscoveryRisk(1, true, refresh);
+                Assert.NotNull(store.ReadRecovery());
+                var accepted = new PluginConfiguration { EnableDiscoveryProgressiveImport = true, DiscoveryImportRiskToken = token };
+                plugin.UpdateConfiguration(accepted);
+                Assert.Equal(1, accepted.DiscoveryImportRiskVersion);
+                Assert.NotNull(accepted.DiscoveryImportRiskAcceptedUtc);
+                Assert.Null(accepted.DiscoveryImportRiskToken);
+                Assert.True(new TuneInChannel(directory, null, null).DiscoveryBridgeEnabled());
+                plugin.SettingsLock.Set(false);
+                plugin.UpdateConfiguration(new PluginConfiguration());
+                Assert.False(new TuneInChannel(directory, null, null).DiscoveryBridgeEnabled());
+                plugin.SettingsLock.Set(false);
+                Assert.Throws<InvalidOperationException>(() => plugin.UpdateConfiguration(
+                    new PluginConfiguration { EnableDiscoveryProgressiveImport = true, DiscoveryImportRiskToken = token }));
+            }
+            finally { Directory.Delete(root, true); }
+        }
+
+        [Fact]
         public void SettingsAreRegisteredInAdvancedAndRemainTheMainPluginPage()
         {
             var plugin = new Plugin(Mock.Of<MediaBrowser.Common.Configuration.IApplicationPaths>(),
@@ -829,7 +883,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             config.Locations.Add(Selection("r2"));
             var directory = new TuneInDirectory(() => config, (_, __) => throw new Exception("Unexpected network request."));
             var root = await new TuneInChannel(directory).GetChannelItems(new InternalChannelItemQuery(), Token);
-            Assert.Equal(new[] { "Local Radio", "Music", "By Language", "By Location", "Talk", "Sports", "Podcasts", "My Favorites" },
+            Assert.Equal(new[] { "My Favorites", "Local Radio", "Music", "By Language", "By Location", "Talk", "Sports", "Podcasts" },
+                root.Items.Select(i => i.Name));
+            config.EnableFavorites = config.EnableMusic = false;
+            root = await new TuneInChannel(directory).GetChannelItems(new InternalChannelItemQuery(), Token);
+            Assert.Equal(new[] { "Local Radio", "By Language", "By Location", "Talk", "Sports", "Podcasts" },
                 root.Items.Select(i => i.Name));
         }
 

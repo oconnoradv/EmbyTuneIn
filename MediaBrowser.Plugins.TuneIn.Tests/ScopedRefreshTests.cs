@@ -1832,9 +1832,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
 
             internal TuneInRefresh Create(bool allowScoped = false, TimeSpan? timeout = null,
                 TuneInLibraryCleanup cleanup = null, ILogger logger = null, Action lockSettings = null,
-                Func<bool> backupBusy = null) => new TuneInRefresh(directory, Store, () => channel,
+                Func<bool> backupBusy = null, bool experimentalBridge = false) => new TuneInRefresh(directory, Store, () => channel,
                 (source, folder, session, strict, token) => source.GetRefreshChannelItems(folder, session, strict, token),
-                (source, staged, restriction, token) => TuneInRefreshService.ImportChannel(manager, source, staged, restriction, token),
+                (source, staged, restriction, token) => experimentalBridge
+                    ? source.ImportAsync(staged, token, () =>
+                        manager.RefreshChannelContent(source, staged.ImportRefreshLevel, restriction, token), allowChangedToken: true)
+                    : TuneInRefreshService.ImportChannel(manager, source, staged, restriction, token),
                 logger, timeoutOverride: timeout ?? TimeSpan.FromSeconds(10), allowScopedImport: allowScoped, libraryCleanup: cleanup,
                 lockSettings: lockSettings, backupBusy: backupBusy,
                 updateArtwork: (_, folder, token) => Artwork.Add(directory.Resolve(directory.Snapshot(), folder).Category),
@@ -1895,10 +1898,14 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             }
         }
 
-        [Fact]
-        public async Task DifferentNestedTokensFailVerificationAndRetainDirtyState()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task DifferentNestedTokensFailVerificationAndRetainDirtyState(bool discoveryImports)
         {
             using var fixture = new ExperimentalImportFixture();
+            fixture.Config.EnableDiscoveryProgressiveImport = discoveryImports;
+            fixture.Config.ProgressiveFirstEntries = 1;
             fixture.Manager.UseSeparateTokens = true;
             using var refresh = fixture.Create(allowScoped: true);
             refresh.Start();
@@ -1906,6 +1913,116 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.Equal("Error", refresh.Status().State);
             Assert.NotNull(fixture.Store.Read().DirtyCategory);
             Assert.False(fixture.Store.Read().CompleteBaseline);
+        }
+
+        [Fact]
+        public async Task ExperimentalBridgeSupportsDifferentNestedTokensWithinImportContext()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            fixture.Manager.UseSeparateTokens = true;
+            using var refresh = fixture.Create(allowScoped: true, experimentalBridge: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Null(fixture.Store.Read().DirtyCategory);
+            Assert.True(fixture.Store.Read().CompleteBaseline);
+        }
+
+        [Fact]
+        public async Task ProductionBridgeRequiresEnabledAndAcknowledgedSettings()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            fixture.Config.EnableDiscoveryProgressiveImport = true;
+            fixture.Config.DiscoveryImportRiskVersion = Plugin.DiscoveryImportRiskVersion;
+            fixture.Config.DiscoveryImportRiskAcceptedUtc = DateTime.UtcNow;
+            fixture.Manager.UseSeparateTokens = true;
+            using var refresh = fixture.Create(allowScoped: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.True(fixture.Store.Read().CompleteBaseline);
+        }
+
+        [Fact]
+        public async Task ExperimentalBridgeDoesNotCountForeignSuppressedContextReads()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: true, experimentalBridge: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            var folders = fixture.Category("talk").Folders.Select(folder => folder.Id).ToArray();
+            fixture.Manager.UseSeparateTokens = true;
+            fixture.Manager.SkipDescendants = true;
+            fixture.Manager.BeforeImport = async (_, __) =>
+            {
+                Task reads;
+                using (ExecutionContext.SuppressFlow())
+                    reads = Task.Run(async () =>
+                    {
+                        foreach (var folder in folders)
+                            await fixture.Channel.GetChannelItems(new InternalChannelItemQuery { FolderId = folder }, CancellationToken.None);
+                    });
+                await reads;
+            };
+            fixture.Version++;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Error", refresh.Status().State);
+            Assert.Equal("talk", fixture.Store.Read().DirtyCategory);
+        }
+
+        [Fact]
+        public async Task ExperimentalBridgeCannotDistinguishForeignReadsThatInheritContext()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: true, experimentalBridge: true);
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            var folders = fixture.Category("talk").Folders.Select(folder => folder.Id).ToArray();
+            fixture.Manager.UseSeparateTokens = true;
+            fixture.Manager.SkipDescendants = true;
+            fixture.Manager.BeforeImport = async (_, __) =>
+            {
+                foreach (var folder in folders)
+                    await fixture.Channel.GetChannelItems(new InternalChannelItemQuery { FolderId = folder }, CancellationToken.None);
+            };
+            fixture.Version++;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            Assert.Null(fixture.Store.Read().DirtyCategory);
+        }
+
+        [Fact]
+        public async Task ExperimentalBridgeRejectsContextFromAnEarlierImport()
+        {
+            using var fixture = new ExperimentalImportFixture();
+            using var refresh = fixture.Create(allowScoped: true, experimentalBridge: true);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Task staleReads = null;
+            string[] folders = null;
+            fixture.Manager.BeforeImport = (_, __) =>
+            {
+                staleReads = Task.Run(async () =>
+                {
+                    await release.Task;
+                    foreach (var folder in folders)
+                        await fixture.Channel.GetChannelItems(new InternalChannelItemQuery { FolderId = folder }, CancellationToken.None);
+                });
+                return Task.CompletedTask;
+            };
+            refresh.Start();
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Completed", refresh.Status().State);
+            folders = fixture.Category("talk").Folders.Select(folder => folder.Id).ToArray();
+            fixture.Manager.UseSeparateTokens = true;
+            fixture.Manager.SkipDescendants = true;
+            fixture.Manager.BeforeImport = async (_, __) => { release.SetResult(true); await staleReads; };
+            fixture.Version++;
+            refresh.Start("talk");
+            await WaitUntilIdle(refresh);
+            Assert.Equal("Error", refresh.Status().State);
+            Assert.Equal("talk", fixture.Store.Read().DirtyCategory);
         }
 
         [Fact]
@@ -5394,7 +5511,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     Assert.Equal("Error", refresh.Status().State);
                     Assert.Single(imported);
                     Assert.Equal(2, store.Read().Categories.Count);
-                    Assert.Equal(new[] { "podcast", "presets" }, store.Read().PendingCategories);
+                    Assert.Equal(new[] { "presets", "podcast" }, store.Read().PendingCategories);
 
                     failFavorites = false;
                     fetched.Clear();
@@ -5402,7 +5519,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     await WaitUntilIdle(refresh);
                     Assert.Equal("Completed", refresh.Status().State);
                     Assert.Equal(new[] { "presets" }, fetched);
-                    Assert.Equal(new[] { "Talk", "Sports", "My Favorites" }, imported[1].Keys);
+                    Assert.Equal(new[] { "My Favorites", "Talk", "Sports" }, imported[1].Keys);
                     var snapshot = directory.Snapshot();
                     Assert.All(imported[1]["Talk"], id => Assert.Equal("talk", directory.Resolve(snapshot, id).Category));
                     Assert.All(imported[1]["Sports"], id => Assert.Equal("sports", directory.Resolve(snapshot, id).Category));

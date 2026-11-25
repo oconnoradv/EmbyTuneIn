@@ -2229,6 +2229,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         config.HideRegionalGenres = instance.view.querySelector('.hideRegionalGenres').checked;
         config.AllowPartialCatalogImport = instance.view.querySelector('.allowPartialCatalogImport').checked;
         config.EnableDiscoveryProgressiveImport = instance.view.querySelector('.enableDiscoveryProgressiveImport').checked;
+        config.DiscoveryImportRiskToken = null;
         config.RefreshSchedules = Array.from(instance.refreshSchedules)
             .filter(function (entry) { return entry[1] > 0; })
             .map(function (entry) { return { Category: entry[0], IntervalHours: entry[1] }; });
@@ -2246,10 +2247,30 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         instance.lockError = '';
         refreshControls(instance, instance.refreshAvailable);
         loading.show();
-        ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+        var requiresRiskToken = config.EnableDiscoveryProgressiveImport &&
+            !(instance.config.EnableDiscoveryProgressiveImport === true &&
+                instance.config.DiscoveryImportRiskVersion === 1 && instance.config.DiscoveryImportRiskAcceptedUtc);
+        var save = requiresRiskToken
+            ? ApiClient.ajax({
+                type: 'POST', dataType: 'json',
+                url: ApiClient.getUrl('TuneIn/DiscoveryImport/Acknowledge', { Version: 1, Accepted: true })
+            }).then(function (result) {
+                if (!result || !result.Token) throw new Error('Risk acknowledgement was not recorded.');
+                config.DiscoveryImportRiskToken = result.Token;
+                return ApiClient.updatePluginConfiguration(pluginId, config);
+            })
+            : ApiClient.updatePluginConfiguration(pluginId, config);
+        save.then(function (result) {
             if (epoch === instance.viewEpoch) {
                 instance.setupSaved = true;
                 instance.setupDirty = false;
+                config.DiscoveryImportRiskToken = null;
+                if (requiresRiskToken) {
+                    config.DiscoveryImportRiskVersion = 1;
+                    config.DiscoveryImportRiskAcceptedUtc = new Date().toISOString();
+                }
+                instance.view.querySelector('.discoveryRiskUpgradeNotice').hidden = true;
+                instance.config = config;
                 showSaveHistory(instance, true, !configurationRequired(config));
                 instance.savedFilteringConfig = JSON.parse(JSON.stringify(config));
                 if (filteringChanged) {
@@ -2357,9 +2378,55 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         bindDisclosure(view.querySelector('.refreshSummary'), function () { instance.refreshDefaultPending = false; });
         view.querySelector('.settingsLocked').addEventListener('change', function () { return changeSettingsLock(instance); });
         view.querySelector('.configurationCompleted').addEventListener('change', function () { editing(instance); setupChanged(instance); });
+        view.querySelector('.tuneInAdvancedGuideLink').addEventListener('click', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            view.querySelector('.tuneInAdvancedGuide').showModal();
+        });
+        view.querySelector('.tuneInAdvancedGuideClose').addEventListener('click', function () {
+            view.querySelector('.tuneInAdvancedGuide').close();
+        });
+        view.querySelector('.tuneInAdvancedGuide').addEventListener('close', function () {
+            view.querySelector('.tuneInAdvancedGuideLink').focus();
+        });
         view.querySelector('.enableDiscoveryProgressiveImport').addEventListener('change', function () {
+            if (this.checked) {
+                this.checked = false;
+                instance.discoveryRiskAccepted = false;
+                view.querySelector('.discoveryRiskAccepted').checked = false;
+                view.querySelector('.discoveryRiskConfirm').disabled = true;
+                var needsPartialImport = !view.querySelector('.allowPartialCatalogImport').checked;
+                view.querySelector('.discoveryRiskPartialRequirement').hidden = !needsPartialImport;
+                view.querySelector('.discoveryRiskConfirm').textContent =
+                    needsPartialImport ? 'Accept and enable both' : 'Accept and continue';
+                view.querySelector('.discoveryRiskDialog').setAttribute('aria-describedby', needsPartialImport
+                    ? 'discoveryRiskDescription discoveryRiskPartialRequirement' : 'discoveryRiskDescription');
+                view.querySelector('.discoveryRiskDialog').showModal();
+            } else {
+                instance.discoveryRiskAccepted = false;
+            }
             showProgressivePacing(instance);
             editing(instance);
+        });
+        view.querySelector('.discoveryRiskAccepted').addEventListener('change', function () {
+            view.querySelector('.discoveryRiskConfirm').disabled = !this.checked;
+        });
+        view.querySelector('.discoveryRiskCancel').addEventListener('click', function () {
+            view.querySelector('.discoveryRiskDialog').close();
+        });
+        view.querySelector('.discoveryRiskConfirm').addEventListener('click', function () {
+            if (!view.querySelector('.discoveryRiskAccepted').checked || editingBlocked(instance)) return;
+            instance.discoveryRiskAccepted = true;
+            if (!view.querySelector('.discoveryRiskPartialRequirement').hidden)
+                view.querySelector('.allowPartialCatalogImport').checked = true;
+            view.querySelector('.enableDiscoveryProgressiveImport').checked = true;
+            view.querySelector('.discoveryRiskDialog').close();
+            showProgressivePacing(instance);
+            editing(instance);
+            setupChanged(instance);
+        });
+        view.querySelector('.discoveryRiskDialog').addEventListener('close', function () {
+            view.querySelector('.enableDiscoveryProgressiveImport').focus();
         });
         view.querySelector('.optionalChecksRun').addEventListener('click', function () { return runOptionalChecks(instance); });
         view.querySelector('.skipOptionalChecks').addEventListener('input', function (event) { event.stopPropagation(); });
@@ -2665,7 +2732,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.allowDirectHlsPlayback').checked = config.AllowDirectHlsPlayback === true;
             view.querySelector('.hideRegionalGenres').checked = config.HideRegionalGenres !== false;
             view.querySelector('.allowPartialCatalogImport').checked = config.AllowPartialCatalogImport !== false;
-            view.querySelector('.enableDiscoveryProgressiveImport').checked = config.EnableDiscoveryProgressiveImport === true;
+            instance.discoveryRiskAccepted = config.EnableDiscoveryProgressiveImport === true &&
+                config.DiscoveryImportRiskVersion === 1 && !!config.DiscoveryImportRiskAcceptedUtc;
+            view.querySelector('.discoveryRiskUpgradeNotice').hidden =
+                config.EnableDiscoveryProgressiveImport !== true || instance.discoveryRiskAccepted;
+            view.querySelector('.enableDiscoveryProgressiveImport').checked = instance.discoveryRiskAccepted;
             progressiveSettings.forEach(function (setting) {
                 view.querySelector(setting[1]).value = config[setting[0]] == null ? setting[3] : config[setting[0]];
             });
@@ -2724,6 +2795,10 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         if (this.diagnostics) diagnosticsResetReview(this);
         var diagnosticsDialog = this.view.querySelector('.diagnosticsDeleteDialog');
         if (diagnosticsDialog.open) diagnosticsDialog.close();
+        var guide = this.view.querySelector('.tuneInAdvancedGuide');
+        if (guide.open) guide.close();
+        var discoveryRisk = this.view.querySelector('.discoveryRiskDialog');
+        if (discoveryRisk.open) discoveryRisk.close();
         this.backupRequest = null;
         this.backupStarting = false;
         clearCleanupPreview(this);

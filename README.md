@@ -11,6 +11,17 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 > against MediaBrowser.Server.Core 4.9.1.90 and System.Memory 4.6.3. Do not
 > copy dependency DLLs into Emby's plugin folder.
 
+> [!WARNING]
+> RC4 source is available for offline testing; RC4 has not been published as
+> a GitHub release. Earlier local RC4 packages do not include every change in
+> this source. Build the revision you intend to test. Back up Emby, including
+> library metadata and TuneIn configuration, before testing.
+>
+> Discovery-time imports are experimental and off by default. Their optional
+> changed-token bridge can misidentify unrelated work; real-server testing of
+> changed-token behavior remains outstanding. See
+> [Advanced Settings](#configure-browsing) for the risks and prerequisites.
+
 ## Contents
 
 - [Features](#features)
@@ -46,18 +57,21 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 
 - Control Panel localization that follows the user's Emby language
   ([#10](https://github.com/oconnoradv/EmbyTuneIn/issues/10)).
-- Support staged imports when Emby changes nested-request cancellation tokens,
-  once an import identity can safely distinguish them from concurrent browsing
-  ([#11](https://github.com/oconnoradv/EmbyTuneIn/issues/11)). Deferred; do not
-  restore the unsupported proxy or expose a nonfunctional opt-in.
+- Establish reliable import identity when Emby changes nested-request cancellation
+  tokens ([#11](https://github.com/oconnoradv/EmbyTuneIn/issues/11)). The
+  experimental opt-in bridge is not a reliable identity and does not resolve this.
 - Option 2 diagnostic submission through an operator-controlled HTTPS service
   and GitHub App, without requiring plugin users to sign into GitHub
   ([#12](https://github.com/oconnoradv/EmbyTuneIn/issues/12)). Separate from
   browser-assisted reporting; hosting, privacy and abuse controls need review.
 - Distinguish legitimate pagination transitions from genuine selected-node
   escapes, using representative source/target examples
-  ([#13](https://github.com/oconnoradv/EmbyTuneIn/issues/13)). Genre continuation
-  links can retain an unchanged language-only filter, not just station/show
+  ([#13](https://github.com/oconnoradv/EmbyTuneIn/issues/13)). Five observed
+  podcast continuations are supported with the unchanged `p:topic` filter:
+  `g3403` to `c100001371`, `g3422` to `c100000625`, `g3428` to `c100000892`,
+  `g3429` to `c100000887` and `g3430` to `c100000886`.
+  Unverified transitions remain incomplete. Genre
+  continuation links can retain an unchanged language-only filter, not just station/show
   filters, in both selected-language and All modes. Known aliases still cannot
   be used by a different genre; other transitions remain evidence-gated.
   Incomplete-discovery protection remains enabled.
@@ -217,7 +231,8 @@ not required.
 **Advanced Settings** (collapsed):
 
 Settings are grouped by discovery, request pacing, import behavior, and
-playback and diagnostics. Hover over an information icon or select it for
+playback and diagnostics. Select **Settings guide** beside the section heading
+for an included plain-language explanation. Hover over an information icon or select it for
 details; press Escape to close it and return focus. Critical warnings remain visible.
 Defaults apply to new configurations; existing saved values are not replaced.
 
@@ -247,14 +262,30 @@ artwork upload validation remain live and are not bypassed.
 Existing discovery deadlines or station limits outside these ranges must be
 corrected before refreshing or saving. They are not silently changed.
 
-Staged imports are isolated by the import's cancellation token so concurrent
-browsing and unrelated channel refreshes cannot read the staged tree. Emby must
-preserve that token for every nested folder request. If it does not, strict
-verification fails and recovery is required; this can also prevent
-discovery-time imports. Limited isolated Emby checks have verified token
-propagation and retained stations, but do not establish compatibility across
-all execution paths or server versions. Broader real-server integration remains
-unverified; there is no AsyncLocal compatibility switch.
+By default, staged imports require the exact import cancellation token. If Emby
+changes it for a nested request, verification can fail and recovery is required.
+**Import during category discovery** is off by default. Enabling it requires an
+acknowledgement and also enables an experimental changed-token bridge for staged
+imports. Early imports also require **Import Valid Results when catalog entries
+are skipped**. If it is off, the acknowledgement offers to enable both; this
+also affects ordinary refreshes, which may import partial results when entries
+are skipped. Save settings to apply the choice. Turning that prerequisite off later
+stops early imports, but the bridge remains enabled until discovery imports are
+turned off. Existing installations with the option enabled must acknowledge the
+new risks before the bridge can be used. The plugin records and logs successful
+acceptance; disabling the option requires acknowledgement again when re-enabled.
+
+The bridge uses inherited execution context, not a reliable import identity:
+unrelated TuneIn work inheriting that context can read staged entries and make
+verification appear complete even if Emby's traversal missed folders. Entries
+may be incomplete or incorrect, and playlists, favorites, history and other
+references may be affected even after rebuilding TuneIn. Emby writes library
+changes to its database; corruption has not been demonstrated, but database
+and broader server compatibility are unverified. Additional import passes can
+increase shared server load. The bridge may still fail if context is not carried.
+**Back up Emby, including library metadata and TuneIn configuration, before testing.**
+Limited isolated Emby checks used the original token and did not verify
+changed-token behavior; real-server verification remains outstanding.
 
 Reaching the station count or depth limit produces a **Limited** result that
 can still be imported. Identity diagnostics add aggregate catalog comparisons
@@ -281,8 +312,9 @@ In **Catalog Refresh**, select **Refresh** beside a category or
   categories in this order: My Favorites, Local Radio, Music, By Language,
   By Location, Talk, Sports and Podcasts.
   The library refresh list follows that order and highlights the current
-  category while it is being refreshed. A shared multi-category import has no
-  single highlighted row.
+  category while it is being refreshed. Channel folders and staged imports use
+  the same category order. A shared multi-category import has no single
+  highlighted row.
 - Refresh merges new stations into the verified saved entries. A station
   missing from a discovery is not deleted; removing a saved filter does
   remove entries outside the new scope.
@@ -337,10 +369,11 @@ The comparison is unavailable when discovery is partial or limited, the inventor
 cannot be checked, or no comparable discovery is available. It does not imply
 that a station should be deleted.
 
-**Diagnostics** lists provider requests, cache replays, rate-limit retries,
-checkpoint resumes and skipped links by reason.
+**Refresh details and private log**, below the category list, contains provider
+requests, cache replays, rate-limit retries, checkpoint resumes and skipped
+links by reason, along with import details.
 
-**Retrieve refresh log** gives an administrator-only report (up to 64 KB) for
+In that section, **Retrieve refresh log** gives an administrator-only report (up to 64 KB) for
 failed, timed-out or partial refreshes: outcome, skip counts and up to 100
 skipped-link examples. Usernames, coordinates, tokens, provider responses and
 signed IDs are omitted. Review reports before sharing; exception traces can
@@ -353,7 +386,7 @@ Implemented for discovery, catalog refresh and imports
 ([#9](https://github.com/oconnoradv/EmbyTuneIn/issues/9)). Playback, artwork and
 dashboard capture remain deferred.
 
-1. In **Catalog Refresh > Shareable diagnostics**, choose whether to include
+1. In **Catalog Refresh > TuneIn plugin support (GitHub)**, choose whether to include
    public navigation details, then select **Capture redacted pack**. Only the
    latest refresh is available to capture; an active run produces a point-in-time
    snapshot without stopping it. Starting another refresh or restarting Emby
