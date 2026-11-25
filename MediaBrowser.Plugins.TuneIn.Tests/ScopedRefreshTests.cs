@@ -29,7 +29,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             var status = new TuneInRefreshStatus();
             Assert.Equal(PluginBuild.Display, status.PluginVersion);
             Assert.Equal(PluginBuild.Display, status.Copy().PluginVersion);
-            Assert.Matches(@"^v1\.2\.8\.0( \([0-9a-f]{1,7}\))?$", status.PluginVersion);
+            var version = System.Text.RegularExpressions.Regex.Escape(typeof(Plugin).Assembly.GetName().Version.ToString());
+            Assert.Matches("^v" + version + @"( \([0-9a-f]{1,7}\))?$", status.PluginVersion);
         }
 
         [Fact]
