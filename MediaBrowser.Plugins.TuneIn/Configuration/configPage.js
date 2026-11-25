@@ -862,7 +862,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var catalogDisabled = disabled || !browsingSelected(instance);
         instance.view.querySelector('.loginFields').disabled = catalogDisabled;
         instance.view.querySelector('.configurationFields').disabled = catalogDisabled;
-        instance.view.querySelector('.globalFields').disabled = disabled;
+        instance.view.querySelectorAll('.globalFields').forEach(function (fields) { fields.disabled = disabled; });
         instance.view.querySelector('.artworkUpload').disabled = disabled || !!instance.artworkBusy;
         instance.view.querySelector('.artworkFile').disabled = disabled || !!instance.artworkBusy;
         instance.view.querySelector('.hideRegionalGenres').disabled = catalogDisabled;

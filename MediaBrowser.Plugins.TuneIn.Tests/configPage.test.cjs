@@ -57,7 +57,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
         '.progressiveMinimumGrowthPercent': new Element('input'), '.progressiveMinimumIntervalSeconds': new Element('input'),
         '.progressiveMaximumPasses': new Element('input') };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.allowDirectHlsPlayback', '.enableDiscoveryProgressiveImport', '.progressivePacing', '.categories', '.selectors',
-        '.loginFields', '.globalFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
+        '.loginFields', '.globalFields', '.advancedFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
         '.catalogRefreshPrompt', '.settingsChangeNotice', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
         '.optionalChecksRun', '.optionalChecksStatus', '.optionalChecksMessage',
         '.optionalChecksUnlockHint', '.skipOptionalChecks',
@@ -128,6 +128,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
         style: { setProperty(name, value) { this[name] = value; } },
         addEventListener(event, handler) { handlers[event] = handler; },
         querySelectorAll(selector) {
+            if (selector === '.globalFields') return [elements['.globalFields'], elements['.advancedFields']];
             return selector === '.tuneInHelp, .tuneInArtworkHelp' ? [help] : [];
         },
         querySelector(selector) {
@@ -2182,11 +2183,15 @@ test('optional checks are deferred until explicitly requested, and errors are re
     const app = harness(true);
     const visit = app.instance.onResume();
     app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true });
-    app.refresh[0].resolve({ State: 'Completed', SettingsLocked: false, OptionalChecksEligible: true,
+    app.refresh[0].resolve({ State: 'Completed', SettingsLocked: true, OptionalChecksEligible: true,
         SkipOptionalStartupChecks: true, ArtworkChecksDeferred: true, ArtworkPacks: [] });
     await visit;
     await settle();
     assert.equal(app.elements['.skipOptionalChecks'].checked, true);
+    assert.equal(app.elements['.skipOptionalChecks'].disabled, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    assert.equal(app.elements['.advancedFields'].disabled, true);
+    assert.equal(app.elements['.artworkUpload'].disabled, true);
     assert.match(app.elements['.optionalChecksStatus'].textContent, /deferred/);
     const checking = app.elements['.optionalChecksRun'].click();
     assert.equal(app.refresh[1].options.url.params.CheckOptional, true);
@@ -2197,6 +2202,11 @@ test('optional checks are deferred until explicitly requested, and errors are re
     await checking;
     assert.match(app.elements['.optionalChecksStatus'].textContent, /Last checked:/);
     assert.equal(app.elements['.artworkGenresName'].textContent, 'Default artwork');
+    assert.equal(app.instance.settingsLocked, true);
+    assert.equal(app.elements['.globalFields'].disabled, true);
+    assert.equal(app.elements['.advancedFields'].disabled, true);
+    assert.equal(app.locks.length, 0);
+    assert.equal(app.optionalChecks.length, 0);
     const retry = app.elements['.optionalChecksRun'].click();
     app.refresh[2].reject(new Error('offline'));
     await retry;
@@ -3649,7 +3659,7 @@ test('scoped artwork packs show detected names, counts and paths safely', async 
     assert.match(html, /class="tuneInArtworkTableScroll" role="region" aria-label="[^"]+" tabindex="0">\s*<table/);
     assert.match(html, /\.tuneInArtworkTableScroll\s*\{[^}]*overflow-x:\s*auto/);
     assert.match(html, /\.tuneInArtworkPacks th,\s*\.tuneInArtworkPacks td\s*\{[^}]*white-space:\s*nowrap/);
-    assert.match(html, /class="hideRegionalGenres"[\s\S]*?<details class="tuneInArtworkPacks">\s*<summary>Custom Artwork Packs<\/summary>[\s\S]*?<\/details>\s*<details class="tuneInAdvancedSettings">/);
+    assert.match(html, /class="hideRegionalGenres"[\s\S]*?<details class="tuneInArtworkPacks">\s*<summary>Custom Artwork Packs<\/summary>[\s\S]*?<\/details>\s*<fieldset class="globalFields advancedFields"[^>]*>\s*<details class="tuneInAdvancedSettings">/);
     assert.equal((html.match(/<details class="tuneInArtworkPacks">/g) || []).length, 1);
     assert.match(html, /<fieldset class="loginFields" disabled>\s*<legend>TuneIn Favorites and Location<\/legend>/);
     assert.match(html, /\.loginFields\s*\{[^}]*border:\s*1px solid var\(--tunein-neutral-border\)/);
@@ -3805,6 +3815,23 @@ test('leaving during artwork verification closes it without uploading', async ()
     app.instance.onPause();
     assert.equal(app.elements['.artworkVerifyDialog'].open, false);
     assert.equal(app.artwork.length, 0);
+});
+
+test('read-only artwork checks cannot inherit disabled settings fieldsets', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const fieldsets = [];
+    const ancestry = new Map();
+    for (const match of html.matchAll(/<\/?fieldset\b[^>]*>|<(?:button|input)\b[^>]*>/g)) {
+        const tag = match[0];
+        const classes = /class="([^"]*)"/.exec(tag);
+        if (tag.startsWith('</fieldset')) fieldsets.pop();
+        else if (tag.startsWith('<fieldset')) fieldsets.push(classes ? classes[1] : '');
+        else if (classes) for (const name of classes[1].split(' ')) ancestry.set(name, [...fieldsets]);
+    }
+    assert.deepEqual(ancestry.get('optionalChecksRun'), []);
+    assert.deepEqual(ancestry.get('txtUsername'), ['globalFields', 'loginFields']);
+    assert.deepEqual(ancestry.get('configurationCompleted'), ['globalFields']);
+    assert.deepEqual(ancestry.get('maxStationCount'), ['globalFields advancedFields']);
 });
 
 test('artwork dialogs remain actionable when settings are locked and approval uses a visible native checkbox', () => {
