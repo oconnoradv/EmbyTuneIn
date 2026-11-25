@@ -28,8 +28,16 @@ namespace MediaBrowser.Plugins.TuneIn
         internal static Task<HttpResponseInfo> SendAsync(HttpRequestOptions options) =>
             SendAsync(options, TuneInPlayback.IsPublicAddress);
 
-        internal static async Task<HttpResponseInfo> SendAsync(HttpRequestOptions options, Func<IPAddress, bool> allowAddress)
+        internal static Task<HttpResponseInfo> SendAsync(HttpRequestOptions options, Func<IPAddress, bool> allowAddress) =>
+            SendAsync(options, allowAddress, true);
+
+        internal static async Task<HttpResponseInfo> SendAsync(HttpRequestOptions options, Func<IPAddress, bool> allowAddress,
+            bool allowPinnedConnections)
         {
+            options.CancellationToken.ThrowIfCancellationRequested();
+            if (!PinnedConnections || !allowPinnedConnections)
+                throw new PinnedConnectionsUnavailableException();
+
             try { return await SendHttpAsync(options, allowAddress).ConfigureAwait(false); }
             catch (HttpRequestException) when (!options.CancellationToken.IsCancellationRequested
                 && Uri.TryCreate(options.Url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttp)
@@ -45,13 +53,7 @@ namespace MediaBrowser.Plugins.TuneIn
         {
             var handler = CreatePinnedHandler();
             pinned = handler != null;
-            return new HttpClient(handler ?? new HttpClientHandler
-            {
-                AllowAutoRedirect = false,
-                UseCookies = false,
-                UseProxy = false,
-                UseDefaultCredentials = false
-            }) { Timeout = Timeout.InfiniteTimeSpan };
+            return handler == null ? null : new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         }
 
         // The plugin targets netstandard2.0, so SocketsHttpHandler.ConnectCallback is bound at runtime.
@@ -128,15 +130,6 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private static async Task<HttpResponseInfo> SendHttpAsync(HttpRequestOptions options, Func<IPAddress, bool> allowAddress)
         {
-            if (!PinnedConnections && Uri.TryCreate(options.Url, UriKind.Absolute, out var target))
-            {
-                // Best effort when the runtime has no connect hook: the address may still change before connecting.
-                var host = target.IdnHost.Trim('[', ']');
-                var addresses = IPAddress.TryParse(host, out var literal) ? new[] { literal }
-                    : await Dns.GetHostAddressesAsync(host).ConfigureAwait(false);
-                if (addresses.Length == 0 || !addresses.All(allowAddress))
-                    throw new HttpRequestException("The stream host has no permitted address.");
-            }
             using (var request = new HttpRequestMessage(HttpMethod.Get, options.Url))
             {
                 request.Properties[AllowAddressProperty] = allowAddress;
@@ -238,6 +231,13 @@ namespace MediaBrowser.Plugins.TuneIn
                     headers[name] = value;
             }
             return new HttpResponseInfo { StatusCode = (HttpStatusCode)code, ContentType = contentType, Headers = headers };
+        }
+
+        internal sealed class PinnedConnectionsUnavailableException : IOException
+        {
+            internal PinnedConnectionsUnavailableException()
+                : base("TuneIn blocked playback because secure connection pinning could not be initialized. "
+                    + "Update Emby Server or contact the TuneIn plugin maintainer.") { }
         }
 
         private sealed class ResponseStream : RadioReadStream

@@ -544,15 +544,19 @@ namespace MediaBrowser.Plugins.TuneIn
 
         internal string RebindOwned(ConfigurationSnapshot snapshot, string id)
         {
+            var entry = ResolveOwned(snapshot, id);
+            return Allowed(snapshot, entry) ? Register(snapshot, entry) : null;
+        }
+
+        internal NavigationEntry ResolveOwned(ConfigurationSnapshot snapshot, string id)
+        {
             var bytes = ReadSignedPayload(snapshot, id);
             if (bytes == null) throw new InvalidOperationException("Existing TuneIn item cannot be authenticated.");
             using (var stream = new MemoryStream(bytes))
             using (var reader = XmlReader.Create(stream, new XmlReaderSettings
             { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 4096 }))
             {
-                var document = XElement.Load(reader);
-                var entry = ReadEntry(document);
-                return Allowed(snapshot, entry) ? Register(snapshot, entry) : null;
+                return ReadEntry(XElement.Load(reader));
             }
         }
 

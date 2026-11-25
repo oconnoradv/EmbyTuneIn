@@ -742,31 +742,81 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     ExternalId = directory.Register(snapshot, new NavigationEntry
                     { Category = category, StationId = station, Name = name })
                 };
-            var library = DispatchProxy.Create<ILibraryManager, LibraryProxy>();
-            var proxy = (LibraryProxy)library;
-            proxy.Root = Folder(1, rootId);
-            proxy.Descendants = new[]
+            var root = Folder(2, rootId);
+            root.ParentId = 1;
+            var roots = new BaseItem[] { root };
+            var otherRoot = Folder(3, directory.Register(snapshot, new NavigationEntry { Category = "sports", Name = "Sports" }));
+            otherRoot.ParentId = 1;
+            var otherStation = Station("sports", "s3", "Other category");
+            var descendants = new[]
             {
                 Station("talk", "s1", "First"), Station("talk", "s1", "Duplicate listing"),
-                Station("talk", "s2", "Second"), Station("sports", "s3", "Other category")
+                Station("talk", "s2", "Second")
             };
-            var channel = new TuneInChannel(directory, library: library);
-            Assert.Equal(2, channel.CountCategoryStations(rootId, CancellationToken.None));
-            Assert.True(proxy.LastInventoryQuery.Recursive);
-            Assert.False(proxy.LastInventoryQuery.IsFolder);
-            Assert.Equal(TuneInStagedImport.MaxItems + 1, proxy.LastInventoryQuery.Limit);
+            InternalItemsQuery inventoryQuery = null;
+            var channels = new BaseItem[] { new Channel { InternalId = 1, Name = "TuneIn" } };
+            var library = new Moq.Mock<ILibraryManager>();
+            library.Setup(value => value.GetItemList(Moq.It.IsAny<InternalItemsQuery>(), Moq.It.IsAny<CancellationToken>()))
+                .Returns((InternalItemsQuery query, CancellationToken _) =>
+                {
+                    if (query.IncludeItemTypes?.Contains(nameof(Channel)) == true)
+                        return channels;
+                    Assert.Null(query.ExternalId);
+                    if (!query.Recursive)
+                    {
+                        Assert.Equal(new long[] { 1 }, query.ParentIds);
+                        return roots;
+                    }
+                    inventoryQuery = query;
+                    return descendants;
+                });
+            var channel = new TuneInChannel(directory, library: library.Object);
+            config.EnableSports = false;
+            var current = directory.Snapshot();
+            var currentRootId = directory.Register(current, new NavigationEntry { Category = "talk", Name = "Talk" });
+            Assert.NotEqual(rootId, currentRootId);
+            var currentRoot = Folder(4, currentRootId);
+            currentRoot.ParentId = 1;
+            roots = new BaseItem[] { root, otherRoot, currentRoot };
+            Assert.Equal(2, channel.CountCategoryStations(currentRootId, CancellationToken.None));
+            Assert.True(inventoryQuery.Recursive);
+            Assert.False(inventoryQuery.IsFolder);
+            Assert.Equal(new long[] { 2, 4 }, inventoryQuery.ParentIds);
+            Assert.Equal(TuneInStagedImport.MaxItems + 1, inventoryQuery.Limit);
             using var cancel = new CancellationTokenSource();
             cancel.Cancel();
-            Assert.Throws<OperationCanceledException>(() => channel.CountCategoryStations(rootId, cancel.Token));
+            Assert.Throws<OperationCanceledException>(() => channel.CountCategoryStations(currentRootId, cancel.Token));
             Assert.Throws<InvalidOperationException>(() =>
-                channel.CountCategoryStations(proxy.Descendants[0].ExternalId, CancellationToken.None));
+                channel.CountCategoryStations(directory.Register(current, new NavigationEntry
+                    { Category = "talk", StationId = "s1" }), CancellationToken.None));
 
-            proxy.Descendants = Enumerable.Repeat(proxy.Descendants[0], TuneInStagedImport.MaxItems + 1).ToArray();
-            Assert.Throws<InvalidOperationException>(() => channel.CountCategoryStations(rootId, CancellationToken.None));
-            proxy.Descendants = new BaseItem[] { new MediaBrowser.Controller.Entities.Audio.Audio { ExternalId = "stale" } };
-            Assert.Throws<InvalidOperationException>(() => channel.CountCategoryStations(rootId, CancellationToken.None));
-            proxy.Root = null;
-            Assert.Equal(0, channel.CountCategoryStations(rootId, CancellationToken.None));
+            config.TalkMode = "selected";
+            config.TalkIds.Add("g214");
+            var scoped = directory.Snapshot();
+            currentRootId = directory.Register(scoped, new NavigationEntry { Category = "talk", Name = "Talk" });
+            Assert.Null(directory.RebindOwned(scoped, descendants[0].ExternalId));
+            Assert.Equal(2, channel.CountCategoryStations(currentRootId, CancellationToken.None));
+
+            descendants = Enumerable.Repeat(descendants[0], TuneInStagedImport.MaxItems + 1).ToArray();
+            Assert.Throws<InvalidOperationException>(() => channel.CountCategoryStations(currentRootId, CancellationToken.None));
+            descendants = new BaseItem[] { new MediaBrowser.Controller.Entities.Audio.Audio { ExternalId = "stale" } };
+            Assert.Throws<InvalidOperationException>(() => channel.CountCategoryStations(currentRootId, CancellationToken.None));
+            descendants = new[] { otherStation };
+            Assert.Throws<InvalidOperationException>(() => channel.CountCategoryStations(currentRootId, CancellationToken.None));
+            descendants = Array.Empty<BaseItem>();
+            Assert.Equal(0, channel.CountCategoryStations(currentRootId, CancellationToken.None));
+            roots = Array.Empty<BaseItem>();
+            Assert.Throws<InvalidOperationException>(() => channel.CountCategoryStations(currentRootId, CancellationToken.None));
+            roots = new BaseItem[] { root, Folder(5, "unverified") };
+            Assert.Throws<InvalidOperationException>(() => channel.CountCategoryStations(currentRootId, CancellationToken.None));
+            roots = Enumerable.Repeat<BaseItem>(root, TuneInStagedImport.MaxFolders + 1).ToArray();
+            Assert.Throws<InvalidOperationException>(() => channel.CountCategoryStations(currentRootId, CancellationToken.None));
+            roots = new BaseItem[] { root };
+            channels = Array.Empty<BaseItem>();
+            Assert.Throws<InvalidOperationException>(() => channel.CountCategoryStations(currentRootId, CancellationToken.None));
+            channels = new BaseItem[] { new Channel { InternalId = 1, Name = "TuneIn" },
+                new Channel { InternalId = 6, Name = "TuneIn" } };
+            Assert.Throws<InvalidOperationException>(() => channel.CountCategoryStations(currentRootId, CancellationToken.None));
         }
 
         private static Folder Folder(long id, string externalId)

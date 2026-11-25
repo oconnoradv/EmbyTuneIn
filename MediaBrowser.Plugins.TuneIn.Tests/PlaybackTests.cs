@@ -109,6 +109,39 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             finally { listener.Stop(); }
         }
 
+        [Theory]
+        [InlineData("http")]
+        [InlineData("https")]
+        public async Task PlaybackFailsBeforeConnectingWhenPinningIsUnavailable(string scheme)
+        {
+            var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            try
+            {
+                var url = scheme + "://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port + "/";
+                var error = await Assert.ThrowsAsync<TuneInPlaybackHttp.PinnedConnectionsUnavailableException>(
+                    () => TuneInPlaybackHttp.SendAsync(
+                        new HttpRequestOptions { Url = url, CancellationToken = CancellationToken.None },
+                        address => IPAddress.IsLoopback(address), false));
+                Assert.Contains("connection pinning", error.Message);
+                Assert.False(listener.Pending());
+            }
+            finally { listener.Stop(); }
+        }
+
+        [Fact]
+        public async Task PinningFailureIsExplainedInPlaybackWarnings()
+        {
+            var fixture = new Fixture(Live);
+            fixture.Client.Setup(value => value.SendAsync(It.IsAny<HttpRequestOptions>(), "GET"))
+                .Throws(new TuneInPlaybackHttp.PinnedConnectionsUnavailableException());
+            var error = await Record.ExceptionAsync(() =>
+                fixture.Playback.GetSourcesAsync(fixture.Id, Host().Object, CancellationToken.None));
+            Assert.Contains("secure connection pinning", error.Message);
+            Assert.Contains(fixture.Warnings, warning => warning.Contains("secure connection pinning")
+                && warning.Contains("Update Emby Server"));
+        }
+
         [Fact]
         public async Task HttpClientPathRefusesHostnamesResolvingToNonPublicAddressesBeforeConnecting()
         {

@@ -1436,6 +1436,14 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             version.textContent = 'TuneIn plugin ' + status.PluginVersion;
             version.hidden = false;
         }
+        if (typeof status.PlaybackConnectionPinningAvailable === 'boolean') {
+            var playbackWarning = instance.view.querySelector('.playbackSecurityWarning');
+            var blocked = !status.PlaybackConnectionPinningAvailable;
+            feedbackMessage(playbackWarning, blocked
+                ? 'TuneIn blocked playback because secure connection pinning could not be initialized. Update Emby Server or contact the TuneIn plugin maintainer.'
+                : '', blocked);
+            playbackWarning.hidden = !blocked;
+        }
         renderArtworkPacks(instance, status);
         var refreshRequired = status.HasCompleteBaseline === false || !!status.RecoveryCategory || !!status.DirtyCategory ||
             status.State === 'NeverRun' && status.HasRefreshBeenStarted === false && !status.StartedUtc;

@@ -59,7 +59,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
         '.progressiveMaximumPasses': new Element('input') };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.allowDirectHlsPlayback', '.enableDiscoveryProgressiveImport', '.progressivePacing', '.categories', '.selectors',
         '.loginFields', '.globalFields', '.advancedFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
-        '.catalogRefreshPrompt', '.settingsChangeNotice', '.stationDeletionNotice', '.channelScheduleDialog', '.channelScheduleText',
+        '.catalogRefreshPrompt', '.settingsChangeNotice', '.stationDeletionNotice', '.playbackSecurityWarning', '.channelScheduleDialog', '.channelScheduleText',
         '.discoveryRiskDialog', '.discoveryRiskAccepted', '.discoveryRiskConfirm', '.discoveryRiskCancel', '.discoveryRiskUpgradeNotice', '.discoveryRiskPartialRequirement',
         '.tuneInAdvancedGuideLink', '.tuneInAdvancedGuide', '.tuneInAdvancedGuideClose',
         '.optionalChecksRun', '.optionalChecksStatus', '.optionalChecksMessage',
@@ -87,6 +87,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
         '.cleanupConfirm', '.cleanupCancel', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.cleanupScope', '.backupStart',
         '.backupStatus', '.cleanupBackupVerified', '.cleanupStationReference', '.cleanupStationFields', '.cleanupStationSearch', '.cleanupStationSearchStatus', '.cleanupStationResults', '#tuneInReportHint']) elements[name] = new Element();
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    elements['.playbackSecurityWarning'].hidden = true;
     const notice = html.match(/<p class="status settingsChangeNotice"[^>]*>([^<]+)<\/p>/);
     if (notice) elements['.settingsChangeNotice'].textContent = notice[1];
     elements['.settingsMessage'] = elements['.status'];
@@ -2312,6 +2313,23 @@ test('manual artwork checks cannot replace newer live lock or maintenance state'
     assert.equal(app.elements['.settingsLocked'].disabled, false);
     assert.equal(app.elements['.settingsLocked'].checked, true);
     assert.equal(app.elements['.globalFields'].disabled, true);
+});
+
+test('playback security warning appears only when pinning is unavailable', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ SettingsLocked: true, PlaybackConnectionPinningAvailable: false });
+    await visit;
+    const warning = app.elements['.playbackSecurityWarning'];
+    assert.equal(warning.hidden, false);
+    assert.match(warning.textContent, /blocked playback.*connection pinning.*Update Emby Server/);
+    assert.equal(warning.attributes['data-error'], 'true');
+    [...app.timers.values()][0].handler();
+    app.refresh[1].resolve({ SettingsLocked: true, PlaybackConnectionPinningAvailable: true });
+    await settle();
+    assert.equal(warning.hidden, true);
+    assert.equal(warning.textContent, '');
 });
 
 test('null and failed status reads discard a previously unlocked state until reconfirmed', async () => {

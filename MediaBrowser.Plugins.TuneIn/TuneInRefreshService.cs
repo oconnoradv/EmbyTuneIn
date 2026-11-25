@@ -138,6 +138,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 return pack;
             }).ToArray();
             var status = refresh.Status();
+            status.PlaybackConnectionPinningAvailable = TuneInPlaybackHttp.PinnedConnections;
             status.ChannelRegistered = refresh.ChannelRegistered();
             status.SettingsLocked = Plugin.Instance.SettingsLock.TryReadStatus();
             status.ArtworkChecksDeferred = deferred;

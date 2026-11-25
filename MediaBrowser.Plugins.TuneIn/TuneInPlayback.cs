@@ -364,6 +364,8 @@ namespace MediaBrowser.Plugins.TuneIn
                     if (timedOut || error is TimeoutException || error is OperationCanceledException)
                         throw new PlaybackTimeout("TuneIn playback network opening timed out.");
                     if (error is PlaybackFailure) throw;
+                    if (error is TuneInPlaybackHttp.PinnedConnectionsUnavailableException)
+                        throw new PlaybackFailure(error.Message);
                     if (error is HttpRequestException || error is IOException || error is InvalidDataException || error is WebException)
                         throw new PlaybackFailure("TuneIn playback network opening failed.");
                     throw;

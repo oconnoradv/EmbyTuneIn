@@ -14,8 +14,9 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 > [!WARNING]
 > The RC4 prerelease has been withdrawn and is not currently available as a
 > GitHub release. Manual testing has been completed except for discovery-time
-> imports. Back up Emby, including library metadata and TuneIn configuration,
-> before testing.
+> imports. Earlier RC4 packages do not include the connection-pinning fallback
+> fix in this source. Back up Emby, including library metadata and TuneIn
+> configuration, before testing.
 >
 > Discovery-time imports are experimental and off by default. Their optional
 > changed-token bridge can misidentify unrelated work; real-server testing of
@@ -380,7 +381,10 @@ time, progress, pages fetched and, during import, folders served.
 | In Emby | Distinct stations present in the category's Emby folder |
 | Not in latest discovery | Distinct Emby stations absent from the latest complete comparable discovery |
 
-Hover a count for its check time. Failed inventory checks show **last known**.
+Hover a count for its check time. Inventory counts authenticated station IDs
+under TuneIn's category folders, including entries from older settings snapshots.
+Missing or unverified folders and failed inventory checks show **Unavailable**
+or a **last known** count rather than zero.
 The comparison is unavailable when discovery is partial or limited, the inventory
 cannot be checked, or no comparable discovery is available. It does not imply
 that a station should be deleted.
@@ -737,6 +741,10 @@ The explicit **Allow direct HLS playback** option is an exception.
   to a public internet address. Loopback, private, link-local, multicast,
   reserved, documentation and embedded private (IPv4-mapped, 6to4) addresses
   are refused. This also covers redirects and DNS rebinding. No proxy is used.
+  If connection pinning cannot be initialized on the server runtime, relayed
+  playback fails instead of connecting without this protection. The server log
+  and TuneIn Control Panel explain the failure; update Emby Server or contact
+  the TuneIn plugin maintainer.
 - **Redirects** are followed manually (up to four). HTTPS can't downgrade to
   HTTP, and TuneIn API requests can't leave their origin.
 - **Direct HLS playback** lets Emby fetch HLS streams without these checks.
@@ -749,6 +757,15 @@ The explicit **Allow direct HLS playback** option is an exception.
   Shareable diagnostic packs use an allowlisted export rather than copying the
   private refresh log. Private logs/reports can contain server details and must
   be reviewed separately before sharing.
+
+### Security review and dependency checks
+
+On November 25, 2026, a code review identified a DNS-rebinding risk when
+connection pinning was unavailable; this source fails closed in that case.
+NuGet reported no known vulnerable packages in the plugin or test dependency
+graphs at the time. This is not a guarantee of security, a comprehensive
+NIST or CISA assessment, or a scan of Emby Server, FFmpeg or the host system.
+Keep those components updated and review their advisories separately.
 
 ## Limits and recovery
 

@@ -149,15 +149,29 @@ namespace MediaBrowser.Plugins.TuneIn
             var rootEntry = directory.Resolve(snapshot, folderId);
             if (rootEntry.StationId != null || rootEntry.SelectionId != null || rootEntry.Request != null)
                 throw new InvalidOperationException("TuneIn station counts require a category root.");
-            var roots = library.GetItemList(new InternalItemsQuery
+            var channels = library.GetItemList(new InternalItemsQuery { IncludeItemTypes = new[] { nameof(Channel) } }, token)
+                .OfType<Channel>().Where(item => item.Name == Name).ToArray();
+            if (channels.Length != 1) throw new InvalidOperationException("TuneIn channel is unavailable or ambiguous.");
+            var categoryRoots = library.GetItemList(new InternalItemsQuery
             {
-                ExternalId = folderId, IsFolder = true, Limit = 2
+                ParentIds = new[] { channels[0].InternalId }, Recursive = false, IsFolder = true,
+                Limit = TuneInStagedImport.MaxFolders + 1
             }, token);
-            if (roots.Length > 1) throw new InvalidOperationException("TuneIn category folder is ambiguous.");
-            if (roots.Length == 0) return new HashSet<string>(StringComparer.Ordinal);
+            if (categoryRoots.Length > TuneInStagedImport.MaxFolders)
+                throw new InvalidOperationException("TuneIn channel exceeds its root folder limit.");
+            var roots = new List<BaseItem>();
+            foreach (var root in categoryRoots)
+            {
+                token.ThrowIfCancellationRequested();
+                var category = TuneInDirectory.GeneratedCategory(snapshot, root.ExternalId, true);
+                if (!(root is Folder) || root.ParentId != channels[0].InternalId || category == null)
+                    throw new InvalidOperationException("TuneIn category folder cannot be authenticated.");
+                if (category == rootEntry.Category) roots.Add(root);
+            }
+            if (roots.Count == 0) throw new InvalidOperationException("TuneIn category folder was not found.");
             var items = library.GetItemList(new InternalItemsQuery
             {
-                ParentIds = new[] { roots[0].InternalId }, Recursive = true, IsFolder = false,
+                ParentIds = roots.Select(root => root.InternalId).ToArray(), Recursive = true, IsFolder = false,
                 Limit = TuneInStagedImport.MaxItems + 1
             }, token);
             if (items.Length > TuneInStagedImport.MaxItems)
@@ -166,9 +180,11 @@ namespace MediaBrowser.Plugins.TuneIn
             foreach (var item in items)
             {
                 token.ThrowIfCancellationRequested();
-                var entry = directory.Resolve(snapshot, item.ExternalId);
-                if (entry.Category == rootEntry.Category && entry.StationId != null)
-                    stations.Add(entry.StationId);
+                var entry = directory.ResolveOwned(snapshot, item.ExternalId);
+                if (!(item is MediaBrowser.Controller.Entities.Audio.Audio) || entry.Category != rootEntry.Category
+                    || !TuneInBrowsing.ValidStation(entry.StationId))
+                    throw new InvalidOperationException("TuneIn station inventory contains an unverified entry.");
+                stations.Add(entry.StationId);
             }
             directory.CheckCurrent(snapshot, token);
             return stations;

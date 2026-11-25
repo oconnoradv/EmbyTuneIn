@@ -73,6 +73,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public DateTime? LastProgressUtc { get; set; }
         public string Activity { get; set; }
         public string PluginVersion { get; set; } = PluginBuild.Display;
+        public bool? PlaybackConnectionPinningAvailable { get; set; }
         public string ArtworkFolder { get; set; }
         public int? ArtworkCards { get; set; }
         public string ArtworkPackName { get; set; }
