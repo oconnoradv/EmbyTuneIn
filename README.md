@@ -12,11 +12,12 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 > copy dependency DLLs into Emby's plugin folder.
 
 > [!WARNING]
-> The RC4 prerelease has been withdrawn and is not currently available as a
-> GitHub release. Manual testing has been completed except for discovery-time
-> imports. Earlier RC4 packages do not include the connection-pinning fallback
-> fix in this source. Back up Emby, including library metadata and TuneIn
-> configuration, before testing.
+> [RC4](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.4)
+> is a prerelease. Manual testing of the local test build has been completed.
+> Download the current release assets: earlier RC4 packages do not include the
+> connection-pinning fallback and inventory-count fixes. Back up Emby, including
+> library metadata and TuneIn configuration, before installing. Reload the
+> dashboard without its browser cache after updating.
 >
 > Discovery-time imports are experimental and off by default. Their optional
 > changed-token bridge can misidentify unrelated work; real-server testing of
