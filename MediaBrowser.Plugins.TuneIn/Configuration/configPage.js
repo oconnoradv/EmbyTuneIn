@@ -2500,6 +2500,36 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         });
     }
 
+    function stopPinnedHeader(instance) {
+        if (instance.headerObserver) instance.headerObserver.disconnect();
+        if (instance.headerResize) window.removeEventListener('resize', instance.headerResize);
+        instance.headerObserver = null;
+        instance.headerResize = null;
+        var header = instance.view.querySelector('.tuneInPinned');
+        if (header) {
+            header.setAttribute('data-pinned', 'false');
+            instance.view.style.setProperty('--tunein-header-height', '0px');
+        }
+    }
+
+    function watchPinnedHeader(instance) {
+        stopPinnedHeader(instance);
+        var header = instance.view.querySelector('.tuneInPinned');
+        if (!header || typeof ResizeObserver !== 'function') return;
+        var update = function () {
+            if (instance.headerResize !== update) return;
+            var height = header.getBoundingClientRect().height;
+            var pinned = height > 0 && height <= document.documentElement.clientHeight * .45;
+            header.setAttribute('data-pinned', String(pinned));
+            instance.view.style.setProperty('--tunein-header-height', pinned ? height + 'px' : '0px');
+        };
+        instance.headerResize = update;
+        instance.headerObserver = new ResizeObserver(update);
+        instance.headerObserver.observe(header);
+        window.addEventListener('resize', update);
+        update();
+    }
+
     function showLibraryArtwork(view) {
         var hero = view.querySelector('.tuneInHero');
         var art = hero && hero.querySelector('.tuneInHeroArt');
@@ -2517,6 +2547,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         var instance = this;
         var epoch = instance.viewEpoch = (instance.viewEpoch || 0) + 1;
         instance.refreshVisible = true;
+        watchPinnedHeader(instance);
         instance.diagnostics = { epoch: epoch, packs: [], latest: null, captureAvailable: false,
             repository: null, reportingError: null, storageError: null, hasStoredPacks: false,
             preview: null, previewVersion: 0, reviewVersion: 0,
@@ -2651,6 +2682,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
     View.prototype.onPause = function () {
         this.viewEpoch = (this.viewEpoch || 0) + 1;
         this.refreshVisible = false;
+        stopPinnedHeader(this);
         if (this.diagnostics) diagnosticsResetReview(this);
         var diagnosticsDialog = this.view.querySelector('.diagnosticsDeleteDialog');
         if (diagnosticsDialog.open) diagnosticsDialog.close();

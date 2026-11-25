@@ -118,7 +118,14 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
     help.getBoundingClientRect = () => ({ left: 100, right: 144, top: 100, bottom: 144, width: 44, height: 44 });
     helpPopup.getBoundingClientRect = () => ({ width: 300, height: 100 });
     help.style = { setProperty(name, value) { this[name] = value; } };
+    const viewport = { clientWidth: 800, clientHeight: 600 };
+    const resizeObservers = [];
+    const windowHandlers = new Map();
+    const header = elements['.tuneInPinned'] = new Element();
+    header.height = 200;
+    header.getBoundingClientRect = () => ({ height: header.height });
     const view = {
+        style: { setProperty(name, value) { this[name] = value; } },
         addEventListener(event, handler) { handlers[event] = handler; },
         querySelectorAll(selector) {
             return selector === '.tuneInHelp, .tuneInArtworkHelp' ? [help] : [];
@@ -243,13 +250,23 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
             const element = new Element(tag);
             if (tag === 'a') element.click = () => downloads.push({ href: element.href, filename: element.download });
             return element;
-        }, documentElement: { clientWidth: 800, clientHeight: 600 } },
+        }, documentElement: viewport },
+        ResizeObserver: class {
+            constructor(callback) { this.callback = callback; resizeObservers.push(this); }
+            observe(element) { this.element = element; }
+            disconnect() { this.disconnected = true; }
+        },
         Blob,
         URL: Object.assign(URL, {
             createObjectURL(blob) { downloads.push({ blob }); return 'blob:diagnostics'; },
             revokeObjectURL(url) { downloads.push({ revoked: url }); }
         }),
-        window: { open(url, target, features) {
+        window: {
+            addEventListener(event, handler) { windowHandlers.set(event, handler); },
+            removeEventListener(event, handler) {
+                if (windowHandlers.get(event) === handler) windowHandlers.delete(event);
+            },
+            open(url, target, features) {
             if (popupControl.throws) throw new Error('Opening a tab failed');
             if (popupControl.blocked) return null;
             const popup = { url, target, features, closed: false, close() { this.closed = true; } };
@@ -262,7 +279,8 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
     });
 
     return { instance: new PluginView(view), username, latLon, requestInterval, formHandlers, reads, writes, notices, errors, loader,
-        elements, selectors, enhanced, calls, handlers, help, helpSummary, refresh, locks, opens, cleanup, backup, artwork, optionalChecks, diagnostics, downloads, popups, popupControl, timers, scheduledTasks };
+        elements, selectors, enhanced, calls, handlers, help, helpSummary, refresh, locks, opens, cleanup, backup, artwork, optionalChecks, diagnostics, downloads, popups, popupControl, timers, scheduledTasks,
+        viewport, resizeObservers, windowHandlers, header };
 }
 
 function open(details) {
@@ -2039,6 +2057,51 @@ test('settings lock and accessible help stay in the pinned header, with version 
     assert.doesNotMatch(globalPanel, /class="settingsLocked"/);
     assert.equal((html.match(/class="settingsLocked"/g) || []).length, 1);
     assert.equal((html.match(/Manually unlock to edit saved settings/g) || []).length, 1);
+});
+
+test('header never creates an internal scroller when help or zoom exceeds its bounds', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const header = html.match(/\.tuneInPinned \{([^}]+)\}/)[1];
+    assert.match(header, /position: relative/);
+    assert.match(header, /overflow: visible/);
+    assert.doesNotMatch(header, /max-block-size|overflow-[xy]|overscroll-behavior/);
+    assert.match(html, /\.tuneInPinned\[data-pinned="true"\] \{\s*position: sticky/);
+    assert.match(html, /scroll-padding-block-start: var\(--tunein-header-height, 0px\)/);
+});
+
+test('header unpins long notices and short viewports, then resumes without stale layout observers', () => {
+    const app = harness();
+    app.instance.onResume();
+    const observer = app.resizeObservers[0];
+    assert.equal(observer.element, app.header);
+    assert.equal(app.header.attributes['data-pinned'], 'true');
+    assert.equal(app.instance.view.style['--tunein-header-height'], '200px');
+
+    app.header.height = 271;
+    observer.callback();
+    assert.equal(app.header.attributes['data-pinned'], 'false');
+    assert.equal(app.instance.view.style['--tunein-header-height'], '0px');
+    app.header.height = 270;
+    observer.callback();
+    assert.equal(app.header.attributes['data-pinned'], 'true');
+
+    app.viewport.clientHeight = 300;
+    app.windowHandlers.get('resize')();
+    assert.equal(app.header.attributes['data-pinned'], 'false');
+    app.instance.onPause();
+    assert.equal(observer.disconnected, true);
+    assert.equal(app.windowHandlers.has('resize'), false);
+
+    app.viewport.clientHeight = 800;
+    app.instance.onResume();
+    const replacement = app.resizeObservers[1];
+    assert.equal(app.header.attributes['data-pinned'], 'true');
+    app.header.height = 400;
+    observer.callback();
+    assert.equal(app.header.attributes['data-pinned'], 'true');
+    replacement.callback();
+    assert.equal(app.header.attributes['data-pinned'], 'false');
+    app.instance.onPause();
 });
 
 test('artwork preference respects the settings lock and unknown lock status', async () => {
