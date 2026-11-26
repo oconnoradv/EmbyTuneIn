@@ -30,6 +30,33 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         private const string Live = "https://radio.example/Live.AAC?Signature=AbC";
 
         [Fact]
+        public async Task PodcastShowResolvesOwnedEpisodeBeforeResolvingStream()
+        {
+            var fixture = new Fixture(Live, "podcast");
+            fixture.Config.PodcastEpisodeOrder = "Oldest";
+            var snapshot = fixture.Directory.Snapshot();
+            var id = fixture.Directory.Register(snapshot,
+                new NavigationEntry { Category = "podcast", StationId = "p1", PodcastShow = true });
+            var requests = new List<string>();
+            fixture.Client.Setup(client => client.SendAsync(It.IsAny<HttpRequestOptions>(), "GET"))
+                .Returns((HttpRequestOptions options, string _) =>
+                {
+                    options.CancellationToken.ThrowIfCancellationRequested();
+                    requests.Add(options.Url);
+                    return Task.FromResult(Text(options.Url.Contains("c=pbrowse")
+                        ? "<opml><body><outline key='topics'><outline type='audio' guide_id='t1' "
+                          + "URL='https://opml.radiotime.com/Tune.ashx?id=t1&amp;sid=p1'/>"
+                          + "<outline type='audio' guide_id='t2' URL='https://opml.radiotime.com/Tune.ashx?id=t2&amp;sid=p1'/>"
+                          + "</outline></body></opml>"
+                        : Live));
+                });
+            Assert.Equal(Live, Assert.Single(await fixture.Playback.ResolveStreamsAsync(id, CancellationToken.None)));
+            Assert.Equal(2, requests.Count);
+            Assert.Contains("id=t2", requests[1]);
+            Assert.Contains(fixture.Warnings, warning => warning.Contains("observed provider list order"));
+        }
+
+        [Fact]
         public async Task SynchronousStalledReadTimesOutAndDoesNotExposeAnAbandonedReadBuffer()
         {
             using var stream = new StalledSyncStream();

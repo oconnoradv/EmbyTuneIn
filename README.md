@@ -12,9 +12,9 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 > copy dependency DLLs into Emby's plugin folder.
 
 > [!WARNING]
-> [RC4.1](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.4.1)
-> is a prerelease. This release adds staged-import traversal gating; the exact
-> RC4.1 binary has not been validated against a live Emby server. Back up Emby,
+> [RC5](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.5)
+> is a prerelease. The exact RC5 binary has not been validated against a live
+> Emby server. Back up Emby,
 > including library metadata and TuneIn configuration, before installing.
 > Reload the dashboard without its browser cache after updating.
 >
@@ -82,7 +82,8 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 
 ## Install
 
-Build the source revision you intend to install using [Build and test](#build-and-test).
+Download the [RC5 prerelease](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.5),
+or build the source revision you intend to install using [Build and test](#build-and-test).
 A locally built Release DLL is written to
 `MediaBrowser.Plugins.TuneIn\bin\Release\netstandard2.0\MediaBrowser.Plugins.TuneIn.dll`.
 
@@ -97,7 +98,7 @@ A locally built Release DLL is written to
 
 ### Verify the installed version
 
-Beside **Global TuneIn Settings**, the Control Panel shows the running DLL's
+Beside **Settings**, the Control Panel shows the running DLL's
 assembly version. A short source commit is also shown when the build's
 informational version contains one. Compare this with the DLL you installed;
 an unexpected version can indicate that Emby is still loading an older copy.
@@ -175,7 +176,7 @@ not required.
   **Locked** (green) or **Unlocked** (red). Once settings have been saved,
   opening or reloading the control panel locks them; initial setup remains
   editable before the first save. Saving locks settings again; unlocking opens
-  TuneIn Station Filtering. The adjacent information icon explains the lock.
+  Station Filtering. The adjacent information icon explains the lock.
   Optional-check preferences also require
   manual unlocking and cannot change the lock themselves. Catalog refreshes
   (including scheduled refreshes), cleanup, **Backup Emby**, and artwork
@@ -187,12 +188,13 @@ not required.
   review. Expanding it opens **Audio Categories** and **Station Selections**;
   either group can then be collapsed independently.
   Saving changed filtering settings opens **Catalog Refresh**.
-  **TuneIn Library Refresh** stays expanded inside it; only the outer
-  Catalog Refresh section can be collapsed.
+  **Category Refresh** stays expanded inside it; only the outer
+  Catalog Refresh section can be collapsed. Its **Guidance** link explains its
+  scheduling and inventory counts.
 - The control-panel header and notices remain visible while scrolling when they
   fit within 45% of the viewport height. Longer notices and short or zoomed
   viewports use normal page scrolling instead, without a separate header scrollbar.
-  The plugin version appears beside Global TuneIn Settings.
+  The plugin version appears beside Settings.
 
 ### Browsing scope and upgrades
 
@@ -203,27 +205,29 @@ not required.
 - Configurations older than schema version 1 keep their username and
   coordinates but must be saved again to enable browsing.
 
-### Global settings
+### Settings and station filtering
 
-- **Hide the individual genre folders** hides genre shortcuts in Local Radio,
-  By Location, Talk, Sports and Podcasts. Music and By Language are unaffected.
+- **Hide the individual genre folders** in Settings hides genre shortcuts
+  in Local Radio, By Location, Talk, Sports and Podcasts. Music and By Language are unaffected.
 - **Import valid results when catalog entries are skipped** allows
   [partial results](#partial-results). On by default.
+
+**Max Station Count** (blank or 5–10,000; default 500) and **Traversal depth
+limit** (3–50; default 10) are in Settings. Their help controls
+describe how limits affect discovery and retained stations.
 
 ### Advanced settings
 
 **Advanced Settings** is collapsed by default.
 
 Settings are grouped by discovery, request pacing, import behavior, and
-playback and diagnostics. Select **Settings guide** beside the section heading
+playback and diagnostics. Select **Guidance** beside the section heading
 for an included plain-language explanation. Hover over an information icon or select it for
 details; press Escape to close it and return focus. Critical warnings remain visible.
 Defaults apply to new configurations; existing saved values are not replaced.
 
 | Setting | Range | Default |
 | --- | --- | --- |
-| Max Station Count (unique stations per top-level category) | blank (unlimited) or 5–10,000 | 500 for new configurations |
-| Traversal depth limit (category root is level 0) | 3–50 | 10 |
 | API request interval | 1–30 seconds | 3 |
 | Maximum rate-limit wait per refresh | 5–60 minutes | 15 |
 | Consecutive HTTP 429 retries | 0–10 | 6 |
@@ -283,7 +287,7 @@ and references such as playlists, favorites, history and other library links
 may still be affected. Emby writes library changes to its database; corruption
 has not been demonstrated, but database and broader server compatibility are
 unverified. Additional import passes can increase shared server load. The
-bridge may still fail if context is not carried. The exact RC4.1 binary has not
+bridge may still fail if context is not carried. The exact RC5 binary has not
 been validated against a live Emby server; changed-token behavior and traversal
 ordering remain to be verified on a real host.
 
@@ -383,7 +387,7 @@ time, progress, pages fetched and, during import, folders served.
 
 | Count | Meaning |
 | --- | --- |
-| Available (filtered) | Distinct stations found by the latest discovery |
+| Latest discovery (filtered) | Distinct stations found by the latest discovery |
 | In Emby | Distinct stations present in the category's Emby folder |
 | Not in latest discovery | Distinct Emby stations absent from the latest complete comparable discovery |
 
@@ -493,9 +497,10 @@ refreshes, local capture or download. This property does not change catalog IDs.
 
 ## Clean up the library
 
-**Maintenance → Clean Up Library Folders** removes TuneIn entries from Emby.
+**TuneIn Library Content Deletion** removes TuneIn entries from Emby.
 Cleanup can't be undone. **Backup Emby** starts the **Emby Server Backup**
 task, which needs Emby's **Backup & Restore** plugin; wait for it to succeed.
+The deletion section's **Guidance** link explains snapshot retention and recovery.
 
 1. Choose **All categories**, one category, or **One station entry** (search
    by name, or paste an Emby item ID or URL).
@@ -522,7 +527,8 @@ Legacy v1 packs cannot be uploaded and are not supported.
 
 ### Automatic artwork checks
 
-Expand the collapsed **Custom Artwork Packs** section to manage packs. The
+In **Settings**, expand the collapsed **Custom Artwork Packs** section to manage
+packs; its **Guidance** link describes installation. The
 **Upload Artwork Pack** and **Run Checks Now** buttons sit together, with
 **Skip automatic artwork pack status checks** and its information icon directly
 below. Activate the icon for details. The option controls only automatic scans
@@ -541,7 +547,9 @@ not require a catalog refresh or display a catalog-refresh reminder.
 The panel shows the last checked time. Use **Run checks now** for an immediate
 scan without unlocking, or leave automatic checks enabled to refresh status on
 the normal schedule. Manual artwork changes appear on the next scan or when
-checks are run on demand.
+checks are run on demand. **Run Checks Now** also performs a fresh artwork
+storage write, rename and delete check. Storage is an advisory checklist item;
+it does not block setup or catalog refresh.
 
 ### Upload and install
 
@@ -555,8 +563,15 @@ image count and server folder for each scope. Scroll the table horizontally to
 see long paths on narrower screens. Unlock settings before uploading;
 the server rejects uploads and installation while they are locked. Installation
 locks settings again. Select **Upload Artwork Pack**
-and choose a ZIP from the computer running the browser. Confirm **Verify pack**
-to upload it. Once the ZIP has been received, the upload request returns and
+and choose a ZIP from the computer running the browser. Confirm **Verify pack**.
+Before uploading, the plugin checks whether it can create, rename and remove a
+temporary file in the artwork root. If the check fails, the section header
+shows a warning and the dialog explains how to check the Emby service account's
+permissions and any read-only filesystem or container mount. Choose **Cancel**
+to stop or **Continue** to attempt the upload anyway. A successful check is
+only a point-in-time probe, not a guarantee that later installation will succeed;
+continuing does not bypass validation, scanning or installation safeguards.
+Once the ZIP has been received, the upload request returns and
 the server validates the entire archive and scans the staged files in the
 background; the page polls for progress and the confirmation. This avoids
 holding the upload response open during lengthy validation behind a reverse
@@ -722,6 +737,16 @@ client after the refresh if its tiles still show stale artwork or dimensions.
 
 ## Playback
 
+Podcast show links play one verified episode from TuneIn's available recent
+episodes, rather than exposing an episode browser. **Podcast episode order**
+in Settings defaults to **Latest**; choose **Oldest** or
+**Provider's ordering** instead. Oldest means the oldest in the returned list,
+not necessarily the show's full archive. Provider's ordering falls back to
+Latest when no explicit order is supplied. When publication dates are absent
+or incomplete, Latest uses the first and Oldest the last item in the observed
+provider listing order. TuneIn does not always supply full dates, so this
+fallback cannot guarantee chronology; the server logs a warning.
+
 By default, stations play through the plugin's server-loopback relay at
 `/TuneIn/Playback/{item}/{attempt}` rather than giving Emby the station URL.
 The explicit **Allow direct HLS playback** option is an exception.
@@ -775,6 +800,10 @@ Keep those components updated and review their advisories separately.
 
 ## Limits and recovery
 
+Future enhancement: investigate [additive stored-inventory verification](https://github.com/oconnoradv/EmbyTuneIn/issues/21)
+that preserves strict staged-folder traversal verification. Matching station IDs
+alone cannot prove the correct folders were imported.
+
 | Limit | Value |
 | --- | --- |
 | Catalog cache per refresh | 60,000 pages, 640 MiB |
@@ -822,6 +851,15 @@ Tests that replace process-wide artwork directories belong to the
 `Artwork globals` nonparallel collection, so other artwork readers cannot
 observe their temporary paths. Other test collections retain normal parallel
 execution.
+
+### Localization preparation
+
+The dashboard still displays English; translated catalogs are not yet shipped.
+Its dynamic message templates and known status labels in `configPage.js` use named
+placeholders and plural forms. A future translated catalog must use its own
+language's plural rules; displayed numbers and dates already use the host locale.
+Provider and server diagnostic text may remain English until the server exposes
+structured message identifiers.
 
 ### Live-server and accessibility checks
 

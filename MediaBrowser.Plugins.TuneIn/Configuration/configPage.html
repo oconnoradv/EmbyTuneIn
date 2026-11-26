@@ -6,10 +6,30 @@
                     var(--card-background-lightness, 50%) / var(--card-background-alpha, 0)));
             --tunein-neutral-border: color-mix(in srgb, currentColor 17%, transparent);
         }
+        .tuneInScreenReaderOnly {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
         .tuneInLoginRow {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
             gap: 1em;
+        }
+        .artworkStorageHeader:not(:empty) {
+            display: inline-block;
+            padding: .2em .45em;
+            border: 1px solid #806000;
+            border-radius: .25em;
+            background: #ffe9ad;
+            color: #382600;
+            font-size: .85em;
         }
         .loginFields {
             min-inline-size: 0;
@@ -48,15 +68,41 @@
         .tuneInAdvancedSettings[open] > summary {
             margin-block-end: 1em;
         }
-        .tuneInAdvancedGuideLink {
+        .tuneInAdvancedGuideLink, .tuneInGuideLink {
             display: inline-flex;
             align-items: center;
             min-block-size: 44px;
             margin-inline-start: auto;
             font-weight: normal;
+            font-size: 1rem;
             line-height: normal;
+            color: inherit;
+            text-decoration: underline;
         }
-        .tuneInRecoveryDialog.tuneInAdvancedGuide {
+        .tuneInAdvancedGuideLink:visited, .tuneInGuideLink:visited {
+            color: inherit;
+        }
+        .tuneInAdvancedGuideLink:focus-visible, .tuneInGuideLink:focus-visible {
+            outline: 2px solid currentColor;
+            outline-offset: 2px;
+        }
+        .tuneInGuideSummary {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0 .4em;
+            list-style: none;
+        }
+        .tuneInGuideSummary::-webkit-details-marker { display: none; }
+        .tuneInGuideSummary::before { content: '\25b6'; font-size: .75em; }
+        details[open] > .tuneInGuideSummary::before { content: '\25bc'; }
+        .tuneInLibraryRefreshHeading {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0 .4em;
+        }
+        .tuneInRecoveryDialog.tuneInAdvancedGuide, .tuneInRecoveryDialog.tuneInGuideDialog {
             box-sizing: border-box;
             inline-size: 68rem;
             max-inline-size: calc(100vw - 3rem);
@@ -192,6 +238,51 @@
             inline-size: 6ch;
             text-align: center;
         }
+        .tuneInPodcastOrderRow {
+            display: flex;
+            align-items: center;
+            gap: .2em;
+            min-inline-size: 0;
+        }
+        .tuneInPodcastSelect {
+            position: relative;
+            flex: 0 1 16rem;
+            inline-size: 16rem;
+            min-inline-size: 0;
+        }
+        .tuneInPodcastSelect .emby-select-wrapper,
+        .tuneInPodcastSelect select {
+            box-sizing: border-box;
+            inline-size: 100%;
+        }
+        .tuneInPodcastSelect select {
+            border: 1px solid currentColor;
+            border-radius: .2em;
+            color: inherit;
+            background: hsla(var(--input-background-hue, 0), var(--input-background-saturation, 0%),
+                var(--input-background-lightness, 100%), var(--button-background-alpha, 1));
+        }
+        .tuneInPodcastSelect select:disabled {
+            border-color: currentColor !important;
+        }
+        .tuneInPodcastSelect select:focus-visible {
+            outline: 2px solid currentColor !important;
+            outline-offset: 2px;
+        }
+        .tuneInPodcastSelect .selectLabel:empty,
+        .tuneInPodcastSelect .selectLabelText:empty {
+            display: none;
+        }
+        .tuneInPodcastOrderRow > .tuneInHelp {
+            flex: none;
+        }
+        .tuneInPartialImportWarning {
+            margin: .7em 0 .7em 1.25em;
+            padding: .8em 1em;
+            border-inline-start: .25em solid #d9822b;
+            border-radius: .25em;
+            background: color-mix(in srgb, #d9822b 14%, transparent);
+        }
         .tuneInRecoveryDialog {
             --tunein-dialog-background: hsl(var(--background-hue, 0), var(--background-saturation, 0%), var(--background-lightness, 100%));
             --tunein-dialog-text: hsl(var(--theme-text-color-hue, 0), var(--theme-text-color-saturation, 0%), var(--theme-text-color-lightness, 0%));
@@ -322,7 +413,8 @@
         }
         [data-controller="__plugin/tuneinjs"] [data-error="true"]:not(:empty):not([hidden]),
         [data-controller="__plugin/tuneinjs"] [role="alert"]:not(:empty):not([hidden]),
-        [data-controller="__plugin/tuneinjs"] .tuneInValidationError:not(:empty):not([hidden]) {
+        [data-controller="__plugin/tuneinjs"] .tuneInValidationError:not(:empty):not([hidden]),
+        [data-controller="__plugin/tuneinjs"] .tuneInDynamicNotice:not(:empty):not([hidden]) {
             padding: .55em .75em;
             border: 1px solid #8a6800;
             border-radius: .25em;
@@ -471,7 +563,7 @@
             overflow-wrap: anywhere;
         }
         .tuneInCleanupWarning {
-            border: 1px solid currentColor;
+            border: 1px solid var(--tunein-neutral-border);
             border-radius: .35em;
             padding: .85em 1em;
         }
@@ -498,6 +590,7 @@
         .cleanupStationMatch {
             text-align: left;
             margin: 0;
+            width: 100%;
             overflow-wrap: anywhere;
         }
         .cleanupStationMatch[aria-pressed="true"] {
@@ -508,15 +601,8 @@
             font-size: .85em;
             opacity: .75;
         }
-        .tuneInCleanupWarning {
-            border-width: 2px;
-            border-color: #b97820;
-            background: color-mix(in srgb, #b97820 10%, transparent);
-        }
-        .tuneInCleanupWarning > h3 {
-            margin-block: 0 .45em;
-        }
         .tuneInCleanupBackupWarning {
+            margin-inline-start: 1.25em;
             padding: .8em 1em;
             border-inline-start: .25em solid #d64545;
             border-radius: .25em;
@@ -554,7 +640,7 @@
             min-inline-size: 0;
             padding: 0;
         }
-        .tuneInRefresh > .tuneInSectionBox {
+        .tuneInRefresh > .tuneInSectionBox, .tuneInRefresh > .tuneInLibraryRefresh {
             margin-block-start: 1em;
         }
         .tuneInRefresh .refreshFailureLog, .tuneInRefresh .refreshPendingFolderText,
@@ -795,6 +881,14 @@
             margin: 0;
             min-width: 0;
         }
+        .tuneInFieldHeading > .emby-checkbox-label {
+            flex: 0 1 auto;
+            inline-size: fit-content;
+            max-inline-size: calc(100% - 44px - .2em);
+        }
+        .tuneInFieldHeading > .tuneInHelp {
+            flex: none;
+        }
         .tuneInAdvancedSettings .inputContainer {
             display: flex;
             align-items: center;
@@ -994,6 +1088,7 @@
                 <li><label><input class="readinessSavedCheck" type="checkbox" disabled><span class="readinessSaved"></span></label></li>
                 <li><label><input class="readinessChannelCheck" type="checkbox" disabled><span class="readinessChannel"></span></label></li>
                 <li><label><input class="readinessBaselineCheck" type="checkbox" disabled><span class="readinessBaseline"></span></label></li>
+                <li><span class="readinessArtwork">Advisory: Artwork storage has not been checked.</span></li>
             </ul>
             <p class="fieldDescription">These boxes reflect status automatically. Saving locks settings but does not start a refresh. Start the first refresh manually. Emby's Refresh Internet Channels task does not need to run first.</p>
         </section>
@@ -1022,15 +1117,16 @@
             </div>
             <p id="tuneInLockStatus" class="settingsLockStatus" role="status">Reading settings lock...</p>
             <p class="status playbackSecurityWarning" role="alert" hidden></p>
-            <p class="status settingsMessage" role="status" aria-live="polite"></p>
+            <p id="tuneInSettingsMessage" class="status settingsMessage" role="status" aria-live="polite"></p>
+            <span id="tuneInSettingFieldError" class="tuneInScreenReaderOnly"></span>
             <p class="status stationDeletionNotice" role="status" aria-live="polite" hidden></p>
             <p class="status catalogRefreshPrompt" role="status" hidden></p>
         </div>
         <form>
             <div class="tuneInSection tuneInSectionBox tuneInGlobalPanel">
             <details class="tuneInSection tuneInGlobal" open>
-                <summary class="globalSummary">Global TuneIn Settings</summary>
-                <fieldset class="globalFields" disabled aria-label="Global TuneIn Settings">
+                <summary class="globalSummary">Settings</summary>
+                <fieldset class="globalFields" disabled aria-label="Settings">
                     <fieldset class="loginFields" disabled>
                         <legend>TuneIn Favorites and Location</legend>
                         <div class="tuneInLoginRow">
@@ -1042,7 +1138,7 @@
                                 </details>
                                 </div>
                                 <input id="tuneInUsername" type="text" class="txtUsername" maxlength="128" aria-describedby="tuneInUsernameHint" />
-                                <p class="favoritesValidation fieldDescription tuneInValidationError" role="status" hidden></p>
+                                <p id="tuneInFavoritesValidation" class="favoritesValidation fieldDescription tuneInValidationError" role="status" hidden></p>
                             </div>
                             <div class="selectContainer">
                                 <div class="tuneInFieldHeading">
@@ -1056,7 +1152,7 @@
                                     <option value="regions">Saved cities and regions</option>
                                     <option value="coordinates">Coordinates</option>
                                 </select>
-                                <p class="localValidation fieldDescription tuneInValidationError" role="status" hidden></p>
+                                <p id="tuneInLocalValidation" class="localValidation fieldDescription tuneInValidationError" role="status" hidden></p>
                             </div>
                             <div class="inputContainer">
                                 <div class="tuneInFieldHeading">
@@ -1076,18 +1172,9 @@
                         <span>Enable TuneIn Station Filtering</span>
                     </label>
                     <details class="tuneInHelp"><summary aria-label="Help: station filtering">?</summary>
-                        <p class="fieldDescription" id="tuneInFilteringHint">Save Global TuneIn Settings to enable station filtering and catalog refreshes.</p>
+                        <p class="fieldDescription" id="tuneInFilteringHint">Save Settings to enable station filtering and catalog refreshes.</p>
                     </details>
                     </div>
-                    <div class="tuneInFieldHeading"><label class="emby-checkbox-label">
-                        <input type="checkbox" is="emby-checkbox" class="allowPartialCatalogImport" aria-describedby="tuneInPartialImportHint" />
-                        <span>Import Valid Results when catalog entries are skipped</span>
-                    </label>
-                    <details class="tuneInHelp"><summary aria-label="Help: partial imports">?</summary>
-                        <p class="fieldDescription" id="tuneInPartialImportHint">On by default. Retains saved entries where possible; otherwise excludes rejected entries.</p>
-                    </details>
-                    </div>
-                    <p class="fieldDescription">Warning: Skipped entries can represent whole branches. Results remain Partial. Unsafe destinations, request failures, cancellation and limits are not bypassed.</p>
                     <div class="tuneInFieldHeading"><label class="emby-checkbox-label">
                         <input type="checkbox" is="emby-checkbox" class="hideRegionalGenres" aria-describedby="tuneInRegionalGenresHint" />
                         <span>Hide the Individual Genre Folders</span>
@@ -1096,9 +1183,52 @@
                         <p class="fieldDescription" id="tuneInRegionalGenresHint">Hides genre shortcuts in Local Radio, By Location, Talk, Sports and Podcasts. The By Genre folder stays available where TuneIn provides it.</p>
                     </details>
                     </div>
+                    <div class="inputContainer">
+                        <label for="tuneInMaxStationCount">Max Station Count:</label>
+                        <input id="tuneInMaxStationCount" type="number" class="maxStationCount" min="5" max="10000" step="1" placeholder="Unlimited" aria-describedby="tuneInMaxStationCountHint" disabled />
+                        <details class="tuneInHelp"><summary aria-label="Help: Max Station Count">?</summary>
+                            <div class="fieldDescription" id="tuneInMaxStationCountHint">Per top-level category: 5 to 10000 unique TuneIn stations (default: 500). All Music genres share one counter; repeated placements count once. Leave blank for unlimited. This limits new discovery, not retained station totals.</div>
+                        </details>
+                    </div>
+                    <div class="inputContainer">
+                        <label for="tuneInTraversalDepthLimit">Traversal depth limit:</label>
+                        <input id="tuneInTraversalDepthLimit" type="number" class="traversalDepthLimit" min="3" max="50" step="1" required aria-describedby="tuneInTraversalDepthLimitHint" disabled />
+                        <details class="tuneInHelp"><summary aria-label="Help: traversal depth">?</summary>
+                            <div class="fieldDescription" id="tuneInTraversalDepthLimitHint">TuneIn levels: 3 to 50 (default: 10). The top-level category is level 0; every folder transition, including More Stations, adds one level. Additional depths allow traversing more stations, subject to Max Station Count. Reaching either limit still imports the limited discovery and retains existing entries allowed by saved filters. Retained deeper folders remain available; Emby import depth is not capped.</div>
+                        </details>
+                    </div>
+                    <div class="selectContainer">
+                        <label for="tuneInPodcastEpisodeOrder">Podcast episode order:</label>
+                        <div class="tuneInPodcastOrderRow">
+                        <div class="tuneInPodcastSelect">
+                        <select is="emby-select" id="tuneInPodcastEpisodeOrder" class="podcastEpisodeOrder" aria-describedby="tuneInPodcastEpisodeOrderHint" disabled>
+                            <option value="Latest">Latest</option>
+                            <option value="Oldest">Oldest</option>
+                            <option value="Provider">Provider's ordering</option>
+                        </select>
+                        </div>
+                        <details class="tuneInHelp"><summary aria-label="Help: podcast episode order">?</summary>
+                            <p class="fieldDescription" id="tuneInPodcastEpisodeOrderHint">Select an episode from the show's available recent episodes. Latest is the default. Provider's ordering falls back to Latest when no order is supplied. When dates are incomplete, Latest uses the first and Oldest the last episode in TuneIn's observed listing order; their chronology cannot be guaranteed.</p>
+                        </details>
+                        </div>
+                    </div>
+                    <div class="tuneInPartialImport">
+                        <div class="tuneInFieldHeading"><label class="emby-checkbox-label">
+                            <input type="checkbox" is="emby-checkbox" class="allowPartialCatalogImport" aria-describedby="tuneInPartialImportHint" />
+                            <span>Import Valid Results when catalog entries are skipped</span>
+                        </label>
+                        <details class="tuneInHelp"><summary aria-label="Help: partial imports">?</summary>
+                            <div class="fieldDescription" id="tuneInPartialImportHint">
+                                <p>On by default. Retains saved entries where possible; otherwise excludes rejected entries.</p>
+                                <p class="tuneInPartialImportWarning">Warning: Skipped entries can represent whole branches. Results remain Partial. Unsafe destinations, request failures, cancellation and limits are not bypassed.</p>
+                            </div>
+                        </details>
+                        </div>
+                    </div>
                 </fieldset>
                     <details class="tuneInArtworkPacks">
-                        <summary>Custom Artwork Packs</summary>
+                        <summary class="tuneInGuideSummary"><span>Custom Artwork Packs</span> <span class="artworkStorageHeader" role="status" aria-live="polite"></span><a href="#tuneInArtworkGuide" class="tuneInGuideLink tuneInArtworkGuideLink" aria-label="Artwork guidance">Guidance</a></summary>
+                        <p class="artworkStorageMessage" role="status" aria-live="polite"></p>
                         <div class="tuneInArtworkTableScroll" role="region" aria-label="Custom artwork packs table, scroll horizontally for server folders" tabindex="0">
                         <table aria-label="Custom artwork packs">
                             <thead><tr><th scope="col">Artwork</th><th scope="col">Installed pack</th><th scope="col">Images</th><th scope="col">Server folder</th></tr></thead>
@@ -1125,43 +1255,29 @@
                                 <span class="tuneInArtworkTooltip" id="tuneInOptionalChecksHint" role="tooltip">Skips only automatic artwork manifest/image-hash scans. Available after settings are saved and a new category refresh succeeds (existing installations need one; partial or limited results do not qualify). Results can be stale; automatic scans cache up to five minutes. Run Checks Now scans on demand. Other readiness, lock, registration, and installation-safety checks remain live.</span>
                             </details>
                         </div>
-                        <p class="optionalChecksUnlockHint" role="status" hidden>Unlock Settings to change this option. Changes are unavailable while refresh or maintenance work is active.</p>
+                        <p class="optionalChecksUnlockHint tuneInDynamicNotice" role="status" hidden>Unlock Settings to change this option. Changes are unavailable while refresh or maintenance work is active.</p>
                         <p class="optionalChecksMessage" role="status" aria-live="polite"></p>
                         <p class="optionalChecksStatus" role="status" aria-live="polite">Artwork checks have not run yet.</p>
                         <p class="artworkUploadMessage" role="status" aria-live="polite"></p>
-                        <details>
-                            <summary>Details &amp; installation</summary>
+                    </details>
+                        <dialog id="tuneInArtworkGuide" class="tuneInRecoveryDialog tuneInGuideDialog" aria-labelledby="tuneInArtworkGuideTitle">
+                            <h2 id="tuneInArtworkGuideTitle">Artwork Guidance</h2>
                             <figure class="tuneInArtworkSample">
                                <figcaption>Cartoon sample</figcaption>
                                <img src="https://raw.githubusercontent.com/oconnoradv/EmbyTuneInArt/main/docs/samples/cartoon.jpg" alt="Cartoon-style Punk, Smooth Jazz, Christmas Music and Classic Hip Hop genre artwork" loading="lazy" referrerpolicy="no-referrer">
                             </figure>
-                            <p>Customize artwork with a <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt/releases" target="_blank" rel="noopener noreferrer">pre-made pack</a> or use the <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt" target="_blank" rel="noopener noreferrer">EmbyTuneInArt tool</a> to build your own.</p>
-                            <p>Choose a ZIP on this computer. The server validates it and scans staged files with a supported local scanner when available. Review the pack and confirm before replacing the installed scope. If no scanner is available, explicit approval is required; scanner errors or threats block installation. Validation and scanning cannot guarantee malware-free images.</p>
-                            <p>After installation choose Refresh now or Later. Genre artwork can affect both Music and Language; other packs affect their corresponding enabled categories. Refreshes can be blocked by active work or readiness.</p>
-                            <p>Uploads require a flat ZIP containing only a strict <code>tunein-artwork.json</code> and the listed JPEG or PNG images, with matching IDs, counts and SHA256 hashes. Limits include 768 MiB per ZIP, 2 GiB expanded, 16 MiB per image and 4,096 pixels per dimension. The server needs its configured FFmpeg. See the README for the complete schema, limits, scanner requirements and troubleshooting.</p>
-                            <p>Manual installation remains available: place image files and optional <code>tunein-artwork.json</code> in the corresponding server folder above, then refresh affected categories. Uploads require the strict manifest and archive layout documented in the README; older packs may need regeneration.</p>
-                        </details>
-                    </details>
+                            <p>Download a <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt/releases" target="_blank" rel="noopener noreferrer">pre-made pack</a> or create a scope ZIP with <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneInArt" target="_blank" rel="noopener noreferrer">EmbyTuneInArt</a> using <code>-Pack</code>.</p>
+                            <p>Unlock settings, choose <strong>Upload Artwork Pack</strong> and select a compatible ZIP. The server validates and, when available, scans it. Review the result before confirming: installation replaces the entire artwork scope. If no scanner is available, explicit approval is required; scanner errors or threats block installation. Validation and scanning cannot guarantee malware-free images.</p>
+                            <p>After installation, choose Refresh now or Later. Genre artwork affects Music and Language; other packs affect their corresponding enabled categories. Refreshes may be blocked by active work or readiness.</p>
+                            <p>For manual installation, compatibility requirements and troubleshooting, see the <a is="emby-linkbutton" class="button-link" href="https://github.com/oconnoradv/EmbyTuneIn#artwork" target="_blank" rel="noopener noreferrer">artwork documentation</a>.</p>
+                            <button is="emby-button" type="button" class="raised button-submit tuneInArtworkGuideClose">Close guide</button>
+                        </dialog>
                 <fieldset class="globalFields advancedFields" disabled aria-label="Advanced TuneIn Settings">
                     <details class="tuneInAdvancedSettings">
-                        <summary><span>Advanced Settings</span> <a href="#tuneInAdvancedGuide" class="tuneInAdvancedGuideLink">Settings guide</a></summary>
+                        <summary><span>Advanced Settings</span> <a href="#tuneInAdvancedGuide" class="tuneInAdvancedGuideLink" aria-label="Advanced settings guidance">Guidance</a></summary>
                         <p class="fieldDescription">Advanced options affect discovery, imports, playback and diagnostics. Change them only when needed.</p>
                         <details>
                             <summary>Discovery limits</summary>
-                        <div class="inputContainer">
-                            <label for="tuneInMaxStationCount">Max Station Count:</label>
-                            <input id="tuneInMaxStationCount" type="number" class="maxStationCount" min="5" max="10000" step="1" placeholder="Unlimited" aria-describedby="tuneInMaxStationCountHint" disabled />
-                            <details class="tuneInHelp"><summary aria-label="Help: Max Station Count">?</summary>
-                                <div class="fieldDescription" id="tuneInMaxStationCountHint">Per top-level category: 5 to 10000 unique TuneIn stations (default: 500). All Music genres share one counter; repeated placements count once. Leave blank for unlimited. This limits new discovery, not retained station totals.</div>
-                            </details>
-                        </div>
-                        <div class="inputContainer">
-                            <label for="tuneInTraversalDepthLimit">Traversal depth limit:</label>
-                            <input id="tuneInTraversalDepthLimit" type="number" class="traversalDepthLimit" min="3" max="50" step="1" required aria-describedby="tuneInTraversalDepthLimitHint" disabled />
-                            <details class="tuneInHelp"><summary aria-label="Help: traversal depth">?</summary>
-                                <div class="fieldDescription" id="tuneInTraversalDepthLimitHint">TuneIn levels: 3 to 50 (default: 10). The top-level category is level 0; every folder transition, including More Stations, adds one level. Additional depths allow traversing more stations, subject to Max Station Count. Reaching either limit still imports the limited discovery and retains existing entries allowed by saved filters. Retained deeper folders remain available; Emby import depth is not capped.</div>
-                            </details>
-                        </div>
                         <div class="inputContainer">
                             <label for="tuneInDiscoveryDeadline">Discovery deadline (hours):</label>
                             <input id="tuneInDiscoveryDeadline" type="number" class="discoveryDeadlineHours" min="2" max="48" step="1" aria-describedby="tuneInDiscoveryDeadlineHint" required disabled />
@@ -1214,7 +1330,7 @@
                         </details>
                         </div>
                         <p id="tuneInDiscoveryImportWarning" class="fieldDescription">Experimental: enabling this option also enables a changed-token bridge. The traversal guard reduces false completion but does not establish request identity or guarantee server compatibility.</p>
-                        <p class="discoveryRiskUpgradeNotice fieldDescription" role="status" hidden>The experimental import safeguards and risk notice have changed. The bridge remains off until you accept the current notice. Accept it to keep discovery imports enabled; saving unchecked turns them off.</p>
+                        <p class="discoveryRiskUpgradeNotice fieldDescription tuneInDynamicNotice" role="status" hidden>The experimental import safeguards and risk notice have changed. The bridge remains off until you accept the current notice. Accept it to keep discovery imports enabled; saving unchecked turns them off.</p>
                         <div class="progressivePacing" hidden>
                             <div class="tuneInFieldHeading"><span>Discovery import pacing</span>
                             <details class="tuneInHelp"><summary aria-label="Help: discovery import pacing">?</summary>
@@ -1344,6 +1460,13 @@
                     <button is="emby-button" type="button" class="raised button-submit artworkVerifyStart">Verify pack</button>
                     <button is="emby-button" type="button" class="raised button-submit artworkVerifyCancel">Cancel</button>
                 </dialog>
+                <dialog class="tuneInRecoveryDialog artworkStorageDialog" aria-labelledby="artworkStorageTitle" aria-describedby="artworkStorageError">
+                    <h3 id="artworkStorageTitle">Artwork storage is unavailable</h3>
+                    <p id="artworkStorageError" class="artworkStorageError"></p>
+                    <p>Continuing may fail. Upload validation and scanning remain in effect.</p>
+                    <button is="emby-button" type="button" class="raised button-submit artworkStorageContinue">Continue</button>
+                    <button is="emby-button" type="button" class="raised button-submit artworkStorageCancel">Cancel</button>
+                </dialog>
                 <dialog class="tuneInRecoveryDialog artworkConfirmDialog" aria-labelledby="artworkConfirmTitle">
                     <h3 id="artworkConfirmTitle">Confirm artwork installation</h3>
                     <p class="artworkConfirmText"></p>
@@ -1364,7 +1487,7 @@
                 <p class="tuneInPluginVersion" hidden></p>
             </div>
             <details class="tuneInSection tuneInNeutralPanel" open>
-            <summary class="browsingSummary" id="tuneInBrowsingTitle">TuneIn Station Filtering</summary>
+            <summary class="browsingSummary" id="tuneInBrowsingTitle">Station Filtering</summary>
             <fieldset class="configurationFields" aria-labelledby="tuneInBrowsingTitle" disabled>
             <p>Choose categories and station selections for the TuneIn library.</p>
             <p class="fieldDescription">Choose All or Selected only for each browser category. Open a selector to browse TuneIn choices and add selections when Selected only is active.</p>
@@ -1386,9 +1509,10 @@
             </div>
         </form>
         <details class="tuneInSection tuneInNeutralPanel tuneInRefresh">
-            <summary class="refreshSummary"><span>Catalog Refresh</span> <span class="tuneInActivity refreshIndicator" role="status" hidden>Refreshing</span><span class="refreshSummaryState"></span><span class="refreshSummaryDetails"></span><span class="refreshOverall"></span></summary>
+            <summary class="refreshSummary"><span>Catalog Refresh</span> <span class="tuneInActivity refreshIndicator" hidden>Refreshing</span><span class="refreshSummaryState"></span><span class="refreshSummaryDetails"></span><span class="refreshOverall"></span></summary>
             <p>Checks the saved TuneIn categories and updates the Emby library when needed.</p>
-                <p class="refreshStatus" role="status">Reading refresh status...</p>
+                <p class="refreshStatus">Reading refresh status...</p>
+                <p class="tuneInScreenReaderOnly refreshAnnouncement" role="status" aria-live="polite"></p>
                 <dl class="refreshMetrics" aria-label="Current refresh metrics">
                     <div><dt>Elapsed</dt><dd class="refreshElapsed">-</dd></div>
                     <div><dt>Current work</dt><dd class="refreshWork">-</dd></div>
@@ -1400,14 +1524,18 @@
                 </div>
                 <p class="refreshQueueNote" role="status" hidden></p>
                 <p class="refreshError" role="alert"></p>
-            <section class="tuneInSectionBox tuneInLibraryRefresh" aria-labelledby="tuneInLibraryRefreshTitle">
-                <h3 class="libraryRefreshTitle" id="tuneInLibraryRefreshTitle">TuneIn Library Refresh</h3>
-                    <details>
-                        <summary>Usability Guidance</summary>
+            <section class="tuneInLibraryRefresh" aria-labelledby="tuneInLibraryRefreshTitle">
+                <div class="tuneInLibraryRefreshHeading">
+                    <h3 class="libraryRefreshTitle" id="tuneInLibraryRefreshTitle">Category Refresh</h3>
+                    <a href="#tuneInRefreshGuide" class="tuneInGuideLink tuneInRefreshGuideLink" aria-label="Category refresh guidance">Guidance</a>
+                </div>
+                    <dialog id="tuneInRefreshGuide" class="tuneInRecoveryDialog tuneInGuideDialog" aria-labelledby="tuneInRefreshGuideTitle">
+                        <h2 id="tuneInRefreshGuideTitle">Refresh Guidance</h2>
                         <p class="fieldDescription">Choose a refresh interval next to a category, then select Save above. Off keeps that category manual only. Schedules start after the first complete manual baseline.</p>
-                        <p class="fieldDescription">Distinct stations at the last category refresh. Available uses saved filters; Partial is a lower bound. In Emby checks the library and can show pre-import counts during discovery. On the first refresh, the shared import follows discovery; optional discovery-time imports may publish earlier. Not in latest discovery is unavailable for partial discoveries or failed inventory checks.</p>
-                    </details>
-                <p class="refreshCategoryNote" role="status"></p>
+                        <p class="fieldDescription">Distinct stations at the last category refresh. Latest discovery uses saved filters; Partial is a lower bound. In Emby checks the library and can show pre-import counts during discovery. On the first refresh, the shared import follows discovery; optional discovery-time imports may publish earlier. Not in latest discovery is unavailable for partial discoveries or failed inventory checks.</p>
+                        <button is="emby-button" type="button" class="raised button-submit tuneInRefreshGuideClose">Close guide</button>
+                    </dialog>
+                <p class="refreshCategoryNote tuneInDynamicNotice" role="status"></p>
                 <ul class="tuneInRefreshCategories" aria-label="Category refresh status"></ul>
             </section>
             <details class="tuneInSectionBox tuneInRefreshDetails">
@@ -1497,11 +1625,9 @@
             </dialog>
         </details>
         <details class="tuneInSection tuneInNeutralPanel">
-            <summary class="maintenanceSummary"><span>Maintenance</span> <span class="tuneInActivity maintenanceIndicator" role="status" hidden>Maintenance is active</span></summary>
+            <summary class="maintenanceSummary tuneInGuideSummary"><span>TuneIn Library Content Deletion</span> <span class="tuneInActivity maintenanceIndicator" role="status" hidden>Maintenance is active</span><a href="#tuneInDeletionGuide" class="tuneInGuideLink tuneInDeletionGuideLink" aria-label="Library content deletion guidance">Guidance</a></summary>
             <div class="tuneInCleanupWarning">
-                <h3>Clean Up Library Folders</h3>
                 <p>Cleanup removes generated folders and station entries from the Emby TuneIn channel; it does not remove the channel itself, settings, or media files.</p>
-                <p>For one category, compatible saved snapshots of other categories are retained. Refresh can recreate an enabled category; rebuilding it requires fresh discovery (configured limits apply) and may reconcile other categories from their saved snapshots. If multiple categories were cleaned, or no compatible baseline exists, Refresh all enabled categories may be required. Disable a category if it should stay absent.</p>
                 <p class="tuneInCleanupBackupWarning"><strong>Cleanup cannot be undone.</strong> Back up Emby and wait for a successful backup before removing any entries.</p>
                 <p>Playlists and other references may break.</p>
                 <label for="tuneInCleanupScope">Folders to remove</label>
@@ -1553,6 +1679,11 @@
                 <p class="cleanupError" role="alert"></p>
             </div>
         </details>
+        <dialog id="tuneInDeletionGuide" class="tuneInRecoveryDialog tuneInGuideDialog" aria-labelledby="tuneInDeletionGuideTitle">
+            <h2 id="tuneInDeletionGuideTitle">Deletion Guidance</h2>
+            <p>For one category, compatible saved snapshots of other categories are retained. Refresh can recreate an enabled category; rebuilding it requires fresh discovery (configured limits apply) and may reconcile other categories from their saved snapshots. If multiple categories were cleaned, or no compatible baseline exists, Refresh all enabled categories may be required. Disable a category if it should stay absent.</p>
+            <button is="emby-button" type="button" class="raised button-submit tuneInDeletionGuideClose">Close guide</button>
+        </dialog>
         </div>
         </div>
     </div>

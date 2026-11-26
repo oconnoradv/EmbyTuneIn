@@ -46,6 +46,7 @@ namespace MediaBrowser.Plugins.TuneIn.Configuration
         public int ProgressiveMinimumIntervalSeconds { get; set; } = 45;
         public int ProgressiveMaximumPasses { get; set; } = 100;
         public bool AllowDirectHlsPlayback { get; set; }
+        public string PodcastEpisodeOrder { get; set; } = "Latest";
         public List<CategoryRefreshSchedule> RefreshSchedules { get; set; } = new List<CategoryRefreshSchedule>();
         public int SchemaVersion { get; set; }
         public bool ConfigurationCompleted { get; set; }

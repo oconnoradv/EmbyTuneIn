@@ -181,6 +181,20 @@ namespace MediaBrowser.Plugins.TuneIn
                 else if (type == "link")
                 {
                     var url = TuneInDirectory.Attribute(row, "URL");
+                    if (TryPodcastShow(entry, row, url, out var show))
+                    {
+                        items.Add(new ChannelItemInfo
+                        {
+                            Id = directory.Register(snapshot, new NavigationEntry
+                            {
+                                Category = entry.Category, SelectionId = entry.SelectionId,
+                                TopicBranchKey = entry.TopicBranchKey, StationId = show, PodcastShow = true, Name = name
+                            }),
+                            Name = name, Type = ChannelItemType.Media, ContentType = ChannelMediaContentType.Podcast,
+                            MediaType = ChannelMediaType.Audio, ImageUrl = TuneInDirectory.Attribute(row, "image")
+                        });
+                        continue;
+                    }
                     if (TuneInDirectory.IsPlaybackLink(url)) continue;
                     var link = DirectoryRequest.ParseLink(url,
                         reason => session?.TrySkipCatalogLink(entry.Category, reason, request,
@@ -291,9 +305,12 @@ namespace MediaBrowser.Plugins.TuneIn
             if (entry.Category == "language" && ConfigurationSnapshot.ValidId(currentFilter, "language")
                 && ConfigurationSnapshot.ValidId(filter, "language") && filter != currentFilter)
                 return false;
-            if (entry.Category == "podcast" && (currentFilter == "p:topic" || filter == "p:topic")
-                && PodcastPaginationIds.TryGetValue(from, out var podcastCategory))
-                return to == podcastCategory && currentFilter == "p:topic" && filter == currentFilter;
+            if (entry.Category == "podcast" && (currentFilter == "p:topic" || filter == "p:topic"))
+            {
+                if (currentFilter != "p:topic" || filter != currentFilter) return false;
+                if (PodcastPaginationIds.TryGetValue(from, out var podcastCategory)) return to == podcastCategory;
+                return CanonicalPaginationIds.TryGetValue(from, out var canonicalTopic) && to == canonicalTopic;
+            }
             if (CanonicalPaginationIds.TryGetValue(from, out var canonical)) return canonical == to;
             // TuneIn pages a genre's More Stations/Shows under that genre's own category ID; refuse IDs owned by another genre.
             var languageSuffix = entry.Category == "language" && entry.SelectionId != null ? ":" + entry.SelectionId : "";
@@ -308,7 +325,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private static readonly Dictionary<string, string> PodcastPaginationIds = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["g3403"] = "c100001371", ["g3422"] = "c100000625", ["g3428"] = "c100000892",
-            ["g3429"] = "c100000887", ["g3430"] = "c100000886"
+            ["g3429"] = "c100000887", ["g3430"] = "c100000886", ["g2804"] = "c100000947"
         };
 
         // Known canonical category IDs for legacy genre IDs in Music, Talk and Sports, including when By Language reaches
@@ -460,6 +477,19 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
         internal static bool ValidStation(string value) => value != null && Regex.IsMatch(value, @"\A[spt][1-9][0-9]{0,9}\z");
+
+        private static bool TryPodcastShow(NavigationEntry entry, XElement row, string url, out string show)
+        {
+            show = null;
+            if (entry.Category != "podcast" || !TuneInDirectory.IsPlaybackLink(url)) return false;
+            var link = DirectoryRequest.ParseLink(url, _ => true, allowSkippingTune: true);
+            var id = link?.Parameters.GetValueOrDefault("id");
+            if (link?.Parameters.GetValueOrDefault("c") != "pbrowse" || id == null
+                || !Regex.IsMatch(id, @"\Ap[1-9][0-9]{0,9}\z")
+                || TuneInDirectory.Attribute(row, "guide_id") != id) return false;
+            show = id;
+            return true;
+        }
 
         internal static string CategoryName(string category)
         {

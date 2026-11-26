@@ -133,13 +133,16 @@ namespace MediaBrowser.Plugins.TuneIn
         private async Task<PlaybackPlan> ResolveAsync(ConfigurationSnapshot snapshot, string id, CancellationToken token)
         {
             var entry = Validate(snapshot, id);
-            var request = new DirectoryRequest { Method = "Tune.ashx" };
-            request.Parameters["id"] = entry.StationId;
-            request.Parameters["partnerid"] = "uD1X52pA";
-            request.Parameters["formats"] = "mp3,aac";
-            if (entry.Category == "presets") request.Parameters["username"] = snapshot.Value.Username;
             try
             {
+                var stationId = entry.PodcastShow
+                    ? await ResolvePodcastEpisodeAsync(entry.StationId, snapshot, token).ConfigureAwait(false)
+                    : entry.StationId;
+                var request = new DirectoryRequest { Method = "Tune.ashx" };
+                request.Parameters["id"] = stationId;
+                request.Parameters["partnerid"] = "uD1X52pA";
+                request.Parameters["formats"] = "mp3,aac";
+                if (entry.Category == "presets") request.Parameters["username"] = snapshot.Value.Username;
                 var playlist = await ReadPlaylistAsync(request.Url, snapshot, token).ConfigureAwait(false);
                 return await ExpandAsync(ParseUrls(playlist.Text, playlist.Url, provider: true), snapshot, 0,
                     new HashSet<string>(StringComparer.Ordinal) { playlist.Url.AbsoluteUri }, new int[1], token)
@@ -155,6 +158,60 @@ namespace MediaBrowser.Plugins.TuneIn
                 warning?.Invoke("TuneIn playback resolution failed: " + DescribeFailure(error));
                 throw;
             }
+        }
+
+        private async Task<string> ResolvePodcastEpisodeAsync(string showId, ConfigurationSnapshot snapshot, CancellationToken token)
+        {
+            var request = new DirectoryRequest { Method = "Tune.ashx" };
+            request.Parameters["c"] = "pbrowse";
+            request.Parameters["id"] = showId;
+            request.Parameters["partnerid"] = "uD1X52pA";
+            request.Parameters["formats"] = "mp3,aac";
+            var listing = await ReadPlaylistAsync(request.Url, snapshot, token).ConfigureAwait(false);
+            directory.CheckCurrent(snapshot, token);
+            var episode = SelectPodcastEpisode(listing.Text, showId, snapshot.Value.PodcastEpisodeOrder, out var inferred);
+            if (inferred)
+                warning?.Invoke("TuneIn podcast episode dates are incomplete; playback uses the observed provider list order.");
+            return episode;
+        }
+
+        internal static string SelectPodcastEpisode(string listing, string showId, string order, out bool inferred)
+        {
+            inferred = false;
+            var document = TuneInDirectory.ParseCatalogue(Encoding.UTF8.GetBytes(listing));
+            var sections = document.Root.Element("body").Elements("outline")
+                .Where(section => TuneInDirectory.Attribute(section, "key") == "topics").ToArray();
+            var rows = sections.SelectMany(section => section.Descendants("outline"))
+                .Where(row => TuneInDirectory.Attribute(row, "type") == "audio")
+                .Select(row =>
+                {
+                    var episode = TuneInDirectory.Attribute(row, "guide_id");
+                    var url = TuneInDirectory.Attribute(row, "URL");
+                    if (episode == null || !System.Text.RegularExpressions.Regex.IsMatch(episode, @"\At[1-9][0-9]{0,9}\z")
+                        || !TuneInDirectory.IsPlaybackLink(url)) return null;
+                    var link = DirectoryRequest.ParseLink(url, _ => true, allowSkippingTune: true);
+                    if (link == null || link.Parameters.GetValueOrDefault("id") != episode
+                        || link.Parameters.GetValueOrDefault("sid") != showId) return null;
+                    var text = TuneInDirectory.Attribute(row, "published") ?? TuneInDirectory.Attribute(row, "date");
+                    DateTimeOffset date = default;
+                    var hasDate = text != null && DateTimeOffset.TryParseExact(text,
+                        new[] { "yyyy-MM-dd", "yyyy-MM-dd'T'HH:mm:ssK", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK", "r" },
+                        CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out date);
+                    return new { Id = episode, Date = hasDate ? (DateTimeOffset?)date : null };
+                }).Where(row => row != null).ToArray();
+            if (rows.Length == 0) throw new InvalidDataException("TuneIn podcast show returned no verified playable episodes.");
+            if (order == "Provider")
+            {
+                var providerOrder = sections.Length == 1 ? TuneInDirectory.Attribute(sections[0], "order") : null;
+                if (new[] { "asc", "desc", "oldest", "latest", "provider" }.Contains(providerOrder, StringComparer.OrdinalIgnoreCase))
+                    return rows[0].Id;
+                order = "Latest";
+            }
+            if (rows.All(row => row.Date.HasValue))
+                return (order == "Oldest" ? rows.OrderBy(row => row.Date.Value)
+                    : rows.OrderByDescending(row => row.Date.Value)).First().Id;
+            inferred = true;
+            return order == "Oldest" ? rows[rows.Length - 1].Id : rows[0].Id;
         }
 
         private async Task<PlaybackPlan> ExpandAsync(List<string> urls, ConfigurationSnapshot snapshot, int depth,

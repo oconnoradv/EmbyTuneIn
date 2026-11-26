@@ -28,7 +28,7 @@ class Element {
         this.disabled = false;
         this._text = '';
     }
-    set textContent(value) { this._text = value; this.childNodes = []; }
+    set textContent(value) { this._text = value; this.childNodes = []; this.textWrites = (this.textWrites || 0) + 1; }
     get textContent() { return this._text + this.childNodes.map(child => child.textContent).join(''); }
     appendChild(child) { this.childNodes.push(child); child.parentNode = this; return child; }
     setAttribute(name, value) { this.attributes[name] = value; }
@@ -42,7 +42,7 @@ class Element {
     descendants() { return this.childNodes.flatMap(child => [child, ...child.descendants()]); }
 }
 
-function harness(manualStatus = false, manualSave = false, manualBackup = false, manualOpen = false, manualDiagnostics = false, manualAcknowledgement = false) {
+function harness(manualStatus = false, manualSave = false, manualBackup = false, manualOpen = false, manualDiagnostics = false, manualAcknowledgement = false, transformSource = source => source) {
     const handlers = {};
     const formHandlers = {};
     const username = new Element('input');
@@ -53,24 +53,29 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
         '.apiRequestIntervalSeconds': requestInterval, '.importDeadlineHours': new Element('input'),
         '.maximumRateLimitWaitMinutes': new Element('input'), '.maximumConsecutiveRateLimitRetries': new Element('input'),
         '.discoveryDeadlineHours': new Element('input'), '.maxStationCount': new Element('input'),
-        '.traversalDepthLimit': new Element('input'),
+        '.traversalDepthLimit': new Element('input'), '.podcastEpisodeOrder': new Element('select'),
         '.progressiveFirstEntries': new Element('input'), '.progressiveMinimumNewEntries': new Element('input'),
         '.progressiveMinimumGrowthPercent': new Element('input'), '.progressiveMinimumIntervalSeconds': new Element('input'),
         '.progressiveMaximumPasses': new Element('input') };
     for (const name of ['.localSource', '.configurationCompleted', '.hideRegionalGenres', '.allowPartialCatalogImport', '.enableCatalogIdentityDiagnostics', '.allowDirectHlsPlayback', '.enableDiscoveryProgressiveImport', '.progressivePacing', '.categories', '.selectors',
-        '.loginFields', '.globalFields', '.advancedFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshError',
+        '.loginFields', '.globalFields', '.advancedFields', '.configurationFields', '.button-submit', '.status', '.refreshStatus', '.refreshAnnouncement', '.refreshError',
         '.catalogRefreshPrompt', '.settingsChangeNotice', '.stationDeletionNotice', '.playbackSecurityWarning', '.channelScheduleDialog', '.channelScheduleText',
         '.discoveryRiskDialog', '.discoveryRiskAccepted', '.discoveryRiskConfirm', '.discoveryRiskCancel', '.discoveryRiskUpgradeNotice', '.discoveryRiskPartialRequirement',
         '.tuneInAdvancedGuideLink', '.tuneInAdvancedGuide', '.tuneInAdvancedGuideClose',
+        ...['Artwork', 'Refresh', 'Deletion'].flatMap(name => [
+            `.tuneIn${name}GuideLink`, `#tuneIn${name}Guide`, `.tuneIn${name}GuideClose`
+        ]),
         '.optionalChecksRun', '.optionalChecksStatus', '.optionalChecksMessage',
         '.optionalChecksUnlockHint', '.skipOptionalChecks',
         '.tuneInReadiness', '.readinessFiltering', '.readinessCategory', '.readinessRequirements',
-        '.readinessSaved', '.readinessChannel', '.readinessBaseline',
+        '.readinessSaved', '.readinessChannel', '.readinessBaseline', '.readinessArtwork',
         ...['Filtering', 'Category', 'Requirements', 'Saved', 'Channel', 'Baseline'].map(name => `.readiness${name}Check`),
         '.favoritesValidation', '.localValidation',
         '.channelScheduleConfirm', '.channelScheduleAdjust', '.tuneInPluginVersion',
         '.artworkFile', '.artworkUpload', '.artworkUploadMessage', '.artworkVerifyDialog', '.artworkVerifyText',
-        '.artworkVerifyStart', '.artworkVerifyCancel', '.artworkConfirmDialog', '.artworkConfirmText', '.artworkConfirmError',
+        '.artworkVerifyStart', '.artworkVerifyCancel', '.artworkStorageHeader', '.artworkStorageMessage',
+        '.artworkStorageDialog', '.artworkStorageError', '.artworkStorageContinue', '.artworkStorageCancel',
+        '.artworkConfirmDialog', '.artworkConfirmText', '.artworkConfirmError',
         '.artworkUnscannedLabel', '.artworkApproveUnscanned', '.artworkInstall', '.artworkDiscard',
         '.artworkRefreshDialog', '.artworkRefreshText', '.artworkRefreshNow', '.artworkRefreshLater',
         ...['Genres', 'Languages', 'Locations', 'Categories'].flatMap(scope =>
@@ -85,7 +90,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
         '.settingsLockState', '.settingsLockStatus', '.refreshQueueNote', '.tuneInRefreshRecoveryDialog', '.refreshRecoveryText',
         '.refreshResumeFirst', '.refreshNewFirst', '.cleanupStatus', '.cleanupError', '.cleanupPreview',
         '.cleanupConfirm', '.cleanupCancel', '.cleanupBack', '.cleanupConfirmation', '.cleanupPreviewText', '.cleanupScope', '.backupStart',
-        '.backupStatus', '.cleanupBackupVerified', '.cleanupStationReference', '.cleanupStationFields', '.cleanupStationSearch', '.cleanupStationSearchStatus', '.cleanupStationResults', '#tuneInReportHint']) elements[name] = new Element();
+        '.backupStatus', '.cleanupBackupVerified', '.cleanupStationReference', '.cleanupStationFields', '.cleanupStationSearch', '.cleanupStationSearchStatus', '.cleanupStationResults', '#tuneInReportHint', '#tuneInSettingFieldError']) elements[name] = new Element();
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     elements['.playbackSecurityWarning'].hidden = true;
     const notice = html.match(/<p class="status settingsChangeNotice"[^>]*>([^<]+)<\/p>/);
@@ -106,7 +111,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
     elements['.tuneInSettingsSave'] = elements['.button-submit'];
     for (const [summary, text, indicator] of [
         ['.refreshSummary', 'Catalog Refresh', '.refreshIndicator'],
-        ['.maintenanceSummary', 'Maintenance', '.maintenanceIndicator']
+        ['.maintenanceSummary', 'TuneIn Library Content Deletion', '.maintenanceIndicator']
     ]) {
         const title = elements[summary].appendChild(new Element('span'));
         title.textContent = text + ' ';
@@ -162,6 +167,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
     const cleanup = [];
     const backup = [];
     const artwork = [];
+    const artworkStorage = { responses: [], calls: 0 };
     const optionalChecks = [];
     const diagnostics = [];
     const downloads = [];
@@ -223,6 +229,10 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
                 if (!manualAcknowledgement) request.resolve({ Token: 'test-risk-token' });
             }
             else if (options.url.route === 'TuneIn/OptionalChecks/Preference') optionalChecks.push({ options, ...request });
+            else if (options.url.route === 'TuneIn/Artwork/CheckStorage') {
+                artworkStorage.calls++;
+                request.resolve(artworkStorage.responses.shift() || { Writable: true, Message: 'Artwork storage is writable.' });
+            }
             else if (options.url.route.startsWith('TuneIn/Artwork/')) artwork.push({ options, ...request });
             else if (options.url.route.startsWith('TuneIn/Cleanup/')) cleanup.push({ options, ...request });
             else if (options.url.route.startsWith('TuneIn/Backup/')) {
@@ -254,7 +264,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
         return element;
     }, documentElement: viewport, activeElement: null };
     Object.values(elements).forEach(element => { element.ownerDocument = document; });
-    vm.runInNewContext(fs.readFileSync(path.join(configDir, 'configPage.js'), 'utf8'), {
+    vm.runInNewContext(transformSource(fs.readFileSync(path.join(configDir, 'configPage.js'), 'utf8')), {
         define(dependencies, factory) {
             assert.equal(dependencies[0], 'baseView');
             PluginView = factory(BaseView, loader, element => ({ trigger(event) { enhanced.push({ element, event }); } }));
@@ -296,7 +306,7 @@ function harness(manualStatus = false, manualSave = false, manualBackup = false,
     });
 
     return { instance: new PluginView(view), username, latLon, requestInterval, formHandlers, reads, writes, notices, errors, loader,
-        elements, selectors, enhanced, calls, handlers, help, helpSummary, refresh, locks, opens, cleanup, backup, artwork, optionalChecks, diagnostics, downloads, popups, popupControl, timers, scheduledTasks,
+        elements, selectors, enhanced, calls, handlers, help, helpSummary, refresh, locks, opens, cleanup, backup, artwork, artworkStorage, optionalChecks, diagnostics, downloads, popups, popupControl, timers, scheduledTasks,
         viewport, resizeObservers, windowHandlers, header };
 }
 
@@ -692,7 +702,7 @@ test('Catalog Refresh uses the native submit theme for its actions and inherits 
 test('main settings, refresh, and maintenance share one width container', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     assert.match(html, /<div class="tuneInWorkspace">\s*<section class="tuneInReadiness"[\s\S]*?<\/section>\s*<div class="auto-center tuneInPanelLayout">\s*<div class="tuneInPinned"[^>]*>[\s\S]*?<div class="tuneInHero" hidden>[\s\S]*?<\/div>\s*<form>[\s\S]*?<\/form>\s*<details class="tuneInSection tuneInNeutralPanel tuneInRefresh"/);
-    assert.match(html, /<\/details>\s*<details class="tuneInSection tuneInNeutralPanel">\s*<summary class="maintenanceSummary">/);
+    assert.match(html, /<\/details>\s*<details class="tuneInSection tuneInNeutralPanel">\s*<summary class="maintenanceSummary tuneInGuideSummary">/);
     assert.match(html, /\.tuneInWorkspace\s*\{[^}]*max-width:\s*80ch/);
     assert.match(html, /\[data-controller="__plugin\/tuneinjs"\]\s*>\s*\.scrollSlider\s*\{[^}]*position:\s*relative/);
     assert.match(html, /\.tuneInActivity\s*\{[^}]*animation:\s*tuneInActivityPulse/);
@@ -941,14 +951,16 @@ test('Local Radio retains the Emby select and an aligned, focusable field outlin
     assert.match(html, /\.tuneInLoginRow \.selectLabelText:empty\s*\{[^}]*display:\s*none/s);
 });
 
-test('cleanup guidance and highlighted backup warning are visible without help', () => {
+test('deletion safety warnings stay visible while detailed guidance is separate', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     const section = html.slice(html.indexOf('<div class="tuneInCleanupWarning">'), html.indexOf('<label for="tuneInCleanupScope">'));
-    assert.match(section, /<h3>Clean Up Library Folders<\/h3>\s*<p>Cleanup removes generated folders/);
-    assert.match(section, /<p>For one category, compatible saved snapshots[\s\S]*?Disable a category if it should stay absent\.<\/p>/);
-    assert.doesNotMatch(section, /<details|Help: library cleanup/);
+    assert.match(section, /<p>Cleanup removes generated folders/);
+    assert.match(html, /<dialog id="tuneInDeletionGuide"[\s\S]*?For one category, compatible saved snapshots[\s\S]*?Disable a category if it should stay absent\.[\s\S]*?<\/dialog>/);
+    assert.match(section, /Playlists and other references may break/);
     assert.match(section, /<p class="tuneInCleanupBackupWarning"><strong>Cleanup cannot be undone\.<\/strong> Back up Emby and wait for a successful backup before removing any entries\.<\/p>/);
-    assert.match(html, /\.tuneInCleanupBackupWarning\s*\{[^}]*border-inline-start:\s*\.25em solid #d64545;[^}]*background:\s*color-mix\(in srgb, #d64545 12%, transparent\)/s);
+    assert.match(html, /\.tuneInCleanupBackupWarning\s*\{[^}]*margin-inline-start:\s*1\.25em;[^}]*border-inline-start:\s*\.25em solid #d64545;[^}]*background:\s*color-mix\(in srgb, #d64545 12%, transparent\)/s);
+    assert.match(html, /\.tuneInCleanupWarning\s*\{[^}]*border:\s*1px solid var\(--tunein-neutral-border\)/);
+    assert.doesNotMatch(html, /\.tuneInCleanupWarning\s*\{[^}]*(#b97820|background:)/);
 });
 
 test('error feedback uses a theme-independent highlight for explicit and inline errors', () => {
@@ -956,7 +968,17 @@ test('error feedback uses a theme-independent highlight for explicit and inline 
     assert.match(html, /\[data-error="true"\]:not\(:empty\):not\(\[hidden\]\)/);
     assert.match(html, /\[role="alert"\]:not\(:empty\):not\(\[hidden\]\)/);
     assert.match(html, /\.tuneInValidationError:not\(:empty\):not\(\[hidden\]\)/);
+    assert.match(html, /\.tuneInDynamicNotice:not\(:empty\):not\(\[hidden\]\)/);
+    assert.match(html, /class="optionalChecksUnlockHint tuneInDynamicNotice" role="status" hidden/);
+    assert.match(html, /class="refreshCategoryNote tuneInDynamicNotice" role="status"/);
     assert.match(html, /background: #fff2a8;\s*color: #332900;/);
+});
+
+test('header guidance links inherit theme text color and show focus', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /\.tuneInAdvancedGuideLink, \.tuneInGuideLink\s*\{[^}]*color:\s*inherit;[^}]*text-decoration:\s*underline/);
+    assert.match(html, /\.tuneInAdvancedGuideLink:visited, \.tuneInGuideLink:visited\s*\{[^}]*color:\s*inherit/);
+    assert.match(html, /\.tuneInAdvancedGuideLink:focus-visible, \.tuneInGuideLink:focus-visible\s*\{[^}]*outline:\s*2px solid currentColor/);
 });
 
 test('save retains unrelated configuration and converts empty fields to null', async () => {
@@ -1037,7 +1059,19 @@ test('API request interval validates and saves the shared catalog pacing setting
         app.formHandlers.submit({ preventDefault() {} });
         assert.equal(app.writes.length, 0);
         assert.match(app.elements['.status'].textContent, /whole number from 1 to 30/);
+        assert.equal(app.requestInterval.attributes['aria-invalid'], 'true');
+        assert.equal(app.requestInterval.attributes['aria-errormessage'], 'tuneInSettingFieldError');
+        assert.match(app.elements['#tuneInSettingFieldError'].textContent, /whole number from 1 to 30/);
+        assert.equal(app.requestInterval.focused, true);
     }
+    app.requestInterval.validity = { valid: false };
+    app.formHandlers.input({ target: app.requestInterval });
+    assert.equal(app.requestInterval.attributes['aria-invalid'], 'true');
+    app.requestInterval.value = '3';
+    app.requestInterval.validity.valid = true;
+    app.formHandlers.input({ target: app.requestInterval });
+    assert.equal(app.requestInterval.attributes['aria-invalid'], undefined);
+    assert.equal(app.elements['#tuneInSettingFieldError'].textContent, '');
     for (const value of [1, 30]) {
         const toggle = app.elements['.settingsLocked'];
         if (toggle.checked) {
@@ -1047,6 +1081,7 @@ test('API request interval validates and saves the shared catalog pacing setting
         app.requestInterval.value = String(value);
         app.formHandlers.submit({ preventDefault() {} });
         assert.equal(app.writes.at(-1).config.ApiRequestIntervalSeconds, value);
+        assert.equal(app.requestInterval.attributes['aria-invalid'], undefined);
         await settle();
     }
     assert.equal(app.writes.length, 2);
@@ -1161,9 +1196,12 @@ test('station maintenance finds entries by name and previews the chosen placemen
     assert.equal(matches.length, 2);
     assert.equal(matches[0].textContent, 'KQED <b>Talk › News');
     assert.equal(app.elements['.cleanupPreview'].disabled, true);
-    matches[1].handlers.click();
-    assert.equal(matches[1].attributes['aria-pressed'], 'true');
-    assert.equal(matches[0].attributes['aria-pressed'], 'false');
+    assert.equal(matches[0].attributes.role, 'listitem');
+    const buttons = matches.map(item => item.childNodes[0]);
+    assert.equal(buttons[0].attributes.role, undefined);
+    buttons[1].handlers.click();
+    assert.equal(buttons[1].attributes['aria-pressed'], 'true');
+    assert.equal(buttons[0].attributes['aria-pressed'], 'false');
     assert.equal(app.elements['.cleanupPreview'].disabled, false);
     const preview = app.elements['.cleanupPreview'].handlers.click();
     assert.deepEqual(JSON.parse(app.cleanup[1].options.data), { StationReference: '32' });
@@ -1282,7 +1320,7 @@ test('advanced settings start collapsed and group the controls in order', () => 
     const start = html.indexOf('<details class="tuneInAdvancedSettings">');
     assert.ok(start >= 0);
     const advanced = html.slice(start, html.indexOf('</fieldset>', start));
-    assert.match(advanced, /<summary><span>Advanced Settings<\/span> <a href="#tuneInAdvancedGuide" class="tuneInAdvancedGuideLink">Settings guide<\/a><\/summary>/);
+    assert.match(advanced, /<summary><span>Advanced Settings<\/span> <a href="#tuneInAdvancedGuide" class="tuneInAdvancedGuideLink" aria-label="Advanced settings guidance">Guidance<\/a><\/summary>/);
     const groups = ['Discovery limits', 'Request pacing &amp; retry', 'Import behavior', 'Playback &amp; diagnostics'];
     assert.ok(groups.every((group, i) => advanced.indexOf(`<summary>${group}</summary>`) >= 0
         && (i === 0 || advanced.indexOf(`<summary>${groups[i - 1]}</summary>`) < advanced.indexOf(`<summary>${group}</summary>`))));
@@ -1320,6 +1358,47 @@ test('advanced settings guide opens without toggling settings and returns focus'
         'Minimum new entries between passes', 'Minimum growth between passes', 'Minimum time between passes',
         'Maximum discovery-time passes per category', 'Enable catalog identity diagnostics', 'Allow direct HLS playback'])
         assert.ok(guide.includes(`<dt>${name}</dt>`), name);
+});
+
+test('section guidance opens without toggling disclosures, returns focus, and closes on pause', async () => {
+    const app = harness();
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    for (const name of ['Artwork', 'Refresh', 'Deletion']) {
+        const link = app.elements[`.tuneIn${name}GuideLink`];
+        const dialog = app.elements[`#tuneIn${name}Guide`];
+        let prevented = false, stopped = false;
+        link.handlers.click({
+            preventDefault() { prevented = true; }, stopPropagation() { stopped = true; }
+        });
+        assert.equal(prevented && stopped, true, name);
+        assert.equal(dialog.open, true, name);
+        app.elements[`.tuneIn${name}GuideClose`].click();
+        assert.equal(dialog.open, false, name);
+        assert.equal(link.focused, true, name);
+        link.focused = false;
+        link.handlers.click({ preventDefault() {}, stopPropagation() {} });
+        app.instance.onPause();
+        assert.equal(dialog.open, false, name);
+        assert.equal(link.focused, false, name);
+        const resume = app.instance.onResume();
+        app.reads.at(-1).resolve({});
+        await resume;
+    }
+});
+
+test('genre control and guidance dialogs remain in their accessible sections', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const settings = html.slice(html.indexOf('<fieldset class="globalFields"'), html.indexOf('<details class="tuneInArtworkPacks">'));
+    assert.match(settings, /class="hideRegionalGenres"[\s\S]*?id="tuneInRegionalGenresHint"/);
+    const filtering = html.slice(html.indexOf('>Station Filtering</summary>'), html.indexOf('</form>'));
+    assert.doesNotMatch(filtering, /class="hideRegionalGenres"/);
+    assert.match(html, /<\/details>\s*<dialog id="tuneInArtworkGuide"/);
+    assert.match(html, /<\/details>\s*<dialog id="tuneInDeletionGuide"/);
+    for (const name of ['Artwork', 'Refresh', 'Deletion']) {
+        assert.match(html, new RegExp(`<dialog id="tuneIn${name}Guide"[^>]*aria-labelledby="tuneIn${name}GuideTitle"`));
+    }
 });
 
 test('discovery import pacing is opt-in, editable, and validated', async () => {
@@ -1447,7 +1526,7 @@ test('artwork scan actions and preference are grouped beside artwork pack contro
     const actions = artwork && artwork.match(/<div class="tuneInArtworkActions">([\s\S]*?)<\/div>/);
     const preference = artwork && artwork.match(/<div class="tuneInArtworkCheckPreference">([\s\S]*?)<\/div>/);
     assert.ok(artwork);
-    assert.match(artwork, /<summary>Custom Artwork Packs<\/summary>/);
+    assert.match(artwork, /<summary class="tuneInGuideSummary"><span>Custom Artwork Packs<\/span>[\s\S]*?<\/summary>/);
     assert.doesNotMatch(artwork.slice(0, artwork.indexOf('>') + 1), /\bopen\b/);
     assert.ok(actions);
     assert.ok(preference);
@@ -1581,16 +1660,48 @@ test('help icons share one visual design and sit alongside field labels', () => 
         'Distinct stations at the last category refresh']) {
         assert.match(html, new RegExp(`<p class="fieldDescription">${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     }
-    assert.match(html, /<details>\s*<summary>Usability Guidance<\/summary>\s*<p class="fieldDescription">Choose a refresh interval next to a category,[\s\S]*?first complete manual baseline\.<\/p>\s*<p class="fieldDescription">Distinct stations at the last category refresh\.[\s\S]*?failed inventory checks\.<\/p>\s*<\/details>\s*<p class="refreshCategoryNote"/);
+    assert.match(html, /<dialog id="tuneInRefreshGuide"[\s\S]*?Choose a refresh interval next to a category,[\s\S]*?first complete manual baseline\.[\s\S]*?Distinct stations at the last category refresh\.[\s\S]*?failed inventory checks\.[\s\S]*?<\/dialog>/);
     const advanced = html.match(/\.tuneInAdvancedSettings\s*\{([^}]+)\}/)[1];
     assert.match(advanced, /background:\s*color-mix\(in srgb, #d9822b 14%, hsl\(var\(--background-hue/);
     assert.doesNotMatch(advanced, /\[open\]/);
 });
 
+test('podcast ordering keeps its select and help in a compact responsive row', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /<div class="tuneInPodcastOrderRow">\s*<div class="tuneInPodcastSelect">\s*<select[^>]*id="tuneInPodcastEpisodeOrder"[\s\S]*?<\/select>\s*<\/div>\s*<details class="tuneInHelp"><summary aria-label="Help: podcast episode order">/);
+    assert.match(html, /\.tuneInPodcastOrderRow\s*\{[^}]*display:\s*flex/);
+    assert.match(html, /\.tuneInPodcastSelect\s*\{[^}]*position:\s*relative;[^}]*flex:\s*0 1 16rem/);
+    assert.match(html, /\.tuneInPodcastSelect select:disabled\s*\{[^}]*border-color:\s*currentColor !important/);
+    assert.match(html, /\.tuneInPodcastSelect select:focus-visible\s*\{[^}]*outline:/);
+    assert.match(html, /\.tuneInPodcastOrderRow > \.tuneInHelp\s*\{[^}]*flex:\s*none/);
+});
+
+test('filtering options are ordered and the partial import warning is highlighted and associated', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const settings = html.slice(html.indexOf('<fieldset class="globalFields"'), html.indexOf('<details class="tuneInArtworkPacks">'));
+    const controls = ['configurationCompleted', 'hideRegionalGenres', 'maxStationCount',
+        'traversalDepthLimit', 'podcastEpisodeOrder', 'allowPartialCatalogImport'];
+    const indices = controls.map(name => settings.indexOf(`class="${name}"`));
+    assert.ok(indices.every((index, i) => index >= 0 && (i === 0 || indices[i - 1] < index)));
+    assert.match(settings, /<div class="tuneInPartialImport">[\s\S]*?class="allowPartialCatalogImport" aria-describedby="tuneInPartialImportHint"[\s\S]*?<details class="tuneInHelp"><summary aria-label="Help: partial imports">[\s\S]*?id="tuneInPartialImportHint">[\s\S]*?<p class="tuneInPartialImportWarning">Warning:[\s\S]*?<\/details>\s*<\/div>\s*<\/div>\s*<\/fieldset>\s*$/);
+    assert.match(html, /\.tuneInPartialImportWarning\s*\{[^}]*margin:\s*\.7em 0 \.7em 1\.25em;[^}]*border-inline-start:\s*\.25em solid #d9822b;[^}]*background:/);
+    assert.doesNotMatch(html, /\.tuneInPartialImport\s*\{/);
+});
+
+test('checkbox help remains next to its label without losing its touch target', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /\.tuneInFieldHeading > \.emby-checkbox-label\s*\{[^}]*flex:\s*0 1 auto;[^}]*inline-size:\s*fit-content;[^}]*max-inline-size:\s*calc\(100% - 44px - \.2em\)/);
+    assert.match(html, /\.tuneInFieldHeading > \.tuneInHelp\s*\{[^}]*flex:\s*none/);
+    for (const control of ['configurationCompleted', 'allowPartialCatalogImport', 'hideRegionalGenres',
+        'enableDiscoveryProgressiveImport', 'enableCatalogIdentityDiagnostics', 'allowDirectHlsPlayback']) {
+        assert.match(html, new RegExp(`<div class="tuneInFieldHeading"><label class="emby-checkbox-label">\\s*<input[^>]*class="${control}"`));
+    }
+});
+
 test('refresh keeps status and actions visible before collapsed details and shareable diagnostics', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     const start = html.indexOf('<details class="tuneInSection tuneInNeutralPanel tuneInRefresh">');
-    const categories = html.indexOf('<section class="tuneInSectionBox tuneInLibraryRefresh"', start);
+    const categories = html.indexOf('<section class="tuneInLibraryRefresh"', start);
     const details = html.indexOf('<details class="tuneInSectionBox tuneInRefreshDetails">', categories);
     const shareable = html.indexOf('<details class="tuneInSectionBox tuneInDiagnostics">', details);
     assert.ok(start >= 0 && categories > start && details > categories && shareable > details);
@@ -1775,8 +1886,8 @@ test('opening Station Filtering expands both groups but still allows independent
 test('library refresh is an always-expanded section inside the collapsible Catalog Refresh', () => {
     const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
     const js = fs.readFileSync(path.join(configDir, 'configPage.js'), 'utf8');
-    assert.match(html, /<section class="tuneInSectionBox tuneInLibraryRefresh" aria-labelledby="tuneInLibraryRefreshTitle">/);
-    assert.match(html, /<h3 class="libraryRefreshTitle" id="tuneInLibraryRefreshTitle">TuneIn Library Refresh<\/h3>/);
+    assert.match(html, /<section class="tuneInLibraryRefresh" aria-labelledby="tuneInLibraryRefreshTitle">/);
+    assert.match(html, /<h3 class="libraryRefreshTitle" id="tuneInLibraryRefreshTitle">Category Refresh<\/h3>/);
     assert.match(html, /<details class="tuneInSection tuneInNeutralPanel tuneInRefresh">/);
     assert.doesNotMatch(html, /<summary class="libraryRefresh/);
     assert.doesNotMatch(js, /libraryRefreshSection|libraryRefreshDefaultPending|libraryRefreshSummary/);
@@ -2216,7 +2327,7 @@ test('settings lock and accessible help stay in the pinned header, with version 
     const controls = header.match(/<div class="tuneInLockControls">([\s\S]*?)<p id="tuneInLockStatus"/)[1];
     assert.match(controls, /<p class="status settingsChangeNotice" role="status" aria-live="polite" hidden>[\s\S]*?<\/p>\s*<div class="tuneInLockActions">\s*<label class="tuneInLockToggle">/);
     assert.equal((header.match(/class="status settingsChangeNotice"/g) || []).length, 1);
-    assert.match(header, /<p class="status settingsMessage" role="status" aria-live="polite"><\/p>/);
+    assert.match(header, /<p id="tuneInSettingsMessage" class="status settingsMessage" role="status" aria-live="polite"><\/p>/);
     assert.match(html, /\.tuneInPinned > \.tuneInLockControls\s*\{[^}]*flex-wrap:\s*wrap/);
     assert.match(html, /\.tuneInLockControls > \.settingsChangeNotice\s*\{[^}]*min-inline-size:\s*0/);
     assert.match(controls, /class="settingsLocked"/);
@@ -2426,6 +2537,8 @@ test('enabled Selected only categories require valid saved choices with inline g
         await visit;
         const guidance = app.instance.selectorErrors.get(selector);
         assert.equal(guidance.hidden, false, category);
+        assert.equal(guidance.validationControl.attributes['aria-invalid'], 'true', category);
+        assert.equal(guidance.validationControl.attributes['aria-errormessage'], guidance.id, category);
         assert.match(guidance.textContent, selector === 'local'
             ? /at least one enabled saved city or region/
             : /Add a valid .* choice or choose All/, category);
@@ -2434,6 +2547,7 @@ test('enabled Selected only categories require valid saved choices with inline g
         app.instance.config[list] = [valid];
         app.formHandlers.change();
         assert.equal(guidance.hidden, true, category);
+        assert.equal(guidance.validationControl.attributes['aria-invalid'], undefined, category);
         app.formHandlers.submit({ preventDefault() {} });
         await settle();
         assert.equal(app.writes.length, 1, category);
@@ -2448,15 +2562,22 @@ test('Local Radio and Favorites show actionable source and username validation',
     await visit;
     assert.match(app.elements['.localValidation'].textContent, /Choose coordinates or regions/);
     assert.match(app.elements['.favoritesValidation'].textContent, /username/);
+    assert.equal(app.elements['.localSource'].attributes['aria-errormessage'], 'tuneInLocalValidation');
+    assert.equal(app.username.attributes['aria-errormessage'], 'tuneInFavoritesValidation');
     app.elements['.localSource'].value = 'coordinates';
     app.latLon.value = '91,0';
     app.formHandlers.input();
     assert.match(app.elements['.localValidation'].textContent, /latitude/);
+    assert.equal(app.latLon.attributes['aria-invalid'], 'true');
+    assert.equal(app.latLon.attributes['aria-errormessage'], 'tuneInLocalValidation');
+    assert.equal(app.elements['.localSource'].attributes['aria-invalid'], undefined);
     app.latLon.value = '45,-70';
     app.username.value = 'listener';
     app.formHandlers.input();
     assert.equal(app.elements['.localValidation'].hidden, true);
     assert.equal(app.elements['.favoritesValidation'].hidden, true);
+    assert.equal(app.latLon.attributes['aria-invalid'], undefined);
+    assert.equal(app.username.attributes['aria-invalid'], undefined);
 });
 
 test('first baseline gates individual refresh and distinguishes an unregistered channel', async () => {
@@ -2806,6 +2927,8 @@ test('category counts show availability, inventory and missing discovery left of
     assert.equal(rows[2].childNodes[0].textContent, 'By Language: Imported (TuneIn lists no stations for the selected languages)');
     assert.equal(rows[4].childNodes[0].textContent, 'Sports: Imported');
     const values = row => row.childNodes[1].childNodes[0].childNodes.map(group => group.childNodes[1]);
+    assert.deepEqual(rows[3].childNodes[1].childNodes[0].childNodes.map(group => group.childNodes[0].textContent),
+        ['Latest discovery (filtered)', 'In Emby', 'Not in latest discovery']);
     assert.equal(rows[0].childNodes[1].childNodes[1].textContent, 'Refresh');
     assert.equal(rows[0].childNodes[1].childNodes[1].attributes.is, 'emby-button');
     assert.match(rows[0].childNodes[1].childNodes[1].className, /\braised\b/);
@@ -2842,7 +2965,7 @@ test('library refresh follows full-refresh order and marks only the current runn
     assert.equal(local.row.attributes['data-refreshing'], 'true');
     assert.equal(local.indicator.hidden, false);
     assert.equal(local.indicator.textContent, 'Refreshing');
-    assert.equal(local.indicator.attributes.role, 'status');
+    assert.equal(local.indicator.attributes.role, undefined);
     assert.equal(local.caption.textContent, 'Local Radio: No recorded refresh');
     assert.equal(music.row.attributes['data-refreshing'], 'false');
     assert.equal(music.caption.textContent, 'Music: Queued');
@@ -3012,7 +3135,7 @@ test('choosing a category schedule confirms when Emby also schedules Refresh Int
     await talk.handlers.change();
     assert.equal(dialog.open, true);
     const text = app.elements['.channelScheduleText'].textContent;
-    assert.match(text, /^Talk will refresh weekly after you save/);
+    assert.match(text, /^Talk will use this refresh schedule after you save: Weekly/);
     assert.match(text, /refreshes all TuneIn categories/);
     assert.match(text, /do not refresh any other Internet Channel/);
     app.elements['.channelScheduleAdjust'].handlers.click();
@@ -3030,6 +3153,29 @@ test('choosing a category schedule confirms when Emby also schedules Refresh Int
     app.formHandlers.submit({ preventDefault() {} });
     await settle();
     assert.equal(app.scheduledTasks.requests.length, requests);
+});
+
+test('cleanup preview uses the right plural forms for each count', async () => {
+    for (const [folders, stations, expected] of [
+        [1, 1, '1 folder and 1 station entry'],
+        [1, 0, '1 folder and 0 station entries'],
+        [0, 1, '0 folders and 1 station entry'],
+        [2, 3, '2 folders and 3 station entries']
+    ]) {
+        const app = harness(true);
+        const visit = app.instance.onResume();
+        app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, EnableTalk: true });
+        app.refresh[0].resolve({ SettingsLocked: false, Categories: [{ Category: 'talk', Name: 'Talk' }] });
+        await visit;
+        await open(app.elements['.maintenanceSection']);
+        app.elements['.cleanupScope'].value = 'talk';
+        app.elements['.cleanupScope'].handlers.change();
+        const preview = app.elements['.cleanupPreview'].handlers.click();
+        app.cleanup[0].resolve({ Token: 'preview', Scope: 'Talk', Folders: folders, Stations: stations });
+        await preview;
+        assert.ok(app.elements['.cleanupPreviewText'].textContent.includes(expected));
+        app.instance.onPause();
+    }
 });
 
 test('maintenance previews before confirming and blocks settings and refresh until cleanup stops', async () => {
@@ -3077,7 +3223,7 @@ test('maintenance previews before confirming and blocks settings and refresh unt
     assert.match(app.elements['.cleanupStatus'].textContent, /0 of 9/);
     app.refresh.at(-1).resolve({ ...live, Cleanup: { State: 'Partial', Total: 9, Removed: 8, Failed: 1 } });
     await settle();
-    assert.match(app.elements['.cleanupStatus'].textContent, /8 of 9.*1 entries could not be removed/);
+    assert.match(app.elements['.cleanupStatus'].textContent, /8 of 9.*1 entry could not be removed/);
     assert.equal(app.elements['.settingsLocked'].disabled, false);
     assert.equal(app.elements['.maintenanceIndicator'].hidden, true);
     assert.equal(app.elements['.globalFields'].disabled, false);
@@ -3235,6 +3381,19 @@ test('changing cleanup scope invalidates the preview and backup acknowledgement'
     assert.match(app.elements['.cleanupPreviewText'].textContent, /All categories/);
 });
 
+test('unknown backup status is shown as an actionable error', async () => {
+    const app = harness(false, false, true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    await visit;
+    const opened = open(app.elements['.maintenanceSection']);
+    app.backup[0].resolve({ State: 'NewStatus' });
+    await opened;
+    assert.match(app.elements['.backupStatus'].textContent, /Unknown backup status: NewStatus/);
+    assert.equal(app.elements['.backupStatus'].attributes['data-error'], 'true');
+    app.instance.onPause();
+});
+
 test('backup uses the dedicated action and cleanup stays disabled while Emby has not finished', async () => {
     const app = harness(false, false, true);
     const visit = app.instance.onResume();
@@ -3243,6 +3402,7 @@ test('backup uses the dedicated action and cleanup stays disabled while Emby has
     const opened = open(app.elements['.maintenanceSection']);
     app.backup[0].resolve({ State: 'Ready' });
     await opened;
+    assert.equal(app.elements['.backupStatus'].attributes['data-error'], 'true');
     const start = app.elements['.backupStart'].handlers.click();
     assert.equal(app.elements['.settingsLocked'].disabled, true);
     assert.equal(app.elements['.settingsLocked'].checked, true);
@@ -3251,11 +3411,13 @@ test('backup uses the dedicated action and cleanup stays disabled while Emby has
     app.backup[1].resolve({ State: 'Running' });
     await start;
     assert.match(app.elements['.backupStatus'].textContent, /Wait for Emby/);
+    assert.equal(app.elements['.backupStatus'].attributes['data-error'], 'false');
     assert.equal(app.elements['.cleanupPreview'].disabled, true);
     [...app.timers.values()][0].handler();
     app.backup[2].resolve({ State: 'Completed' });
     await settle();
     assert.match(app.elements['.backupStatus'].textContent, /completed successfully/);
+    assert.equal(app.elements['.backupStatus'].attributes['data-error'], 'false');
     app.elements['.cleanupScope'].value = 'all';
     app.elements['.cleanupScope'].handlers.change();
     assert.equal(app.elements['.cleanupPreview'].disabled, false);
@@ -3589,6 +3751,26 @@ test('topic filters load lazily and save independent modes and selected IDs', as
     }
 });
 
+test('message templates support reordered placeholders and additional plural categories', async () => {
+    const app = harness(false, false, false, false, false, false, source => source
+        .replace("other: 'Delete {count} selected choices from {category}? This change will be applied when you save the settings.'",
+            "few: '{category}: {count} few', other: '{category}: {count} other'")
+        .replace("new Intl.PluralRules('en')", "new Intl.PluralRules('pl')"));
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, TalkMode: 'selected',
+        TalkIds: ['first', 'second'] });
+    await visit;
+    enableBrowsing(app);
+    const savedColumn = app.elements['.selectors'].childNodes[3].childNodes[2].childNodes[1];
+    for (const choice of savedColumn.descendants().filter(node => node.tagName === 'input')) {
+        choice.checked = true;
+        choice.handlers.change();
+    }
+    savedColumn.descendants().find(node => node.tagName === 'button').handlers.click();
+    assert.match(savedColumn.descendants().find(node => node.tagName === 'dialog').textContent, /Talk Topics: 2 few/);
+    app.instance.onPause();
+});
+
 test('saved station choices require selection and a confirmation dialog before deletion', async () => {
     const app = harness();
     const visit = app.instance.onResume();
@@ -3830,6 +4012,55 @@ test('refresh summary keeps the state separate from expanded live discovery deta
     app.instance.onPause();
 });
 
+test('refresh announcements change on transitions, not every progress update, and reset on pause', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    const running = { State: 'Running', Phase: 'Discovering', Category: 'music', Busy: true,
+        Activity: 'Reading page 1', CatalogPagesCached: 1 };
+    app.refresh[0].resolve(running);
+    await visit;
+    const announcement = app.elements['.refreshAnnouncement'];
+    assert.match(announcement.textContent, /Running - Discovering - Music/);
+    const initial = announcement.textContent;
+    const writes = announcement.textWrites;
+    [...app.timers.values()][0].handler();
+    app.refresh[1].resolve({ ...running, Activity: 'Reading page 2', CatalogPagesCached: 2 });
+    await settle();
+    assert.match(app.elements['.refreshStatus'].textContent, /Reading page 2/);
+    assert.equal(announcement.textContent, initial);
+    assert.equal(announcement.textWrites, writes);
+    [...app.timers.values()][0].handler();
+    app.refresh[2].resolve({ ...running, Activity: 'Import deadline reached; waiting for active work to stop' });
+    await settle();
+    assert.match(announcement.textContent, /deadline reached/);
+    [...app.timers.values()][0].handler();
+    app.refresh[3].resolve({ ...running, State: 'Error', Phase: 'Unexpected new phase', Busy: false, ErrorCode: 'test error' });
+    await settle();
+    assert.match(announcement.textContent, /Error - Unexpected new phase - Music.*test error/);
+    [...app.timers.values()][0].handler();
+    app.refresh[4].reject(new Error('offline'));
+    await settle();
+    assert.match(announcement.textContent, /Could not read refresh status/);
+    [...app.timers.values()][0].handler();
+    app.refresh[5].resolve({ State: 'Completed', Phase: 'Completed', Busy: false });
+    await settle();
+    assert.match(announcement.textContent, /Completed/);
+    app.instance.onPause();
+    assert.equal(announcement.textContent, '');
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    assert.match(html, /class="tuneInScreenReaderOnly refreshAnnouncement" role="status" aria-live="polite"/);
+    assert.match(html, /<p class="refreshStatus">/);
+});
+
+test('guidance links have consistent visible text and unique descriptive names', () => {
+    const html = fs.readFileSync(path.join(configDir, 'configPage.html'), 'utf8');
+    const labels = [...html.matchAll(/<a href="#tuneIn(?:Artwork|Advanced|Refresh|Deletion)Guide"[^>]*aria-label="([^"]+)">([^<]+)<\/a>/g)];
+    assert.equal(labels.length, 4);
+    assert.equal(new Set(labels.map(item => item[1])).size, 4);
+    assert.ok(labels.every(item => item[2] === 'Guidance' && /guidance/i.test(item[1])));
+});
+
 test('plugin version label shows the running build reported by refresh status', async () => {
     const app = harness(true);
     const label = app.elements['.tuneInPluginVersion'];
@@ -3892,7 +4123,7 @@ test('scoped artwork packs show detected names, counts and paths safely', async 
     assert.match(html, /class="tuneInArtworkTableScroll" role="region" aria-label="[^"]+" tabindex="0">\s*<table/);
     assert.match(html, /\.tuneInArtworkTableScroll\s*\{[^}]*overflow-x:\s*auto/);
     assert.match(html, /\.tuneInArtworkPacks th,\s*\.tuneInArtworkPacks td\s*\{[^}]*white-space:\s*nowrap/);
-    assert.match(html, /class="hideRegionalGenres"[\s\S]*?<details class="tuneInArtworkPacks">\s*<summary>Custom Artwork Packs<\/summary>[\s\S]*?<\/details>\s*<fieldset class="globalFields advancedFields"[^>]*>\s*<details class="tuneInAdvancedSettings">/);
+    assert.match(html, /<details class="tuneInArtworkPacks">\s*<summary class="tuneInGuideSummary"><span>Custom Artwork Packs<\/span>[\s\S]*?<\/summary>[\s\S]*?<\/details>\s*<dialog id="tuneInArtworkGuide"[\s\S]*?<\/dialog>\s*<fieldset class="globalFields advancedFields"[^>]*>\s*<details class="tuneInAdvancedSettings">/);
     assert.equal((html.match(/<details class="tuneInArtworkPacks">/g) || []).length, 1);
     assert.match(html, /<fieldset class="loginFields" disabled>\s*<legend>TuneIn Favorites and Location<\/legend>/);
     assert.match(html, /\.loginFields\s*\{[^}]*border:\s*1px solid var\(--tunein-neutral-border\)/);
@@ -3902,8 +4133,13 @@ test('scoped artwork packs show detected names, counts and paths safely', async 
     assert.match(html, /<th scope="col">Artwork<\/th><th scope="col">Installed pack<\/th><th scope="col">Images<\/th><th scope="col">Server folder<\/th>/);
     for (const scope of ['Genres', 'Languages', 'Locations', 'Categories'])
         assert.match(html, new RegExp(`<strong class="artwork${scope}Name">Loading\\.\\.\\.<\\/strong>`));
-    assert.match(html, /<summary>Details &amp; installation<\/summary>/);
+    assert.match(html, /<a href="#tuneInArtworkGuide" class="tuneInGuideLink tuneInArtworkGuideLink" aria-label="Artwork guidance">Guidance<\/a>/);
     assert.match(html, /docs\/samples\/cartoon\.jpg/);
+    const details = html.match(/<dialog id="tuneInArtworkGuide"[\s\S]*?<\/dialog>/)[0];
+    assert.match(details, /create a scope ZIP[\s\S]*<code>-Pack<\/code>/);
+    assert.match(details, /installation replaces the entire artwork scope/);
+    assert.match(details, /explicit approval is required; scanner errors or threats block installation/);
+    assert.doesNotMatch(details, /ZIP containing only/);
 });
 
 function dispatchFormControlEvent(app, control, type) {
@@ -3934,6 +4170,7 @@ async function prepareArtworkUpload(app, scanStatus = 'Not scanned', config = {}
     assert.match(app.elements['.artworkVerifyText'].textContent, /pack\.zip/);
     assert.equal(app.artwork.some(request => request.options.url.route === 'TuneIn/Artwork/Upload'), false);
     const upload = app.elements['.artworkVerifyStart'].click();
+    await settle();
     const sent = app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').options;
     assert.equal(sent.body, file.files[0]);
     assert.equal(sent.headers.Authorization, 'test-session');
@@ -3947,6 +4184,85 @@ async function prepareArtworkUpload(app, scanStatus = 'Not scanned', config = {}
     return status;
 }
 
+test('artwork storage failure warns before upload and cancel preserves settings', async () => {
+    const app = harness(true);
+    app.artworkStorage.responses.push({ Writable: false, Message: 'Make the artwork folder writable.' });
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({ SchemaVersion: 1, ConfigurationCompleted: true, SettingsSaved: true });
+    app.refresh[0].resolve({ State: 'Completed', Categories: [], HasCompleteBaseline: true, ChannelRegistered: true });
+    await visit;
+    await settle();
+    assert.match(app.elements['.artworkStorageHeader'].textContent, /unavailable/);
+    assert.equal(app.elements['.artworkStorageMessage'].attributes['data-error'], 'true');
+    assert.match(app.elements['.readinessArtwork'].textContent, /Advisory/);
+    assert.equal(app.elements['.tuneInReadiness'].hidden, true);
+    app.artworkStorage.responses.push({ Writable: false, Message: 'Make the artwork folder writable.' });
+    const file = app.elements['.artworkFile'];
+    file.files = [new File(['test'], 'pack.zip')];
+    dispatchFormControlEvent(app, file, 'change');
+    await app.elements['.artworkVerifyStart'].click();
+    assert.equal(app.elements['.artworkStorageDialog'].open, true);
+    assert.equal(app.artwork.some(request => request.options.url.route === 'TuneIn/Artwork/Upload'), false);
+    app.elements['.artworkStorageCancel'].click();
+    assert.equal(app.elements['.artworkStorageDialog'].open, false);
+    assert.equal(app.elements['.settingsChangeNotice'].hidden, true);
+    const checking = app.elements['.optionalChecksRun'].click();
+    app.refresh.at(-1).resolve({ State: 'Completed', Categories: [] });
+    await checking;
+    assert.equal(app.elements['.artworkStorageHeader'].textContent, '');
+    assert.equal(app.elements['.artworkStorageMessage'].attributes['data-error'], 'false');
+    assert.match(app.elements['.readinessArtwork'].textContent, /writable/);
+    app.instance.onPause();
+});
+
+test('continuing after an artwork storage failure attempts the normal upload', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', Categories: [] });
+    await visit;
+    app.artworkStorage.responses.push({ Writable: false, Message: 'Make the artwork folder writable.' });
+    const file = app.elements['.artworkFile'];
+    file.files = [new File(['test'], 'pack.zip')];
+    dispatchFormControlEvent(app, file, 'change');
+    await app.elements['.artworkVerifyStart'].click();
+    const upload = app.elements['.artworkStorageContinue'].click();
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'uploading' });
+    app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload')
+        .resolve({ __httpStatus: 500, body: 'Storage denied.' });
+    await upload;
+    assert.match(app.elements['.artworkUploadMessage'].textContent, /Storage denied/);
+    assert.notEqual(app.elements['.artworkConfirmDialog'].open, true);
+    app.instance.onPause();
+});
+
+test('a stale artwork preflight cannot discard a selection made after reopening', async () => {
+    const app = harness(true);
+    const visit = app.instance.onResume();
+    app.reads[0].resolve({});
+    app.refresh[0].resolve({ State: 'NeverRun', Categories: [] });
+    await visit;
+    let finishCheck;
+    app.artworkStorage.responses.push(new Promise(resolve => { finishCheck = resolve; }));
+    const file = app.elements['.artworkFile'];
+    file.files = [new File(['old'], 'old.zip')];
+    dispatchFormControlEvent(app, file, 'change');
+    const previousCheck = app.elements['.artworkVerifyStart'].click();
+    app.instance.onPause();
+    const revisit = app.instance.onResume();
+    app.reads.at(-1).resolve({});
+    app.refresh.at(-1).resolve({ State: 'NeverRun', Categories: [] });
+    await revisit;
+    file.files = [new File(['new'], 'new.zip')];
+    dispatchFormControlEvent(app, file, 'change');
+    finishCheck({ Writable: true, Message: 'Writable' });
+    await previousCheck;
+    assert.equal(app.instance.artworkSelectedFile.name, 'new.zip');
+    assert.equal(app.elements['.artworkVerifyDialog'].open, true);
+    assert.equal(app.artwork.some(request => request.options.url.route === 'TuneIn/Artwork/Upload'), false);
+    app.instance.onPause();
+});
+
 test('artwork upload polls its background operation before offering installation', async () => {
     const app = harness(true);
     const visit = app.instance.onResume();
@@ -3957,6 +4273,7 @@ test('artwork upload polls its background operation before offering installation
     file.files = [new File(['test'], 'pack.zip', { type: 'application/zip' })];
     file.handlers.change.call(file, { stopPropagation() {} });
     const upload = app.elements['.artworkVerifyStart'].click();
+    await settle();
     app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'uploading' });
     app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').resolve({ Operation: 'operation1' });
     await settle();
@@ -3990,6 +4307,7 @@ test('background artwork validation errors remain visible and do not offer insta
     file.files = [new File(['test'], 'bad.zip', { type: 'application/zip' })];
     file.handlers.change.call(file, { stopPropagation() {} });
     const upload = app.elements['.artworkVerifyStart'].click();
+    await settle();
     app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'uploading' });
     app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').resolve({ Operation: 'operation2' });
     await settle();
@@ -4012,6 +4330,7 @@ test('leaving during background validation discards the completed candidate', as
     file.files = [new File(['test'], 'pack.zip', { type: 'application/zip' })];
     file.handlers.change.call(file, { stopPropagation() {} });
     const upload = app.elements['.artworkVerifyStart'].click();
+    await settle();
     app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'uploading' });
     app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').resolve({ Operation: 'operation3' });
     await settle();
@@ -4043,6 +4362,7 @@ test('artwork selection can be cancelled before upload and reports plain-text va
     assert.equal(app.artwork.length, 0);
     file.handlers.change.call(file, { stopPropagation() {} });
     const upload = app.elements['.artworkVerifyStart'].click();
+    await settle();
     app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'validating' });
     app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload')
         .resolve({ __httpStatus: 500, body: 'Scanner unavailable; artwork was not scanned.' });
@@ -4052,6 +4372,7 @@ test('artwork selection can be cancelled before upload and reports plain-text va
     assert.equal(app.elements['.artworkUpload'].disabled, false);
     file.handlers.change.call(file, { stopPropagation() {} });
     const retry = app.elements['.artworkVerifyStart'].click();
+    await settle();
     assert.equal(app.elements['.artworkUploadMessage'].attributes['data-error'], 'false');
     app.artwork.filter(request => request.options.url.route === 'TuneIn/Artwork/Status').at(-1).resolve({ State: 'validating' });
     app.artwork.filter(request => request.options.url.route === 'TuneIn/Artwork/Upload').at(-1)
@@ -4089,6 +4410,7 @@ for (const format of ['json', 'text']) {
         file.files = [new File(['legacy'], 'old-pack.zip', { type: 'application/zip' })];
         file.handlers.change.call(file, { stopPropagation() {} });
         const upload = app.elements['.artworkVerifyStart'].click();
+    await settle();
         const message = 'This artwork pack uses schema 1, which is no longer supported. Please regenerate or download a newer pack using schemaVersion 2. Existing installed artwork is unchanged.';
         app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Status').resolve({ State: 'validating' });
         app.artwork.find(request => request.options.url.route === 'TuneIn/Artwork/Upload').resolve({
@@ -4172,7 +4494,7 @@ test('read-only artwork checks cannot inherit disabled settings fieldsets', () =
     assert.deepEqual(ancestry.get('optionalChecksRun'), []);
     assert.deepEqual(ancestry.get('txtUsername'), ['globalFields', 'loginFields']);
     assert.deepEqual(ancestry.get('configurationCompleted'), ['globalFields']);
-    assert.deepEqual(ancestry.get('maxStationCount'), ['globalFields advancedFields']);
+    assert.deepEqual(ancestry.get('maxStationCount'), ['globalFields']);
 });
 
 test('artwork dialogs remain actionable when settings are locked and approval uses a visible native checkbox', () => {
@@ -4400,6 +4722,7 @@ test('upload completion after leaving the page discards staging and re-enables u
     file.files = [{ name: 'pack.zip', size: 12 }];
     file.handlers.change.call(file, { stopPropagation() {} });
     const upload = app.elements['.artworkVerifyStart'].click();
+    await settle();
     app.instance.onPause();
     const revisit = app.instance.onResume();
     app.reads[1].resolve({});
@@ -4481,15 +4804,15 @@ test('import content counts and opt-in folder details survive timeout and render
     await visit;
     assert.equal(app.elements['.refreshImportContents'].hidden, false);
     assert.match(app.elements['.refreshImportContents'].textContent,
-        /8 \/ 12 station entries; 5 \/ 6 subfolder entries/);
+        /station entries 8 \/ 12; subfolder entries 5 \/ 6/);
     assert.match(app.elements['.refreshImportContents'].textContent,
-        /Still in unserved listings: 4 station entries, 1 subfolder entries/);
+        /Still in unserved listings: station entries 4; subfolder entries 1/);
     assert.match(app.elements['.refreshImportContents'].textContent,
-        /Last newly served folder: 3 station entries, 1 subfolder entries/);
+        /Last newly served folder: station entries 3; subfolder entries 1/);
     assert.match(app.elements['.refreshImportContents'].textContent, /served does not mean stored in Emby/);
     assert.equal(app.elements['.refreshPendingFolders'].hidden, false);
     assert.match(app.elements['.refreshPendingFolderText'].textContent,
-        /\[abc\] Music > <img onerror=bad> More Stations: 4 station entries, 1 subfolder entries/);
+        /\[abc\] Music > <img onerror=bad> More Stations: station entries 4; subfolder entries 1/);
     assert.match(app.elements['.refreshPendingFolderText'].textContent, /Additional folder details omitted: 1/);
     assert.equal(app.elements['.refreshPendingFolderText'].childNodes.length, 0);
 
@@ -4515,7 +4838,7 @@ test('basic import counts remain available with verbose diagnostics off', async 
     });
     await visit;
     assert.equal(app.elements['.refreshImportContents'].hidden, false);
-    assert.match(app.elements['.refreshImportContents'].textContent, /0 \/ 2 station entries/);
+    assert.match(app.elements['.refreshImportContents'].textContent, /station entries 0 \/ 2/);
     assert.doesNotMatch(app.elements['.refreshImportContents'].textContent, /Last newly served folder/);
     assert.equal(app.elements['.refreshPendingFolders'].hidden, true);
     app.instance.onPause();
@@ -4537,7 +4860,7 @@ test('partial discovery reports skipped links without implying an import', async
     assert.match(text, /Partial - Discovery incomplete; existing library left unchanged/);
     assert.match(app.elements['.refreshWork'].textContent, /1 \/ 2 categories checked/);
     assert.match(text, /7 malformed catalog links skipped/);
-    assert.match(text, /enable "Import Valid Results when catalog entries are skipped" in Global TuneIn Settings, save, then refresh again/);
+    assert.match(text, /enable "Import Valid Results when catalog entries are skipped" in Settings, save, then refresh again/);
     assert.match(text, /TuneIn returned HTTP 429 \(Too Many Requests\)/);
     assert.match(app.elements['.refreshDiagnosticsText'].textContent,
         /Skipped malformed TuneIn catalog links: 7 \(4 x Music: Invalid catalog fragment; 3 x Music: Invalid catalog link parameter: filter\)/);

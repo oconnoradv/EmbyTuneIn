@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
@@ -228,6 +229,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [InlineData("g3428", "c100000892", "26", "p:topic", true)]
         [InlineData("g3429", "c100000887", "26", "p:topic", true)]
         [InlineData("g3430", "c100000886", "26", "p:topic", true)]
+        [InlineData("g2804", "c100000947", "26", "p:topic", true)]
+        [InlineData("g2737", "c100001101", "26", "p:topic", true)]
+        [InlineData("g2737", "c100001101", "26", "s", false)]
+        [InlineData("g2804", "c100001234", "26", "p:topic", false)]
+        [InlineData("g2805", "c100001234", "26", "p:topic", false)]
         [InlineData("g3429", "c100000886", "26", "p:topic", false)]
         [InlineData("g3428", "c100000625", "26", "p:topic", false)]
         [InlineData("g3430", "c100000887", "26", "p:topic", false)]
@@ -266,6 +272,47 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             Assert.False(TuneInBrowsing.IsForwardPage(snapshot, child, child));
             await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = items[0].Id }, CancellationToken.None);
             Assert.Equal(2, calls);
+        }
+
+        [Fact]
+        public async Task PodcastShowLinksAndContinuationPagesAreTraversedTogether()
+        {
+            var config = new PluginConfiguration { SchemaVersion = 1, ConfigurationCompleted = true, EnablePodcasts = true };
+            var requested = new System.Collections.Generic.List<string>();
+            var directory = new TuneInDirectory(() => config, (request, token) =>
+            {
+                var id = request.Parameters.GetValueOrDefault("id");
+                var offset = request.Parameters.GetValueOrDefault("offset");
+                requested.Add(id + ":" + (offset ?? "0"));
+                var show = offset == null ? "p402042" : offset == "26" ? "p492349" : "p1";
+                var next = offset == null
+                    ? "<outline type='link' key='nextShows' text='More Shows' URL='https://opml.radiotime.com/Browse.ashx?offset=26&amp;id=c100000947&amp;filter=p:topic'/>"
+                    : offset == "26"
+                        ? "<outline type='link' key='nextShows' text='More Shows' URL='https://opml.radiotime.com/Browse.ashx?offset=52&amp;id=c100000947&amp;filter=p:topic'/>"
+                        : "";
+                return Task.FromResult(XDocument.Parse("<opml><body><outline key='shows'>"
+                    + $"<outline type='link' text='Show' guide_id='{show}' URL='https://opml.radiotime.com/Tune.ashx?c=pbrowse&amp;id={show}&amp;filter=p:topic'/>"
+                    + "</outline>" + next + "</body></opml>"));
+            });
+            var snapshot = directory.Snapshot();
+            var channel = new TuneInChannel(directory);
+            var parent = new NavigationEntry { Category = "podcast",
+                Request = DirectoryRequest.ParseLink("https://opml.radiotime.com/Browse.ashx?id=g2804&filter=p:topic") };
+            var folderId = directory.Register(snapshot, parent);
+            var shows = new System.Collections.Generic.List<string>();
+            for (var page = 0; page < 3; page++)
+            {
+                var items = (await channel.GetChannelItems(new InternalChannelItemQuery { FolderId = folderId }, CancellationToken.None)).Items;
+                var show = Assert.Single(items, item => item.Type == ChannelItemType.Media);
+                var entry = directory.Resolve(snapshot, show.Id);
+                Assert.True(entry.PodcastShow);
+                shows.Add(entry.StationId);
+                var folders = items.Where(item => item.Type == ChannelItemType.Folder).ToArray();
+                if (page == 2) Assert.Empty(folders);
+                else folderId = Assert.Single(folders).Id;
+            }
+            Assert.Equal(new[] { "g2804:0", "c100000947:26", "c100000947:52" }, requested);
+            Assert.Equal(new[] { "p402042", "p492349", "p1" }, shows);
         }
 
         private static async Task<string> BrowseProviderLink(string url, bool location = false,

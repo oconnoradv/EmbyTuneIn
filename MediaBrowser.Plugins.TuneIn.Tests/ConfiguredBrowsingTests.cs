@@ -124,7 +124,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 "DiscoveryImportRiskAcceptedUtc", "DiscoveryImportRiskToken", "ProgressiveFirstEntries",
                 "ProgressiveMinimumNewEntries", "ProgressiveMinimumGrowthPercent", "ProgressiveMinimumIntervalSeconds",
                 "ProgressiveMaximumPasses", "HasStartedCatalogRefresh", "SkipOptionalStartupChecks",
-                "SettingsSaved", "TalkMode", "TalkIds", "SportsMode", "SportsIds", "PodcastsMode", "PodcastIds" })
+                "SettingsSaved", "TalkMode", "TalkIds", "SportsMode", "SportsIds", "PodcastsMode", "PodcastIds", "PodcastEpisodeOrder" })
                 legacyOverrides.Add(typeof(PluginConfiguration), member, new System.Xml.Serialization.XmlAttributes { XmlIgnore = true });
             using (var xml = new StringWriter(System.Globalization.CultureInfo.InvariantCulture))
             {
@@ -698,6 +698,43 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
+        public void PersistedConfigurationRoundTripsAllDeclaredSettings()
+        {
+            var config = new PluginConfiguration();
+            var properties = typeof(PluginConfiguration).GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly);
+            foreach (var property in properties)
+            {
+                var type = property.PropertyType;
+                object value;
+                if (type == typeof(string)) value = "saved-" + property.Name;
+                else if (type == typeof(bool)) value = !(bool)property.GetValue(config);
+                else if (type == typeof(bool?)) value = true;
+                else if (type == typeof(int) || type == typeof(int?)) value = 7;
+                else if (type == typeof(DateTime?)) value = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+                else if (type == typeof(List<string>)) value = new List<string> { "saved-item" };
+                else if (type == typeof(List<CatalogSelection>)) value = new List<CatalogSelection>
+                {
+                    new CatalogSelection { Id = "g1", Name = "Saved", Path = "A/B", AncestorIds = new List<string> { "g2" }, Enabled = false }
+                };
+                else if (type == typeof(List<CategoryRefreshSchedule>)) value = new List<CategoryRefreshSchedule>
+                {
+                    new CategoryRefreshSchedule { Category = "talk", IntervalHours = 24 }
+                };
+                else throw new InvalidOperationException("Add a round-trip value for " + property.Name);
+                property.SetValue(config, value);
+            }
+
+            var serializer = new XmlSerializer(typeof(PluginConfiguration));
+            using var writer = new StringWriter();
+            serializer.Serialize(writer, config);
+            using var reader = new StringReader(writer.ToString());
+            var restored = (PluginConfiguration)serializer.Deserialize(reader);
+            foreach (var property in properties)
+                Assert.Equal(System.Text.Json.JsonSerializer.Serialize(property.GetValue(config), property.PropertyType),
+                    System.Text.Json.JsonSerializer.Serialize(property.GetValue(restored), property.PropertyType));
+        }
+
+        [Fact]
         public void OptionalPreferenceRequiresManualUnlockAndPreservesTheLockState()
         {
             var root = Path.Combine(Path.GetTempPath(), $"tunein-preference-lock-{Guid.NewGuid():N}");
@@ -829,9 +866,9 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             using var jsReader = new StreamReader(jsStream);
             var html = htmlReader.ReadToEnd();
             var script = jsReader.ReadToEnd();
-            Assert.Contains("Global TuneIn Settings", html);
+            Assert.Contains(">Settings</summary>", html);
             Assert.Contains("Enable TuneIn Station Filtering", html);
-            Assert.Contains("Clean Up Library Folders", html);
+            Assert.Contains("TuneIn Library Content Deletion", html);
             Assert.Contains("<div class=\"auto-center tuneInPanelLayout\">", html);
             Assert.Contains("class=\"tuneInSection tuneInNeutralPanel tuneInRefresh\"", html);
             Assert.Contains("class=\"tuneInActivity maintenanceIndicator\"", html);

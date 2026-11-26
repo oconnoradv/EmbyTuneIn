@@ -294,6 +294,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 throw new ArgumentException("TuneIn maximum rate-limit wait must be between 5 and 60 minutes.");
             if (value.MaximumConsecutiveRateLimitRetries < 0 || value.MaximumConsecutiveRateLimitRetries > 10)
                 throw new ArgumentException("TuneIn consecutive HTTP 429 retries must be between 0 and 10.");
+            if (value.PodcastEpisodeOrder != null && !new[] { "Latest", "Oldest", "Provider" }.Contains(value.PodcastEpisodeOrder))
+                throw new ArgumentException("Invalid podcast episode order.");
             ValidateProgressiveSettings(value);
             if (value.ImportDeadlineHours < PluginConfiguration.MinImportDeadlineHours
                 || value.ImportDeadlineHours > PluginConfiguration.MaxImportDeadlineHours)
@@ -425,6 +427,7 @@ namespace MediaBrowser.Plugins.TuneIn
         public DirectoryRequest Request { get; set; }
         public string Name { get; set; }
         public string StationId { get; set; }
+        public bool PodcastShow { get; set; }
         public string ContentCategory { get; set; }
         public string MusicSelectionId { get; set; }
         public string TopicBranchKey { get; set; }
@@ -497,6 +500,8 @@ namespace MediaBrowser.Plugins.TuneIn
                 new XElement("musicSelection", entry.MusicSelectionId ?? ""));
             if (entry.TopicBranchKey != null)
                 document.Add(new XElement("topicBranch", entry.TopicBranchKey));
+            if (entry.PodcastShow)
+                document.Add(new XElement("podcastShow", "true"));
             if (entry.LanguageArtworkId != null)
                 document.Add(new XElement("languageArtwork", entry.LanguageArtworkId));
             if (entry.Request != null)
@@ -650,6 +655,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 Category = document.Element("category")?.Value,
                 SelectionId = EmptyToNull(document.Element("selection")?.Value),
                 StationId = EmptyToNull(document.Element("station")?.Value),
+                PodcastShow = document.Element("podcastShow")?.Value == "true",
                 Name = document.Element("name")?.Value,
                 ContentCategory = EmptyToNull(document.Element("contentCategory")?.Value),
                 MusicSelectionId = EmptyToNull(document.Element("musicSelection")?.Value),
@@ -682,6 +688,8 @@ namespace MediaBrowser.Plugins.TuneIn
         private static bool Allowed(ConfigurationSnapshot snapshot, NavigationEntry entry) =>
             snapshot.Enabled(entry.Category)
             && (entry.StationId == null || TuneInBrowsing.ValidStation(entry.StationId))
+            && (!entry.PodcastShow || entry.Category == "podcast" && entry.StationId != null
+                && entry.StationId.StartsWith("p", StringComparison.Ordinal) && entry.Request == null)
             && (entry.LanguageArtworkId == null || entry.Category == "language" && entry.SelectionId == null
                 && entry.StationId == null && ConfigurationSnapshot.ValidId(entry.LanguageArtworkId, "language")
                 && entry.Request?.Parameters.GetValueOrDefault("filter") == entry.LanguageArtworkId)
