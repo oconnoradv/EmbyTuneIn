@@ -22,6 +22,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly HashSet<string> incompleteFolders = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> incompleteStationListings = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> served = new HashSet<string>(StringComparer.Ordinal);
+        private Dictionary<string, List<string>> servedThrough;
         private readonly CancellationToken token;
         private readonly Action<int, int> report;
         private readonly Action validate;
@@ -626,20 +627,47 @@ namespace MediaBrowser.Plugins.TuneIn
             }).ToList()
         };
 
+        private bool ContinuesTraversal(string key)
+        {
+            if (key.Length == 0 && scopedChannelRoot != null) return true;
+            if (!folders.ContainsKey(key)) return false;
+            if (served.Contains(key)) return true;
+            if (servedThrough == null)
+            {
+                var parentsByFolder = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+                foreach (var folder in folders)
+                {
+                    foreach (var item in folder.Value.Items)
+                    {
+                        if (item.Type != ChannelItemType.Folder || !folders.ContainsKey(item.Id)) continue;
+                        if (!parentsByFolder.TryGetValue(item.Id, out var parents))
+                            parentsByFolder[item.Id] = parents = new List<string>();
+                        parents.Add(folder.Key);
+                    }
+                }
+                servedThrough = parentsByFolder;
+            }
+
+            if (!servedThrough.TryGetValue(key, out var parentsForFolder) || parentsForFolder.Count == 0)
+                return true;
+            return parentsForFolder.Any(served.Contains);
+        }
+
         internal ChannelItemResult Read(string folder, CancellationToken queryToken)
         {
             lock (gate)
             {
+                var key = folder ?? string.Empty;
+                if (!ContinuesTraversal(key)) return null;
                 try
                 {
                     token.ThrowIfCancellationRequested();
                     queryToken.ThrowIfCancellationRequested();
                     validate?.Invoke();
-                    var key = folder ?? string.Empty;
                     if (key.Length == 0 && scopedChannelRoot != null)
                         return new ChannelItemResult { Items = scopedChannelRoot.Items.ToList() };
                     if (!folders.TryGetValue(key, out var result))
-                        throw new InvalidOperationException("Emby requested a folder outside the staged TuneIn channel.");
+                        return null;
                     if (served.Add(key))
                     {
                         report?.Invoke(folders.Count, served.Count);

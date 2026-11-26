@@ -15,7 +15,7 @@ namespace MediaBrowser.Plugins.TuneIn
     /// </summary>
     public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IHasThumbImage
     {
-        internal const int DiscoveryImportRiskVersion = 1;
+        internal const int DiscoveryImportRiskVersion = 2;
         private readonly object configurationGate = new object();
         
         public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)

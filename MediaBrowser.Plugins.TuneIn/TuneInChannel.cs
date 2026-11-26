@@ -66,7 +66,12 @@ namespace MediaBrowser.Plugins.TuneIn
             var active = Volatile.Read(ref activeImport);
             if (active != null && (active.Token == cancellationToken
                 || active.AllowChangedToken && ReferenceEquals(active, importContext.Value)))
-                return Task.FromResult(active.Staged.Read(query.FolderId, cancellationToken));
+            {
+                var stagedResult = active.Staged.Read(query.FolderId, cancellationToken);
+                if (stagedResult != null) return Task.FromResult(stagedResult);
+                if (active.ReportDeclinedRead())
+                    _logger?.Info("TuneIn staged import keeps a folder read on the normal browsing path because it does not continue the import traversal.");
+            }
 
             if (snapshot.Ready && !string.IsNullOrEmpty(query.FolderId))
             {
@@ -139,6 +144,10 @@ namespace MediaBrowser.Plugins.TuneIn
             internal TuneInStagedImport Staged { get; }
             internal CancellationToken Token { get; }
             internal bool AllowChangedToken { get; }
+
+            private int declinedReadsReported;
+
+            internal bool ReportDeclinedRead() => Interlocked.Exchange(ref declinedReadsReported, 1) == 0;
         }
 
         internal HashSet<string> CategoryStationIds(string folderId, CancellationToken token)

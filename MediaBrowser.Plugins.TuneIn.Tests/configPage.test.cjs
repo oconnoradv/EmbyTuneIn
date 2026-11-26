@@ -1358,7 +1358,11 @@ test('discovery import pacing is opt-in, editable, and validated', async () => {
     app.formHandlers.submit({ preventDefault() {} });
     await settle();
     assert.equal(app.writes[0].config.EnableDiscoveryProgressiveImport, true);
-    assert.equal(app.selectors.filter(item => item.options.url.route === 'TuneIn/DiscoveryImport/Acknowledge').length, 1);
+    const riskRequest = app.selectors.find(item => item.options.url.route === 'TuneIn/DiscoveryImport/Acknowledge');
+    assert.ok(riskRequest);
+    assert.equal(riskRequest.options.url.params.Version, 2);
+    assert.equal(riskRequest.options.url.params.Accepted, true);
+    assert.equal(app.writes[0].config.DiscoveryImportRiskVersion, 2);
     assert.equal(app.writes[0].config.ProgressiveFirstEntries, 60);
     assert.equal(app.writes[0].config.ProgressiveMinimumNewEntries, 500);
 });
@@ -1425,7 +1429,11 @@ test('failed discovery risk acknowledgement prevents saving', async () => {
 test('previously enabled discovery imports require a fresh acknowledgement', async () => {
     const app = harness();
     const visit = app.instance.onResume();
-    app.reads[0].resolve({ EnableDiscoveryProgressiveImport: true });
+    app.reads[0].resolve({
+        EnableDiscoveryProgressiveImport: true,
+        DiscoveryImportRiskVersion: 1,
+        DiscoveryImportRiskAcceptedUtc: '2026-01-01T00:00:00Z'
+    });
     await visit;
     assert.equal(app.elements['.enableDiscoveryProgressiveImport'].checked, false);
     assert.equal(app.elements['.discoveryRiskUpgradeNotice'].hidden, false);
@@ -1552,7 +1560,7 @@ test('static admin controls have unique IDs and valid accessible description ref
     assert.match(html, /Privacy warning: Diagnostic folder labels may be private/);
     assert.match(html, /Warning: Emby fetches direct HLS streams without/);
     assert.match(html, /class="enableDiscoveryProgressiveImport" aria-describedby="tuneInDiscoveryImportWarning tuneInDiscoveryImportHint"/);
-    assert.match(html, /<p id="tuneInDiscoveryImportWarning"[^>]*>Experimental:[^<]*isolation risks/);
+    assert.match(html, /<p id="tuneInDiscoveryImportWarning"[^>]*>Experimental:[^<]*does not establish request identity/);
 });
 
 test('help icons share one visual design and sit alongside field labels', () => {

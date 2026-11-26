@@ -778,16 +778,16 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                     DiscoveryImportRiskAcceptedUtc = DateTime.UtcNow
                 };
                 Assert.Throws<InvalidOperationException>(() => plugin.UpdateConfiguration(forged));
-                Assert.Throws<InvalidOperationException>(() => plugin.AcknowledgeDiscoveryRisk(1, false, refresh));
+                Assert.Throws<InvalidOperationException>(() => plugin.AcknowledgeDiscoveryRisk(Plugin.DiscoveryImportRiskVersion, false, refresh));
                 plugin.SettingsLock.Set(true);
-                Assert.Throws<InvalidOperationException>(() => plugin.AcknowledgeDiscoveryRisk(1, true, refresh));
+                Assert.Throws<InvalidOperationException>(() => plugin.AcknowledgeDiscoveryRisk(Plugin.DiscoveryImportRiskVersion, true, refresh));
                 plugin.SettingsLock.Set(false);
                 store.WriteRecovery(new TuneInRefreshRecovery { ConfigurationKey = directory.Snapshot().Key });
-                var token = plugin.AcknowledgeDiscoveryRisk(1, true, refresh);
+                var token = plugin.AcknowledgeDiscoveryRisk(Plugin.DiscoveryImportRiskVersion, true, refresh);
                 Assert.NotNull(store.ReadRecovery());
                 var accepted = new PluginConfiguration { EnableDiscoveryProgressiveImport = true, DiscoveryImportRiskToken = token };
                 plugin.UpdateConfiguration(accepted);
-                Assert.Equal(1, accepted.DiscoveryImportRiskVersion);
+                Assert.Equal(Plugin.DiscoveryImportRiskVersion, accepted.DiscoveryImportRiskVersion);
                 Assert.NotNull(accepted.DiscoveryImportRiskAcceptedUtc);
                 Assert.Null(accepted.DiscoveryImportRiskToken);
                 Assert.True(new TuneInChannel(directory, null, null).DiscoveryBridgeEnabled());

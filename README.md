@@ -12,16 +12,15 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 > copy dependency DLLs into Emby's plugin folder.
 
 > [!WARNING]
-> [RC4](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.4)
-> is a prerelease. Manual testing of the local test build has been completed.
-> Download the current release assets: earlier RC4 packages do not include the
-> connection-pinning fallback and inventory-count fixes. Back up Emby, including
-> library metadata and TuneIn configuration, before installing. Reload the
-> dashboard without its browser cache after updating.
+> [RC4.1](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.4.1)
+> is a prerelease. This release adds staged-import traversal gating; the exact
+> RC4.1 binary has not been validated against a live Emby server. Back up Emby,
+> including library metadata and TuneIn configuration, before installing.
+> Reload the dashboard without its browser cache after updating.
 >
-> Discovery-time imports are experimental and off by default. Their optional
-> changed-token bridge can misidentify unrelated work; real-server testing of
-> changed-token behavior remains outstanding. See
+> Discovery-time imports remain experimental and off by default. Their optional
+> changed-token bridge still cannot reliably identify import requests, despite
+> the new traversal guard. See
 > [Discovery-time imports](#discovery-time-imports-experimental) for the risks
 > and prerequisites.
 
@@ -255,9 +254,10 @@ changes it for a nested request, verification can fail and recovery is required.
 
 **Import during category discovery** is off by default. To enable it:
 
-1. Accept the risk notice. Saving this option also enables the experimental
-   changed-token bridge for staged imports. Existing installations with the
-   option enabled must accept the new risks before the bridge can be used.
+1. Accept the current risk notice. Saving this option also enables the
+   experimental changed-token bridge for staged imports. Existing installations
+   with the option enabled must accept the updated notice before the bridge can
+   be used.
 2. Enable **Import Valid Results when catalog entries are skipped**. If it is
    off, the notice offers to enable both options. This also permits partial
    results during ordinary refreshes.
@@ -271,16 +271,21 @@ discovery imports requires acknowledgement again.
 
 **Back up Emby, including library metadata and TuneIn configuration, before testing.**
 
-The bridge uses inherited execution context, not a reliable import identity:
-unrelated TuneIn work inheriting that context can read staged entries and make
-verification appear complete even if Emby's traversal missed folders. Entries
-may be incomplete or incorrect, and playlists, favorites, history and other
-references may be affected even after rebuilding TuneIn. Emby writes library
-changes to its database; corruption has not been demonstrated, but database
-and broader server compatibility are unverified. Additional import passes can
-increase shared server load. The bridge may still fail if context is not carried.
-Limited isolated Emby checks used the original token and did not verify
-changed-token behavior; real-server verification remains outstanding.
+The bridge still uses inherited execution context, not reliable import identity.
+The traversal guard counts a staged folder only when it is the staged root or
+was listed by a folder already served. Out-of-order or out-of-tree reads are
+declined and continue through the normal browsing path, reducing the chance
+that unrelated reads make an incomplete import appear complete. This is not
+proof that a request belongs to the import: unrelated work that follows the
+same parent-first traversal can still be counted. A legitimate out-of-order
+Emby read can be declined and cause verification to fail safely. TuneIn entries
+and references such as playlists, favorites, history and other library links
+may still be affected. Emby writes library changes to its database; corruption
+has not been demonstrated, but database and broader server compatibility are
+unverified. Additional import passes can increase shared server load. The
+bridge may still fail if context is not carried. The exact RC4.1 binary has not
+been validated against a live Emby server; changed-token behavior and traversal
+ordering remain to be verified on a real host.
 
 #### Catalog identity diagnostics
 

@@ -2257,11 +2257,11 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
         loading.show();
         var requiresRiskToken = config.EnableDiscoveryProgressiveImport &&
             !(instance.config.EnableDiscoveryProgressiveImport === true &&
-                instance.config.DiscoveryImportRiskVersion === 1 && instance.config.DiscoveryImportRiskAcceptedUtc);
+                instance.config.DiscoveryImportRiskVersion === 2 && instance.config.DiscoveryImportRiskAcceptedUtc);
         var save = requiresRiskToken
             ? ApiClient.ajax({
                 type: 'POST', dataType: 'json',
-                url: ApiClient.getUrl('TuneIn/DiscoveryImport/Acknowledge', { Version: 1, Accepted: true })
+                url: ApiClient.getUrl('TuneIn/DiscoveryImport/Acknowledge', { Version: 2, Accepted: true })
             }).then(function (result) {
                 if (!result || !result.Token) throw new Error('Risk acknowledgement was not recorded.');
                 config.DiscoveryImportRiskToken = result.Token;
@@ -2274,7 +2274,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
                 instance.setupDirty = false;
                 config.DiscoveryImportRiskToken = null;
                 if (requiresRiskToken) {
-                    config.DiscoveryImportRiskVersion = 1;
+                    config.DiscoveryImportRiskVersion = 2;
                     config.DiscoveryImportRiskAcceptedUtc = new Date().toISOString();
                 }
                 instance.view.querySelector('.discoveryRiskUpgradeNotice').hidden = true;
@@ -2741,7 +2741,7 @@ define(['baseView', 'loading', 'jQuery', 'emby-input', 'emby-button', 'emby-chec
             view.querySelector('.hideRegionalGenres').checked = config.HideRegionalGenres !== false;
             view.querySelector('.allowPartialCatalogImport').checked = config.AllowPartialCatalogImport !== false;
             instance.discoveryRiskAccepted = config.EnableDiscoveryProgressiveImport === true &&
-                config.DiscoveryImportRiskVersion === 1 && !!config.DiscoveryImportRiskAcceptedUtc;
+                config.DiscoveryImportRiskVersion === 2 && !!config.DiscoveryImportRiskAcceptedUtc;
             view.querySelector('.discoveryRiskUpgradeNotice').hidden =
                 config.EnableDiscoveryProgressiveImport !== true || instance.discoveryRiskAccepted;
             view.querySelector('.enableDiscoveryProgressiveImport').checked = instance.discoveryRiskAccepted;

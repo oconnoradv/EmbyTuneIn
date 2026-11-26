@@ -1972,8 +1972,10 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         }
 
         [Fact]
-        public async Task ExperimentalBridgeCannotDistinguishForeignReadsThatInheritContext()
+        public async Task ExperimentalBridgeRejectsForeignReadsThatInheritContext()
         {
+            // Inherited execution context is not proof of participation. A read that jumps into
+            // the staged tree is declined, so skipped descendants cannot make verification succeed.
             using var fixture = new ExperimentalImportFixture();
             using var refresh = fixture.Create(allowScoped: true, experimentalBridge: true);
             refresh.Start();
@@ -1989,8 +1991,8 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             fixture.Version++;
             refresh.Start("talk");
             await WaitUntilIdle(refresh);
-            Assert.Equal("Completed", refresh.Status().State);
-            Assert.Null(fixture.Store.Read().DirtyCategory);
+            Assert.Equal("Error", refresh.Status().State);
+            Assert.Equal("talk", fixture.Store.Read().DirtyCategory);
         }
 
         [Fact]
