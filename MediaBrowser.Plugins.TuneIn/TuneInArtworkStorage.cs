@@ -28,6 +28,39 @@ namespace MediaBrowser.Plugins.TuneIn
 
     internal static class TuneInArtworkStorage
     {
+        internal static void InitializeDirectories(string root, Action<string, Exception> reportFailure)
+        {
+            if (reportFailure == null) throw new ArgumentNullException(nameof(reportFailure));
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                reportFailure(root, new IOException("The artwork storage path is unavailable."));
+                return;
+            }
+
+            lock (TuneInCategoryArtwork.PackGate)
+            {
+                if (!EnsureDirectory(root, reportFailure)) return;
+                foreach (var scope in TuneInCategoryArtwork.Scopes)
+                    EnsureDirectory(Path.Combine(root, scope), reportFailure);
+            }
+        }
+
+        private static bool EnsureDirectory(string path, Action<string, Exception> reportFailure)
+        {
+            try
+            {
+                Directory.CreateDirectory(path);
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("Artwork directories cannot be symbolic links or reparse points.");
+                return true;
+            }
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+            {
+                reportFailure(path, error);
+                return false;
+            }
+        }
+
         internal static TuneInArtworkStorageStatus Check(string root)
         {
             if (string.IsNullOrWhiteSpace(root))

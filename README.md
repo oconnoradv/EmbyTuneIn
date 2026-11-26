@@ -12,8 +12,8 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 > copy dependency DLLs into Emby's plugin folder.
 
 > [!WARNING]
-> [RC5](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.5)
-> is a prerelease. The exact RC5 binary has not been validated against a live
+> [RC5.1](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.5.1)
+> is a prerelease. The exact RC5.1 binary has not been validated against a live
 > Emby server. Back up Emby,
 > including library metadata and TuneIn configuration, before installing.
 > Reload the dashboard without its browser cache after updating.
@@ -82,7 +82,7 @@ settings page or the channel root never crawls the TuneIn catalog by itself.
 
 ## Install
 
-Download the [RC5 prerelease](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.5),
+Download the [RC5.1 prerelease](https://github.com/oconnoradv/EmbyTuneIn/releases/tag/v1.2.8-music-refresh-resilience-rc.5.1),
 or build the source revision you intend to install using [Build and test](#build-and-test).
 A locally built Release DLL is written to
 `MediaBrowser.Plugins.TuneIn\bin\Release\netstandard2.0\MediaBrowser.Plugins.TuneIn.dll`.
@@ -287,7 +287,7 @@ and references such as playlists, favorites, history and other library links
 may still be affected. Emby writes library changes to its database; corruption
 has not been demonstrated, but database and broader server compatibility are
 unverified. Additional import passes can increase shared server load. The
-bridge may still fail if context is not carried. The exact RC5 binary has not
+bridge may still fail if context is not carried. The exact RC5.1 binary has not
 been validated against a live Emby server; changed-token behavior and traversal
 ordering remain to be verified on a real host.
 
@@ -724,6 +724,11 @@ recovery safeguards. No automatic migration or release-pack regeneration occurs.
 
 #### Installation directories
 
+On server startup after installation or upgrade, the plugin creates missing
+artwork directories using the Emby service account. Existing files and
+permissions are left unchanged. If a parent directory or mount is not writable,
+creation can fail; check the Emby log and correct access for the service account.
+
 For manual installation, extract a canonical pack into the corresponding server directory:
 `<Emby data>\plugins\configurations\TuneInArtwork\categories`, `genres`,
 `languages`, or `locations`. Custom Artwork Packs reports the actual paths,
@@ -860,6 +865,8 @@ placeholders and plural forms. A future translated catalog must use its own
 language's plural rules; displayed numbers and dates already use the host locale.
 Provider and server diagnostic text may remain English until the server exposes
 structured message identifiers.
+The [German reference catalog](docs/localization/README.md) is preserved for
+future work; it is not loaded by the plugin.
 
 ### Live-server and accessibility checks
 

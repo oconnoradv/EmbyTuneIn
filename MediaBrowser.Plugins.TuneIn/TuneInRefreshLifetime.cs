@@ -27,12 +27,17 @@ namespace MediaBrowser.Plugins.TuneIn
             this.manager = manager;
         }
 
-        public void Run() => timer = new Timer(_ =>
+        public void Run()
         {
-            UpdateLibraryArtwork();
-            try { refresh.CheckSchedules(); }
-            catch (Exception error) { logger.Error("TuneIn could not check refresh schedules ({0}).", error.GetType().Name); }
-        }, null, TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(1));
+            TuneInArtworkStorage.InitializeDirectories(Plugin.Instance?.ArtworkRoot,
+                (path, error) => logger.Warn("TuneIn could not initialize artwork directory '{0}': {1}", path, error.Message));
+            timer = new Timer(_ =>
+            {
+                UpdateLibraryArtwork();
+                try { refresh.CheckSchedules(); }
+                catch (Exception error) { logger.Error("TuneIn could not check refresh schedules ({0}).", error.GetType().Name); }
+            }, null, TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(1));
+        }
 
         // Plugin updates replace the library image without waiting for a catalog import.
         private void UpdateLibraryArtwork()
