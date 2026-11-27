@@ -865,7 +865,7 @@ placeholders and plural forms. A future translated catalog must use its own
 language's plural rules; displayed numbers and dates already use the host locale.
 Provider and server diagnostic text may remain English until the server exposes
 structured message identifiers.
-The [German reference catalog](docs/localization/README.md) is preserved for
+The [German reference catalog](https://github.com/oconnoradv/EmbyTuneIn/blob/ff6f6cc6de7f3ad2b23a3eff3ffe8f402dab362d/docs/localization/README.md) is preserved for
 future work; it is not loaded by the plugin.
 
 ### Live-server and accessibility checks
